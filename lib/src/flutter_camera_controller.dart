@@ -3,15 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 
-/// Flash modu
+/// Flash mode
 enum StoryFlashMode { off, on, auto, torch }
 
-/// Kamera yönü
+/// Camera direction
 enum StoryCameraFacing { back, front }
 
-/// Flutter camera paketi ile yüksek kaliteli kamera controller.
+/// High quality camera controller with Flutter camera package.
 ///
-/// Instagram kalitesinde 1080p önizleme ve çekim sağlar.
+/// Provides Instagram quality 1080p preview and capture.
 class FlutterCameraController {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
@@ -24,13 +24,13 @@ class FlutterCameraController {
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
 
-  /// Kamera hazır mı?
+  /// Is camera ready?
   bool get isInitialized => _isInitialized;
 
-  /// Video kaydı yapılıyor mu?
+  /// Is video recording in progress?
   bool get isRecording => _isRecording;
 
-  /// Mevcut kamera yönü
+  /// Current camera direction
   StoryCameraFacing get currentFacing =>
       _cameras.isNotEmpty &&
           _cameras[_currentCameraIndex].lensDirection ==
@@ -38,28 +38,28 @@ class FlutterCameraController {
       ? StoryCameraFacing.front
       : StoryCameraFacing.back;
 
-  /// Kamera controller (preview için)
+  /// Camera controller (for preview)
   CameraController? get controller => _controller;
 
-  /// Önizleme aspect ratio
+  /// Preview aspect ratio
   double get aspectRatio {
     if (_controller == null || !_isInitialized) return 9 / 16;
     return _controller!.value.aspectRatio;
   }
 
-  /// Önizleme genişliği
+  /// Preview width
   int get previewWidth {
     if (_controller == null || !_isInitialized) return 1080;
     return _controller!.value.previewSize?.width.toInt() ?? 1080;
   }
 
-  /// Önizleme yüksekliği
+  /// Preview height
   int get previewHeight {
     if (_controller == null || !_isInitialized) return 1920;
     return _controller!.value.previewSize?.height.toInt() ?? 1920;
   }
 
-  /// Mevcut zoom seviyesi
+  /// Current zoom level
   double get currentZoom => _currentZoom;
 
   /// Minimum zoom
@@ -68,19 +68,19 @@ class FlutterCameraController {
   /// Maximum zoom
   double get maxZoom => _maxZoom;
 
-  /// Kamerayı başlat
+  /// Initialize camera
   Future<bool> initialize({
     StoryCameraFacing facing = StoryCameraFacing.back,
   }) async {
     try {
-      // Kameraları al
+      // Get cameras
       _cameras = await availableCameras();
       if (_cameras.isEmpty) {
         debugPrint('FlutterCameraController: No cameras available');
         return false;
       }
 
-      // İstenen yöndeki kamerayı bul
+      // Find camera in requested direction
       final targetDirection = facing == StoryCameraFacing.front
           ? CameraLensDirection.front
           : CameraLensDirection.back;
@@ -90,7 +90,7 @@ class FlutterCameraController {
       );
       if (_currentCameraIndex == -1) _currentCameraIndex = 0;
 
-      // Controller oluştur ve başlat
+      // Create and initialize controller
       await _setupController(_cameras[_currentCameraIndex]);
 
       return _isInitialized;
@@ -100,12 +100,12 @@ class FlutterCameraController {
     }
   }
 
-  /// Controller'ı kur
+  /// Setup controller
   Future<void> _setupController(CameraDescription camera) async {
-    // Eski controller'ı temizle
+    // Clean up old controller
     await _controller?.dispose();
 
-    // Yeni controller - YÜKSEK KALİTE (1080p)
+    // New controller - HIGH QUALITY (1080p)
     _controller = CameraController(
       camera,
       ResolutionPreset.ultraHigh, // 1080p
@@ -116,15 +116,15 @@ class FlutterCameraController {
     try {
       await _controller!.initialize();
 
-      // Orientation kilitle
+      // Lock orientation
       await _controller!.lockCaptureOrientation(DeviceOrientation.portraitUp);
 
-      // Zoom limitlerini al
+      // Get zoom limits
       _minZoom = await _controller!.getMinZoomLevel();
       _maxZoom = await _controller!.getMaxZoomLevel();
       _currentZoom = _minZoom;
 
-      // Flash modunu ayarla
+      // Set flash mode
       await _setFlashModeInternal(_flashMode);
 
       _isInitialized = true;
@@ -137,14 +137,14 @@ class FlutterCameraController {
     }
   }
 
-  /// Fotoğraf çek
+  /// Take photo
   Future<String?> takePicture() async {
     if (_controller == null || !_isInitialized || _isRecording) {
       return null;
     }
 
     try {
-      // Çekim sırasında flash
+      // Flash during capture
       if (_flashMode == StoryFlashMode.on ||
           _flashMode == StoryFlashMode.auto) {
         await _controller!.setFlashMode(
@@ -154,8 +154,8 @@ class FlutterCameraController {
 
       final XFile file = await _controller!.takePicture();
 
-      // Ön kamera ise mirror düzeltmesi gerekebilir
-      // (Flutter camera paketi bunu otomatik yapıyor)
+      // Mirror correction may be needed for front camera
+      // (Flutter camera package does this automatically)
 
       debugPrint('FlutterCameraController: Photo captured: ${file.path}');
       return file.path;
@@ -165,7 +165,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Video kaydını başlat
+  /// Start video recording
   Future<bool> startVideoRecording([String? outputPath]) async {
     if (_controller == null || !_isInitialized || _isRecording) {
       return false;
@@ -182,7 +182,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Video kaydını durdur
+  /// Stop video recording
   Future<String?> stopVideoRecording() async {
     if (_controller == null || !_isRecording) {
       return null;
@@ -200,7 +200,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Kamera değiştir (ön/arka)
+  /// Switch camera (front/back)
   Future<bool> switchCamera() async {
     if (_cameras.length < 2 || _isRecording) {
       return false;
@@ -216,7 +216,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Flash modunu ayarla
+  /// Set flash mode
   Future<void> setFlashMode(StoryFlashMode mode) async {
     _flashMode = mode;
     await _setFlashModeInternal(mode);
@@ -246,7 +246,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Zoom seviyesini ayarla
+  /// Set zoom level
   Future<void> setZoomLevel(double level) async {
     if (_controller == null || !_isInitialized) return;
 
@@ -259,7 +259,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Odak noktası ayarla
+  /// Set focus point
   Future<void> setFocusPoint(Offset point) async {
     if (_controller == null || !_isInitialized) return;
 
@@ -271,7 +271,7 @@ class FlutterCameraController {
     }
   }
 
-  /// Kaynakları temizle
+  /// Clean up resources
   Future<void> dispose() async {
     _isInitialized = false;
     _isRecording = false;

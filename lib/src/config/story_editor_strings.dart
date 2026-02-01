@@ -63,6 +63,7 @@ class StoryEditorStrings {
   final String editorYourStory;
   final String editorFacebookStory;
   final String editorEnterText;
+  final String editorSaved;
 
   // ============ Story Editor - Brush Types ============
   final String editorBrushNormal;
@@ -137,6 +138,7 @@ class StoryEditorStrings {
     this.editorYourStory = 'Your Story',
     this.editorFacebookStory = 'And Facebook Story',
     this.editorEnterText = 'Enter text...',
+    this.editorSaved = 'Saved',
 
     // ─────────────────────────────────────────────────────────────
     // Story Editor - Brush Types

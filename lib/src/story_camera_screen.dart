@@ -9,30 +9,30 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'story_editor_screen.dart';
-import 'advanced_boomerang_service.dart';
+import 'boomerang_recorder.dart';
 import 'gradient_text_editor.dart';
 import 'camera_settings_screen.dart';
 import 'config/story_editor_config.dart';
 import 'models/story_result.dart';
 
-/// Layout türleri - Instagram Layout tarzı kolaj düzenleri
+/// Layout types - Instagram Layout style collage layouts
 enum LayoutType {
-  /// Dikey 2'li - Alt alta 2 kare
+  /// Vertical 2 - 2 squares stacked vertically
   twoVertical,
 
-  /// Yatay 2'li - Yan yana 2 uzun kare
+  /// Horizontal 2 - 2 long squares side by side
   twoHorizontal,
 
-  /// 2x2 Grid - 4 kare
+  /// 2x2 Grid - 4 squares
   fourGrid,
 
-  /// 2x3 Grid - 6 kare
+  /// 2x3 Grid - 6 squares
   sixGrid,
 }
 
-/// LayoutType için helper extension
+/// Helper extension for LayoutType
 extension LayoutTypeExtension on LayoutType {
-  /// Bu layout kaç fotoğraf gerektiriyor
+  /// How many photos this layout requires
   int get photoCount {
     switch (this) {
       case LayoutType.twoVertical:
@@ -45,7 +45,7 @@ extension LayoutTypeExtension on LayoutType {
     }
   }
 
-  /// Layout için ikon gösterimi (basit temsil)
+  /// Icon display for layout (simple representation)
   String get label {
     switch (this) {
       case LayoutType.twoVertical:
@@ -108,29 +108,34 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   double _baseZoomLevel = 1.0;
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
+  double _longPressStartY = 0.0; // Starting Y position for long press zoom
+  double _longPressZoomStart = 1.0; // Starting zoom level for long press zoom
   Uint8List? _lastGalleryThumbnail; // Thumbnail data for gallery button
   bool _hasGalleryPermission = false;
 
-  // Ayarlar
-  bool _toolsOnLeft = false; // Araç çubuğu sol tarafta mı
+  // Settings
+  bool _toolsOnLeft = false; // Is toolbar on the left side
 
   // Boomerang state
   bool _isBoomerangMode = false;
-  static const int _boomerangMaxSeconds = 4; // Max 4 saniye
+  static const int _boomerangMaxSeconds = 4; // Max 4 seconds
 
   // Video recording state
   bool _isVideoRecording = false;
   bool _isProcessingVideo = false;
   Timer? _videoRecordingTimer;
   int _videoRecordingElapsedMs = 0;
-  static const int _videoMaxSeconds = 60; // Max 60 saniye
+  static const int _videoMaxSeconds = 60; // Max 60 seconds
 
   // Boomerang recording progress
   Timer? _boomerangTimer;
   double _boomerangProgress = 0.0; // 0.0 - 1.0
   int _boomerangElapsedMs = 0;
 
-  // Flash efekti için
+  // Instagram-style boomerang recorder (photo capture based)
+  BoomerangRecorder? _boomerangRecorder;
+
+  // For flash effect
   bool _showFlash = false;
 
   // MultiLayout (Collage) state
@@ -139,22 +144,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   LayoutType _selectedLayout = LayoutType.twoVertical;
   List<File?> _capturedLayoutPhotos = [];
   int _activeLayoutIndex = 0;
+  bool _isLayoutProcessing = false; // True during layout merge process
 
-  // Create Mode'dan gelen bekleyen metin overlay'i
+  // Pending text overlay from Create Mode
   TextOverlay? _pendingTextOverlay;
 
-  // Hands-free (eller serbest) mode state
+  // Hands-free mode state
   bool _isHandsFreeMode = false;
   bool _showHandsFreeSelector = false;
-  int _handsFreeDelaySeconds = 3; // 3, 5 veya 10 saniye
+  int _handsFreeDelaySeconds = 3; // 3, 5 or 10 seconds
   bool _isHandsFreeCountingDown = false;
   int _handsFreeCountdown = 0;
   Timer? _handsFreeCountdownTimer;
   Timer? _handsFreeRecordingTimer;
   int _handsFreeRecordingElapsed = 0;
-  static const int _handsFreeMaxRecordingSeconds = 60; // 60 saniye max
+  static const int _handsFreeMaxRecordingSeconds = 60; // 60 seconds max
 
-  // Animasyon controller (boomerang butonu için)
+  // Animation controller (for boomerang button)
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -163,7 +169,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // Pulse animasyonu
+    // Pulse animation
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
@@ -174,7 +180,74 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _pulseController.repeat(reverse: true);
 
     _loadSettings();
-    _initializeCamera();
+    _requestPermissionsAndInitialize();
+  }
+
+  /// Requests all required permissions when story editor is opened
+  Future<void> _requestPermissionsAndInitialize() async {
+    setState(() => _isLoading = true);
+
+    // Request all permissions at once (permission_handler doesn't support parallel)
+    final statuses = await [
+      Permission.camera,
+      Permission.microphone,
+      Permission.photos,
+    ].request();
+
+    final cameraStatus = statuses[Permission.camera]!;
+    final galleryStatus = statuses[Permission.photos]!;
+
+    _hasPermission = cameraStatus.isGranted;
+    _hasGalleryPermission = galleryStatus.isGranted;
+
+    if (!_hasPermission) {
+      // Inform user if camera permission is denied
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _showPermissionDeniedDialog();
+      }
+      return;
+    }
+
+    // Permissions granted, initialize camera
+    await _initializeCamera();
+  }
+
+  /// Dialog to show when permission is denied
+  void _showPermissionDeniedDialog() {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.grey.shade900,
+        title: const Text(
+          'Permission Required',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'We need camera and gallery permissions to create stories. Please grant permission from settings.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pop(context);
+            },
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Load settings from config
@@ -193,6 +266,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     _boomerangTimer?.cancel();
+    _boomerangRecorder?.dispose();
     _flashTimer?.cancel();
     _videoRecordingTimer?.cancel();
     _handsFreeCountdownTimer?.cancel();
@@ -215,32 +289,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Future<void> _initializeCamera() async {
-    setState(() => _isLoading = true);
-
     try {
-      // Kamera izni kontrolü
-      var cameraStatus = await Permission.camera.status;
-      if (!cameraStatus.isGranted) {
-        cameraStatus = await Permission.camera.request();
-      }
-      _hasPermission = cameraStatus.isGranted;
-
+      // Don't start if no permission
       if (!_hasPermission) {
-        setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false);
         return;
       }
 
-      // Mikrofon izni (video için)
-      var micStatus = await Permission.microphone.status;
-      if (!micStatus.isGranted) {
-        await Permission.microphone.request();
-      }
-
-      // Kameraları al
+      // Get cameras
       _cameras = await availableCameras();
       if (_cameras.isEmpty) {
         debugPrint('No cameras available');
-        setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false);
         return;
       }
 
@@ -257,16 +317,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
       if (_currentCameraIndex == -1) _currentCameraIndex = 0;
 
-      // Controller oluştur
+      // Create controller
       await _setupCameraController(_cameras[_currentCameraIndex]);
 
-      // Galeri izni
-      var galleryStatus = await Permission.photos.status;
-      if (!galleryStatus.isGranted) {
-        galleryStatus = await Permission.photos.request();
-      }
-      _hasGalleryPermission = galleryStatus.isGranted;
-
+      // Load gallery thumbnail
       if (_hasGalleryPermission && mounted) {
         await _loadLastGalleryImage();
       }
@@ -314,7 +368,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Future<void> _loadLastGalleryImage() async {
     try {
-      // Galeri izni kontrolü
+      // Gallery permission check
       final PermissionState permission =
           await PhotoManager.requestPermissionExtend(
             requestOption: const PermissionRequestOption(
@@ -327,10 +381,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Cache'i temizle - yeni fotoğrafları görebilmek için
+      // Clear cache - to see new photos
       await PhotoManager.clearFileCache();
 
-      // Tüm albümleri al (resim ve video)
+      // Get all albums (images and videos)
       final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
         type: RequestType.common,
         hasAll: true,
@@ -344,7 +398,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // İlk albüm (All Photos / Recent)
+      // First album (All Photos / Recent)
       final AssetPathEntity recentAlbum = albums.first;
       final int assetCount = await recentAlbum.assetCountAsync;
       debugPrint('Album: ${recentAlbum.name}, asset count: $assetCount');
@@ -354,11 +408,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Son eklenen medyaları al (daha fazla dene, görüntülenebilen ilkini bul)
+      // Get recently added media (try more, find the first displayable one)
       final List<AssetEntity> recentAssets = await recentAlbum
           .getAssetListPaged(
             page: 0,
-            size: 20, // Daha fazla al, thumbnail alınabileni bul
+            size: 20, // Get more, find the one that can get thumbnail
           );
 
       if (recentAssets.isEmpty) {
@@ -366,14 +420,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Thumbnail alınabilen ilk asset'i bul (retry ile)
+      // Find the first asset that can get thumbnail (with retry)
       for (final asset in recentAssets) {
         debugPrint('Trying asset: ${asset.id}, type: ${asset.type}');
 
-        // Her asset için 2 deneme yap
+        // Make 2 attempts for each asset
         for (int retry = 0; retry < 2; retry++) {
           try {
-            // Thumbnail al (daha güvenilir)
+            // Get thumbnail (more reliable)
             final Uint8List? thumbData = await asset.thumbnailDataWithSize(
               const ThumbnailSize(200, 200),
               quality: 80,
@@ -385,20 +439,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 _lastGalleryThumbnail = thumbData;
                 _hasGalleryPermission = true;
               });
-              return; // İlk başarılı olanı bulduk, çık
+              return; // Found the first successful one, exit
             }
           } catch (e) {
             debugPrint('Thumbnail load attempt ${retry + 1} failed: $e');
           }
 
-          // İlk denemede başarısız olduysa biraz bekle
+          // If first attempt failed, wait a bit
           if (retry == 0) {
             await Future.delayed(const Duration(milliseconds: 200));
           }
         }
       }
 
-      // Hiçbir thumbnail alınamadıysa, en azından permission'ı true yap
+      // If no thumbnail could be obtained, at least set permission to true
       if (mounted) {
         setState(() {
           _hasGalleryPermission = true;
@@ -411,10 +465,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Galeriye tıklandığında çalışır - izin iste ve galeriyi aç
+  /// Runs when gallery is tapped - request permission and open gallery
   Future<void> _openGallery() async {
     try {
-      // Önce izin kontrolü yap
+      // First check permission
       final PermissionState permission =
           await PhotoManager.requestPermissionExtend(
             requestOption: const PermissionRequestOption(
@@ -423,7 +477,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           );
 
       if (!permission.hasAccess) {
-        // İzin verilmedi - uyarı göster
+        // Permission not granted - show warning
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -441,15 +495,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // İzin varsa - galeri permission'ı güncelle
+      // If permission granted - update gallery permission
       if (mounted) {
         setState(() => _hasGalleryPermission = true);
       }
 
-      // Cache'i temizle - yeni fotoğrafları görebilmek için
+      // Clear cache - to see new photos
       await PhotoManager.clearFileCache();
 
-      // Galeri seçici aç - filterOption ile güncel medyaları al
+      // Open gallery picker - get current media with filterOption
       final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
         type: RequestType.common,
         hasAll: true,
@@ -469,7 +523,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Tüm medyaları al
+      // Get all media
       final AssetPathEntity album = albums.first;
       final int totalCount = await album.assetCountAsync;
 
@@ -486,7 +540,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Galeri seçici sayfasını aç
+      // Open gallery picker page
       if (mounted) {
         final selectedAsset = await Navigator.push<AssetEntity>(
           context,
@@ -496,17 +550,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ),
         );
 
-        // Seçilen medyayı işle
+        // Process selected media
         if (selectedAsset != null && mounted) {
           final File? file = await selectedAsset.originFile;
           if (file != null && mounted) {
-            // Resim mi video mu kontrol et
+            // Check if image or video
             if (selectedAsset.type == AssetType.image) {
               widget.onImageCaptured?.call(file.path);
 
               if (widget.showEditor && mounted) {
                 final pendingOverlay = _pendingTextOverlay;
-                _pendingTextOverlay = null; // Kullanıldıktan sonra temizle
+                _pendingTextOverlay = null; // Clear after use
 
                 await Navigator.push<Map<String, dynamic>?>(
                   context,
@@ -530,7 +584,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           }
         }
 
-        // Galeri thumbnail'ini güncelle
+        // Update gallery thumbnail
         if (mounted) {
           _loadLastGalleryImage();
         }
@@ -566,16 +620,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final imagePath = file.path;
 
       if (mounted) {
-        // Layout modunda çekilen fotoğrafı listeye ekle
+        // Add captured photo to list in layout mode
         if (_isLayoutMode) {
           await _handleLayoutCapture(imagePath);
         } else {
-          // Normal mod
+          // Normal mode
           widget.onImageCaptured?.call(imagePath);
 
           if (widget.showEditor) {
             final pendingOverlay = _pendingTextOverlay;
-            _pendingTextOverlay = null; // Kullanıldıktan sonra temizle
+            _pendingTextOverlay = null; // Clear after use
 
             await Navigator.push<Map<String, dynamic>?>(
               context,
@@ -610,14 +664,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Layout modunda fotoğraf çekildiğinde
+  /// When photo is captured in layout mode
   Future<void> _handleLayoutCapture(String imagePath) async {
-    // Fotoğrafı aktif tile'a kaydet
+    // Save photo to active tile
     setState(() {
       _capturedLayoutPhotos[_activeLayoutIndex] = File(imagePath);
     });
 
-    // Bir sonraki boş tile'ı bul
+    // Find the next empty tile
     int? nextEmptyIndex;
     for (int i = 0; i < _capturedLayoutPhotos.length; i++) {
       if (_capturedLayoutPhotos[i] == null) {
@@ -627,20 +681,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
 
     if (nextEmptyIndex != null) {
-      // Sonraki boş tile'a geç
+      // Go to the next empty tile
       setState(() {
         _activeLayoutIndex = nextEmptyIndex!;
       });
     } else {
-      // Tüm fotoğraflar çekildi - collage oluştur
+      // All photos captured - create collage
       await _createCollage();
     }
   }
 
-  /// Layout modunda tile için galeriden resim seç
+  /// Select image from gallery for tile in layout mode
   Future<void> _pickImageForLayoutTile(int tileIndex) async {
     try {
-      // Önce izin kontrolü yap
+      // First check permission
       final PermissionState permission =
           await PhotoManager.requestPermissionExtend(
             requestOption: const PermissionRequestOption(
@@ -666,10 +720,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Cache'i temizle
+      // Clear cache
       await PhotoManager.clearFileCache();
 
-      // Albümleri al - sadece resimler için
+      // Get albums - only for images
       final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
         type: RequestType.image,
         hasAll: true,
@@ -705,7 +759,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Galeri seçici sayfasını aç
+      // Open gallery picker page
       if (mounted) {
         final selectedAsset = await Navigator.push<AssetEntity>(
           context,
@@ -715,7 +769,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ),
         );
 
-        // Seçilen resmi tile'a yerleştir
+        // Place selected image in tile
         if (selectedAsset != null && mounted) {
           final File? file = await selectedAsset.originFile;
           if (file != null && mounted) {
@@ -725,7 +779,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               _capturedLayoutPhotos[tileIndex] = file;
             });
 
-            // Bir sonraki boş tile'ı bul
+            // Find the next empty tile
             int? nextEmptyIndex;
             for (int i = 0; i < _capturedLayoutPhotos.length; i++) {
               if (_capturedLayoutPhotos[i] == null) {
@@ -735,12 +789,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             }
 
             if (nextEmptyIndex != null) {
-              // Sonraki boş tile'a geç
+              // Go to the next empty tile
               setState(() {
                 _activeLayoutIndex = nextEmptyIndex!;
               });
             } else {
-              // Tüm fotoğraflar hazır - collage oluştur
+              // All photos ready - create collage
               await _createCollage();
             }
           }
@@ -760,33 +814,37 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Tüm fotoğraflar çekildiğinde collage oluştur
+  /// Create collage when all photos are captured
   Future<void> _createCollage() async {
-    // Tüm fotoğrafların çekildiğinden emin ol
+    // Make sure all photos are captured
     if (_capturedLayoutPhotos.any((photo) => photo == null)) {
       return;
     }
 
-    setState(() => _isProcessingVideo = true);
+    setState(() {
+      _isProcessingVideo = true;
+      _isLayoutProcessing = true;
+    });
 
     try {
-      // Collage oluştur
+      // Create collage
       final collagePath = await _generateCollageImage();
 
       if (collagePath != null && mounted) {
-        // İşleme tamamlandı
+        // Processing completed
         setState(() {
           _isProcessingVideo = false;
+          _isLayoutProcessing = false;
           _isLayoutMode = false;
           _showLayoutSelector = false;
         });
 
-        // Editor'e yönlendir
+        // Navigate to editor
         widget.onImageCaptured?.call(collagePath);
 
         if (widget.showEditor) {
           final pendingOverlay = _pendingTextOverlay;
-          _pendingTextOverlay = null; // Kullanıldıktan sonra temizle
+          _pendingTextOverlay = null; // Clear after use
 
           await Navigator.push<Map<String, dynamic>?>(
             context,
@@ -814,7 +872,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     } catch (e) {
       debugPrint('Collage creation error: $e');
       if (mounted) {
-        setState(() => _isProcessingVideo = false);
+        setState(() {
+          _isProcessingVideo = false;
+          _isLayoutProcessing = false;
+        });
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Could not create collage: $e')));
@@ -822,31 +883,31 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Collage görüntüsü oluştur (Canvas ile birleştir)
+  /// Generate collage image (merge with Canvas)
   Future<String?> _generateCollageImage() async {
     try {
-      // Fotoğrafları yükle
+      // Load photos
       final List<File> photos = _capturedLayoutPhotos
           .whereType<File>()
           .toList();
       if (photos.isEmpty) return null;
 
-      // Canvas boyutu (1080x1920 story formatı)
+      // Canvas size (1080x1920 story format)
       const int canvasWidth = 1080;
       const int canvasHeight = 1920;
-      const double spacing = 0.0; // Boşluksuz tam ekran
+      const double spacing = 0.0; // Fullscreen without spacing
 
-      // Picture recorder ile canvas oluştur
+      // Create canvas with picture recorder
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
 
-      // Arka plan siyah
+      // Black background
       canvas.drawRect(
         Rect.fromLTWH(0, 0, canvasWidth.toDouble(), canvasHeight.toDouble()),
         Paint()..color = Colors.black,
       );
 
-      // Her fotoğrafı layout'a göre yerleştir
+      // Place each photo according to layout
       await _drawLayoutPhotos(
         canvas,
         photos,
@@ -855,14 +916,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         spacing,
       );
 
-      // Picture'ı image'e çevir
+      // Convert picture to image
       final picture = recorder.endRecording();
       final img = await picture.toImage(canvasWidth, canvasHeight);
       final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
 
       if (byteData == null) return null;
 
-      // Dosyaya kaydet
+      // Save to file
       final tempDir = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final outputPath = '${tempDir.path}/collage_$timestamp.png';
@@ -876,7 +937,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Sadece gradient arka plan görseli oluştur (yazısız)
+  /// Create only gradient background image (without text)
   Future<String?> _createGradientBackground(LinearGradient gradient) async {
     try {
       const int canvasWidth = 1080;
@@ -885,7 +946,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
 
-      // Gradient arka planı çiz
+      // Draw gradient background
       final gradientPaint = Paint()
         ..shader = gradient.createShader(
           Rect.fromLTWH(0, 0, canvasWidth.toDouble(), canvasHeight.toDouble()),
@@ -914,7 +975,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Layout'a göre fotoğrafları canvas'a çiz
+  /// Draw photos on canvas according to layout
   Future<void> _drawLayoutPhotos(
     Canvas canvas,
     List<File> photos,
@@ -935,20 +996,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final frame = await codec.getNextFrame();
       final image = frame.image;
 
-      // Fotoğrafı rect'e sığdır (cover)
+      // Fit photo to rect (cover)
       final srcRect = _getCoverRect(
         Size(image.width.toDouble(), image.height.toDouble()),
         rect.size,
       );
 
       canvas.save();
-      canvas.clipRect(rect); // Köşesiz, tam ekran
+      canvas.clipRect(rect); // Without corners, fullscreen
       canvas.drawImageRect(image, srcRect, rect, Paint());
       canvas.restore();
     }
   }
 
-  /// Layout türüne göre rect pozisyonlarını hesapla
+  /// Calculate rect positions according to layout type
   List<Rect> _getLayoutRects(double width, double height, double spacing) {
     switch (_selectedLayout) {
       case LayoutType.twoVertical:
@@ -1004,18 +1065,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Cover mode için kaynak rect hesapla
+  /// Calculate source rect for cover mode
   Rect _getCoverRect(Size srcSize, Size dstSize) {
     final srcAspect = srcSize.width / srcSize.height;
     final dstAspect = dstSize.width / dstSize.height;
 
     double cropWidth, cropHeight;
     if (srcAspect > dstAspect) {
-      // Kaynak daha geniş, yatay crop
+      // Source is wider, horizontal crop
       cropHeight = srcSize.height;
       cropWidth = cropHeight * dstAspect;
     } else {
-      // Kaynak daha uzun, dikey crop
+      // Source is taller, vertical crop
       cropWidth = srcSize.width;
       cropHeight = cropWidth / dstAspect;
     }
@@ -1046,7 +1107,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _videoRecordingElapsedMs = 0;
         });
 
-        // Video süre timer'ı başlat
+        // Start video duration timer
         _videoRecordingTimer?.cancel();
         _videoRecordingTimer = Timer.periodic(
           const Duration(milliseconds: 100),
@@ -1058,7 +1119,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             setState(() {
               _videoRecordingElapsedMs += 100;
             });
-            // 60 saniyeye ulaşınca otomatik durdur
+            // Auto stop when reaching 60 seconds
             if (_videoRecordingElapsedMs >= _videoMaxSeconds * 1000) {
               _stopVideoRecording();
             }
@@ -1075,7 +1136,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     HapticFeedback.mediumImpact();
 
-    // Timer'ı durdur
+    // Stop the timer
     _videoRecordingTimer?.cancel();
     _videoRecordingTimer = null;
 
@@ -1089,7 +1150,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final videoPath = file.path;
 
       if (mounted) {
-        // Normal video - boomerang efekti uygulamadan direkt kullan
+        // Normal video - use directly without applying boomerang effect
         setState(() {
           _isProcessingVideo = false;
           _isCapturing = false;
@@ -1137,29 +1198,29 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   // ==================== BOOMERANG RECORDING ====================
 
-  // Flash efekti timer'ı (boomerang kayıt sırasında sürekli yanıp söner)
+  // Flash effect timer (blinks continuously during boomerang recording)
   Timer? _flashTimer;
 
-  /// Yanıp sönen flash efektini başlat (kayıt boyunca)
+  /// Start blinking flash effect (during recording)
   void _startFlashEffect() {
     _flashTimer?.cancel();
-    // Her 200ms'de bir flash yap
+    // Flash every 200ms
     _flashTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
       if (!_isVideoRecording || !mounted) {
         timer.cancel();
         if (mounted) setState(() => _showFlash = false);
         return;
       }
-      // Flash'ı aç
+      // Turn on flash
       setState(() => _showFlash = true);
-      // 80ms sonra kapat
+      // Turn off after 80ms
       Future.delayed(const Duration(milliseconds: 80), () {
         if (mounted) setState(() => _showFlash = false);
       });
     });
   }
 
-  /// Flash efektini durdur
+  /// Stop flash effect
   void _stopFlashEffect() {
     _flashTimer?.cancel();
     _flashTimer = null;
@@ -1176,20 +1237,30 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     HapticFeedback.heavyImpact();
 
+    // First update UI - show user that recording is starting
+    setState(() {
+      _isCapturing = true;
+      _boomerangProgress = 0.0;
+      _boomerangElapsedMs = 0;
+    });
+
     try {
+      // Start video recording
       await _cameraController!.startVideoRecording();
 
-      // Kayıt başladı - flash efektini başlat
+      // IMPORTANT: Short wait for encoder to stabilize
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      debugPrint('Boomerang: Video recording started');
+
+      // Recording started - start flash effect
       _startFlashEffect();
 
       setState(() {
         _isVideoRecording = true;
-        _isCapturing = true;
-        _boomerangProgress = 0.0;
-        _boomerangElapsedMs = 0;
       });
 
-      // Progress timer - her 50ms'de güncelle
+      // Progress timer - update every 50ms
       const updateInterval = 50;
       final maxMs = _boomerangMaxSeconds * 1000;
 
@@ -1205,7 +1276,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             });
           }
 
-          // Max süreye ulaşıldı - otomatik durdur
+          // Max duration reached - auto stop
           if (_boomerangElapsedMs >= maxMs) {
             timer.cancel();
             _stopBoomerangRecording();
@@ -1214,6 +1285,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
     } catch (e) {
       debugPrint('Boomerang start error: $e');
+      // Reset state in case of error
+      if (mounted) {
+        setState(() {
+          _isCapturing = false;
+          _isVideoRecording = false;
+        });
+      }
     }
   }
 
@@ -1221,7 +1299,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _boomerangTimer?.cancel();
     _boomerangTimer = null;
 
-    // Flash efektini durdur
+    // Stop flash effect
     _stopFlashEffect();
 
     if (_cameraController == null || !_isVideoRecording) return;
@@ -1238,17 +1316,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final XFile file = await _cameraController!.stopVideoRecording();
       final videoPath = file.path;
 
-      // Çekilen süreyi hesapla (saniye)
+      debugPrint('Boomerang: Video recorded, creating boomerang effect...');
+
+      // Calculate recorded duration (seconds)
       final recordedSeconds = _boomerangElapsedMs / 1000.0;
 
       if (mounted) {
-        // Boomerang efekti uygula
+        // Apply native boomerang effect
         final boomerangPath = await _createBoomerangEffect(
           videoPath,
-          maxDuration: recordedSeconds.clamp(
-            0.5,
-            _boomerangMaxSeconds.toDouble(),
-          ),
+          maxDuration: recordedSeconds.clamp(0.5, _boomerangMaxSeconds.toDouble()),
         );
         final finalPath = boomerangPath ?? videoPath;
 
@@ -1297,43 +1374,64 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
+  /// Create native boomerang effect
   Future<String?> _createBoomerangEffect(
     String videoPath, {
     double maxDuration = 4.0,
   }) async {
+    debugPrint('Creating boomerang effect from video: $videoPath');
+
     try {
       final inputFile = File(videoPath);
-
-      final boomerangService = AdvancedBoomerangService(
-        speedFactor: 2.0,
-        loopCount: 3,
-        maxInputDuration: maxDuration,
-        outputQuality: 23, // 18'den 23'e çıkarıldı - daha hızlı encoding
-        outputFps: 30,
-      );
-
-      final outputFile = await boomerangService.generateBoomerang(inputFile);
-
-      if (outputFile != null && await outputFile.exists()) {
-        debugPrint('Advanced Boomerang created: ${outputFile.path}');
-
-        try {
-          await inputFile.delete();
-        } catch (e) {
-          debugPrint('Failed to delete original video: $e');
-        }
-
-        return outputFile.path;
+      if (!await inputFile.exists()) {
+        debugPrint('ERROR: Input file does not exist!');
+        return null;
       }
-    } catch (e) {
-      debugPrint('Boomerang effect error: $e');
+
+      final inputSize = await inputFile.length();
+      debugPrint('Input file size: ${(inputSize / 1024 / 1024).toStringAsFixed(2)} MB');
+
+      // Create native boomerang
+      const channel = MethodChannel('story_editor_pro');
+      final tempDir = await getTemporaryDirectory();
+      final outputPath = '${tempDir.path}/boomerang_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      final result = await channel.invokeMethod<String>('createBoomerang', {
+        'inputPath': videoPath,
+        'outputPath': outputPath,
+        'loopCount': 3,
+        'fps': 30,
+      });
+
+      if (result != null) {
+        final outputFile = File(result);
+        if (await outputFile.exists()) {
+          final outputSize = await outputFile.length();
+          debugPrint('Boomerang created: $result (${(outputSize / 1024 / 1024).toStringAsFixed(2)} MB)');
+
+          // Delete original video
+          try {
+            await inputFile.delete();
+          } catch (e) {
+            debugPrint('Failed to delete original video: $e');
+          }
+
+          return result;
+        }
+      }
+
+      debugPrint('ERROR: Boomerang creation failed');
+      return null;
+    } catch (e, stackTrace) {
+      debugPrint('Boomerang error: $e');
+      debugPrint('Stack trace: $stackTrace');
+      return null;
     }
-    return null;
   }
 
   // ==================== HANDS-FREE RECORDING ====================
 
-  /// Hands-free geri sayımı başlat
+  /// Start hands-free countdown
   void _startHandsFreeCountdown() {
     if (_isVideoRecording || _isCapturing || _isHandsFreeCountingDown) return;
 
@@ -1344,7 +1442,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _handsFreeCountdown = _handsFreeDelaySeconds;
     });
 
-    // Her saniye geri say
+    // Count down every second
     _handsFreeCountdownTimer = Timer.periodic(const Duration(seconds: 1), (
       timer,
     ) {
@@ -1366,7 +1464,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     });
   }
 
-  /// Hands-free geri sayımı iptal et
+  /// Cancel hands-free countdown
   void _cancelHandsFreeCountdown() {
     _handsFreeCountdownTimer?.cancel();
     _handsFreeCountdownTimer = null;
@@ -1379,7 +1477,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Hands-free video kaydını başlat
+  /// Start hands-free video recording
   Future<void> _startHandsFreeRecording() async {
     if (_cameraController == null || !_isInitialized) return;
 
@@ -1395,7 +1493,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         _handsFreeRecordingElapsed = 0;
       });
 
-      // Her saniye kayıt süresini güncelle
+      // Update recording duration every second
       _handsFreeRecordingTimer = Timer.periodic(const Duration(seconds: 1), (
         timer,
       ) {
@@ -1408,7 +1506,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _handsFreeRecordingElapsed++;
         });
 
-        // 60 saniyeye ulaşınca otomatik durdur
+        // Auto stop when reaching 60 seconds
         if (_handsFreeRecordingElapsed >= _handsFreeMaxRecordingSeconds) {
           timer.cancel();
           _stopHandsFreeRecording();
@@ -1422,7 +1520,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Hands-free video kaydını durdur
+  /// Stop hands-free video recording
   Future<void> _stopHandsFreeRecording() async {
     _handsFreeRecordingTimer?.cancel();
     _handsFreeRecordingTimer = null;
@@ -1447,7 +1545,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _handsFreeRecordingElapsed = 0;
         });
 
-        // Video editörüne yönlendir
+        // Navigate to video editor
         if (widget.showEditor) {
           await Navigator.push<Map<String, dynamic>?>(
             context,
@@ -1571,9 +1669,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         backgroundColor: Colors.black,
         body: Column(
           children: [
-            // Status bar alanı - siyah
+            // Status bar area - black
             Container(height: statusBarHeight, color: Colors.black),
-            // Geri kalan alan
+            // Remaining area
             Expanded(
               child: _isLayoutMode ? _buildLayoutModeBody() : _buildNormalModeBody(),
             ),
@@ -1583,7 +1681,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Layout modu için ayrı body
+  /// Separate body for layout mode
   Widget _buildLayoutModeBody() {
     if (_isLoading) {
       return const Center(
@@ -1598,7 +1696,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Layout preview - bottom bar'ın üstünde kalacak şekilde
+        // Layout preview - positioned above the bottom bar
         Positioned(
           top: 0,
           left: 0,
@@ -1616,15 +1714,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
         ),
-        // UI her zaman görünür
+        // UI is always visible
         _buildTopControlsRow(),
         _buildSideTools(),
-        // Bekleyen text overlay göstergesi
+        // Pending text overlay indicator
         if (_pendingTextOverlay != null) _buildPendingTextIndicator(),
         _buildCenterCaptureButton(),
         _buildBottomBar(),
         if (_zoomLevel > _minZoom) _buildZoomIndicator(),
-        // Beyaz flash efekti
+        // White flash effect
         if (_showFlash)
           AnimatedOpacity(
             opacity: _showFlash ? 1.0 : 0.0,
@@ -1635,8 +1733,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Bekleyen text overlay göstergesi - kullanıcıya Create Mode'dan
-  /// metin oluşturulduğunu ve fotoğraf çekildikten sonra ekleneceğini gösterir
+  /// Pending text overlay indicator - shows user that text was created
+  /// from Create Mode and will be added after photo is taken
   Widget _buildPendingTextIndicator() {
     return Positioned(
       top: 60,
@@ -1645,7 +1743,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Center(
         child: GestureDetector(
           onTap: () {
-            // İptal et
+            // Cancel
             setState(() {
               _pendingTextOverlay = null;
             });
@@ -1690,7 +1788,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Normal mod için body - kamera tam ekran
+  /// Body for normal mode - fullscreen camera
   Widget _buildNormalModeBody() {
     if (_isLoading) {
       return const Center(
@@ -1704,12 +1802,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     return Column(
       children: [
-        // Kamera preview alanı (üst kontroller + kamera + capture button)
+        // Camera preview area (top controls + camera + capture button)
         Expanded(
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Kamera preview - sadece buna ClipRRect uygula
+              // Camera preview - only apply ClipRRect to this
               ClipRRect(
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(16),
@@ -1717,19 +1815,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 ),
                 child: _buildFullscreenCameraPreview(),
               ),
-              // Üst kontroller (X, Flash, Settings)
+              // Top controls (X, Flash, Settings)
               _buildTopControlsRow(),
-              // Sağ taraf ikonları (Boomerang, Text, Collage, HandsFree)
+              // Right side icons (Boomerang, Text, Collage, HandsFree)
               _buildSideToolsColumn(),
-              // Capture button - altta ortalanmış
+              // Capture button - centered at bottom
               _buildCaptureButtonArea(),
-              // Bekleyen text overlay göstergesi
+              // Pending text overlay indicator
               if (_pendingTextOverlay != null) _buildPendingTextIndicator(),
-              // Zoom göstergesi
+              // Zoom indicator
               if (_zoomLevel > _minZoom) _buildZoomIndicator(),
-              // Hands-free geri sayım overlay'i
+              // Hands-free countdown overlay
               if (_isHandsFreeCountingDown) _buildHandsFreeCountdownOverlay(),
-              // Beyaz flash efekti
+              // White flash effect
               if (_showFlash)
                 AnimatedOpacity(
                   opacity: _showFlash ? 1.0 : 0.0,
@@ -1745,7 +1843,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Hands-free geri sayım overlay'i - büyük sayı gösterir
+  /// Hands-free countdown overlay - shows large number
   Widget _buildHandsFreeCountdownOverlay() {
     return Positioned.fill(
       child: Container(
@@ -1754,7 +1852,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Büyük geri sayım sayısı
+              // Large countdown number
               TweenAnimationBuilder<double>(
                 key: ValueKey(_handsFreeCountdown),
                 tween: Tween(begin: 1.5, end: 1.0),
@@ -1778,7 +1876,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 },
               ),
               const SizedBox(height: 24),
-              // İptal butonu
+              // Cancel button
               GestureDetector(
                 onTap: _cancelHandsFreeCountdown,
                 child: Container(
@@ -1808,8 +1906,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Hands-free kayıt süresi overlay'i
-  /// Seçilen layout türüne göre grid oluştur - boşluksuz tam ekran
+  /// Hands-free recording duration overlay
+  /// Create grid according to selected layout type - fullscreen without spacing
   Widget _buildLayoutGrid() {
     switch (_selectedLayout) {
       case LayoutType.twoVertical:
@@ -1882,34 +1980,37 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Tek bir layout tile'ı - aktif olanda kamera preview, çekilmişlerde fotoğraf
-  /// Tam ekran, boşluksuz ve köşesiz tasarım
+  /// Single layout tile - camera preview in active one, photo in captured ones
+  /// Fullscreen, without spacing and corners design
   Widget _buildLayoutTile(int index) {
     final isActive = index == _activeLayoutIndex;
     final File? capturedPhoto = index < _capturedLayoutPhotos.length
         ? _capturedLayoutPhotos[index]
         : null;
 
-    return GestureDetector(
-      onTap: () {
-        // Tile'a tıklanınca o tile'ı aktif yap (henüz çekilmemişse)
-        if (capturedPhoto == null) {
-          HapticFeedback.selectionClick();
-          setState(() {
-            _activeLayoutIndex = index;
-          });
-        } else {
-          // Çekilmiş fotoğrafa tıklanınca silme seçeneği
-          _showDeletePhotoDialog(index);
-        }
-      },
-      onLongPress: () {
-        // Uzun basınca galeriden resim seç
-        HapticFeedback.mediumImpact();
-        _pickImageForLayoutTile(index);
-      },
+    // Tiles cannot be clicked during layout processing
+    return IgnorePointer(
+      ignoring: _isLayoutProcessing,
+      child: GestureDetector(
+        onTap: () {
+          // Make this tile active when clicked (if not yet captured)
+          if (capturedPhoto == null) {
+            HapticFeedback.selectionClick();
+            setState(() {
+              _activeLayoutIndex = index;
+            });
+          } else {
+            // Delete option when clicked on captured photo
+            _showDeletePhotoDialog(index);
+          }
+        },
+        onLongPress: () {
+          // Select image from gallery on long press
+          HapticFeedback.mediumImpact();
+          _pickImageForLayoutTile(index);
+        },
       child: Container(
-        // İnce beyaz çizgi ile ayırma
+        // Separate with thin white line
         decoration: BoxDecoration(
           border: Border.all(
             color: isActive
@@ -1919,57 +2020,59 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ),
         ),
         child: capturedPhoto != null
-            // Çekilmiş fotoğraf
+            // Captured photo
             ? Stack(
                 fit: StackFit.expand,
                 children: [
                   Image.file(capturedPhoto, fit: BoxFit.cover),
-                  // Silme ikonu
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.close,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-                    ),
-                  ),
-                  // Index göstergesi
-                  Positioned(
-                    bottom: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${index + 1}',
-                        style: const TextStyle(
+                  // Delete icon - hide during processing
+                  if (!_isLayoutProcessing)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Colors.black54,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.close,
                           color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
+                          size: 18,
                         ),
                       ),
                     ),
-                  ),
+                  // Index indicator - hide during processing
+                  if (!_isLayoutProcessing)
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${index + 1}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               )
-            // Aktif tile - kamera preview
+            // Active tile - camera preview
             : isActive
             ? _buildTileCameraPreview(index)
-            // Bekleyen tile
+            // Pending tile
             : Container(
                 color: Colors.grey.shade900,
                 child: Center(
@@ -1995,10 +2098,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 ),
               ),
       ),
+      ),
     );
   }
 
-  /// Aktif tile için kamera preview - tam ekran
+  /// Camera preview for active tile - fullscreen
   Widget _buildTileCameraPreview(int index) {
     if (_cameraController == null || !_isInitialized) {
       return Container(
@@ -2012,7 +2116,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Kamera preview (crop edilmiş, tam ekran)
+        // Camera preview (cropped, fullscreen)
         ClipRect(
           child: OverflowBox(
             alignment: Alignment.center,
@@ -2026,7 +2130,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
         ),
-        // Index ve "ÇEK" yazısı
+        // Index and "CAPTURE" text
         Positioned(
           bottom: 12,
           left: 0,
@@ -2053,7 +2157,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Çekilmiş fotoğrafı silme dialogu
+  /// Delete captured photo dialog
   void _showDeletePhotoDialog(int index) {
     showDialog(
       context: context,
@@ -2099,7 +2203,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       onScaleUpdate: _onScaleUpdate,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Positioned alanının boyutlarını kullan (bottom bar hariç)
+          // Use positioned area dimensions (excluding bottom bar)
           final availableWidth = constraints.maxWidth;
           final availableHeight = constraints.maxHeight;
           final availableAspectRatio = availableWidth / availableHeight;
@@ -2171,80 +2275,91 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Üst kontroller - status bar zaten ayrı, SafeArea yok
+  /// Top controls - status bar already separate, no SafeArea
   Widget _buildTopControlsRow() {
+    // Hide top bar during all recording and processing states
+    final shouldHide = _isLayoutProcessing || _isHandsFreeCountingDown ||
+        _isVideoRecording || _isProcessingVideo;
+
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildIconButton(
-              iconWidget: SvgPicture.asset(
-                'packages/story_editor_pro/assets/icons/xmark.svg',
-                width: 24,
-                height: 24,
-                colorFilter: const ColorFilter.mode(
-                  Colors.white,
-                  BlendMode.srcIn,
-                ),
-              ),
-              onTap: () {
-                // Özel modlardaysa sadece modu kapat, değilse ekranı kapat
-                if (_isLayoutMode) {
-                  setState(() {
-                    _isLayoutMode = false;
-                    _showLayoutSelector = false;
-                    _capturedLayoutPhotos = [];
-                    _activeLayoutIndex = 0;
-                  });
-                } else if (_isBoomerangMode) {
-                  setState(() {
-                    _isBoomerangMode = false;
-                  });
-                } else if (_isHandsFreeMode) {
-                  setState(() {
-                    _isHandsFreeMode = false;
-                    _showHandsFreeSelector = false;
-                  });
-                } else {
-                  Navigator.pop(context);
-                }
-              },
-            ),
-            _buildIconButton(iconWidget: _flashIcon, onTap: _toggleFlash),
-            _buildIconButton(
-              iconWidget: SvgPicture.asset(
-                'packages/story_editor_pro/assets/icons/settings.svg',
-                width: 24,
-                height: 24,
-                colorFilter: const ColorFilter.mode(
-                  Colors.white,
-                  BlendMode.srcIn,
-                ),
-              ),
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const CameraSettingsScreen(),
+      child: AnimatedOpacity(
+        opacity: shouldHide ? 0.0 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        child: IgnorePointer(
+          ignoring: shouldHide,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildIconButton(
+                  iconWidget: SvgPicture.asset(
+                    'packages/story_editor_pro/assets/icons/xmark.svg',
+                    width: 24,
+                    height: 24,
+                    colorFilter: const ColorFilter.mode(
+                      Colors.white,
+                      BlendMode.srcIn,
+                    ),
                   ),
-                );
-                if (mounted) {
-                  _loadSettings();
-                }
-              },
+                  onTap: () {
+                    // If in special modes only close the mode, otherwise close the screen
+                    if (_isLayoutMode) {
+                      setState(() {
+                        _isLayoutMode = false;
+                        _showLayoutSelector = false;
+                        _capturedLayoutPhotos = [];
+                        _activeLayoutIndex = 0;
+                      });
+                    } else if (_isBoomerangMode) {
+                      setState(() {
+                        _isBoomerangMode = false;
+                      });
+                    } else if (_isHandsFreeMode) {
+                      setState(() {
+                        _isHandsFreeMode = false;
+                        _showHandsFreeSelector = false;
+                      });
+                    } else {
+                      Navigator.pop(context);
+                    }
+                  },
+                ),
+                _buildIconButton(iconWidget: _flashIcon, onTap: _toggleFlash),
+                _buildIconButton(
+                  iconWidget: SvgPicture.asset(
+                    'packages/story_editor_pro/assets/icons/settings.svg',
+                    width: 24,
+                    height: 24,
+                    colorFilter: const ColorFilter.mode(
+                      Colors.white,
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const CameraSettingsScreen(),
+                      ),
+                    );
+                    if (mounted) {
+                      _loadSettings();
+                    }
+                  },
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  /// Capture button alanı - Stack içinde altta konumlanır
+  /// Capture button area - positioned at bottom in Stack
   Widget _buildCaptureButtonArea() {
     Widget captureButton;
     if (_isBoomerangMode || _isProcessingVideo) {
@@ -2266,15 +2381,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Eski metod - Layout mode için hala kullanılıyor
+  /// Old method - still used for Layout mode
   Widget _buildCenterCaptureButton() {
-    // Bottom bar yüksekliği + butonun yarısı + biraz boşluk
+    // Bottom bar height + half of button + some spacing
     final bottomBarHeight =
         16 + 44 + MediaQuery.of(context).viewPadding.bottom + 16;
     final buttonBottomOffset =
-        bottomBarHeight + 20; // Bottom bar'ın üstünde 20px boşluk
+        bottomBarHeight + 20; // 20px spacing above bottom bar
 
-    // Boomerang modunda özel buton
+    // Special button in boomerang mode
     if (_isBoomerangMode || _isProcessingVideo) {
       return Positioned(
         left: 0,
@@ -2284,7 +2399,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
     }
 
-    // Hands-free modunda özel buton
+    // Special button in hands-free mode
     if (_isHandsFreeMode) {
       return Positioned(
         left: 0,
@@ -2294,7 +2409,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
     }
 
-    // Normal mod - Custom video/photo buton
+    // Normal mode - Custom video/photo button
     return Positioned(
       left: 0,
       right: 0,
@@ -2303,41 +2418,50 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Normal mod için fotoğraf/video butonu - süre göstergesi ve progress ile
+  /// Photo/video button for normal mode - with duration indicator and progress
   Widget _buildNormalCaptureButton() {
     final screenHeight = MediaQuery.of(context).size.height;
-    final double size = screenHeight < 700 ? 70 : 90; // Küçük ekranda 70, büyükte 90
+    final double size = screenHeight < 700 ? 70 : 90; // 70 on small screen, 90 on large
     final double strokeWidth = screenHeight < 700 ? 4 : 6;
-    const Color recordingColor = Color(0xFFFF3B30); // Kırmızı
+    const Color recordingColor = Color(0xFFFF3B30); // Red
 
-    // Video kayıt progress (0.0 - 1.0)
+    // Video recording progress (0.0 - 1.0)
     final videoProgress = _videoRecordingElapsedMs / (_videoMaxSeconds * 1000);
 
-    // Süre formatı: 00:44
+    // Duration format: 00:44
     final seconds = (_videoRecordingElapsedMs / 1000).floor();
     final timeString = '00:${seconds.toString().padLeft(2, '0')}';
 
     return GestureDetector(
       onTap: () {
-        // Kısa dokunuş - fotoğraf çek
+        // Short tap - take photo
         if (!_isVideoRecording && !_isCapturing) {
           _takePicture();
         }
       },
-      onLongPressStart: (_) {
-        // Uzun basış - video kaydını başlat
+      onLongPressStart: (details) {
+        // Long press - start video recording
         if (!_isVideoRecording && !_isCapturing) {
+          _longPressStartY = details.globalPosition.dy;
+          _longPressZoomStart = _zoomLevel;
           _startVideoRecording();
         }
       },
-      onLongPressEnd: (_) {
-        // Parmak kaldırıldı - video kaydını durdur
-        if (_isVideoRecording) {
-          _stopVideoRecording();
+      onLongPressMoveUpdate: (details) {
+        // Swipe up = zoom in, swipe down = zoom out
+        if (_isVideoRecording && _cameraController != null) {
+          final deltaY = _longPressStartY - details.globalPosition.dy;
+          // Every 100 pixels = 1x zoom change
+          final zoomDelta = deltaY / 100.0;
+          final newZoom = (_longPressZoomStart + zoomDelta).clamp(_minZoom, _maxZoom);
+          if (newZoom != _zoomLevel) {
+            setState(() => _zoomLevel = newZoom);
+            _cameraController!.setZoomLevel(_zoomLevel);
+          }
         }
       },
-      onLongPressCancel: () {
-        // Parmak butondan kaydırıldı - video kaydını durdur
+      onLongPressEnd: (_) {
+        // Finger lifted - stop video recording
         if (_isVideoRecording) {
           _stopVideoRecording();
         }
@@ -2345,7 +2469,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Süre göstergesi - butonun üstünde (sadece kayıt sırasında)
+          // Duration indicator - above button (only during recording)
           if (_isVideoRecording)
             Container(
               margin: const EdgeInsets.only(bottom: 12),
@@ -2364,14 +2488,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               ),
             ),
 
-          // Ana buton
+          // Main button
           SizedBox(
             width: size,
             height: size,
             child: Stack(
               alignment: Alignment.center,
               children: [
-                // Dış halka - video kaydında progress gösterir
+                // Outer ring - shows progress during video recording
                 SizedBox(
                   width: size,
                   height: size,
@@ -2392,7 +2516,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                         ),
                 ),
 
-                // İç daire - video kaydında küçülür ve kırmızı olur
+                // Inner circle - shrinks and turns red during video recording
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   width: _isVideoRecording ? 35 : 70,
@@ -2410,17 +2534,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Hands-free için özel çekim butonu - video kaydı ile aynı görünüm
+  /// Special capture button for hands-free - same appearance as video recording
   Widget _buildHandsFreeCaptureButton() {
     const double size = 90;
     const double strokeWidth = 6;
-    const Color recordingColor = Color(0xFFFF3B30); // Kırmızı
+    const Color recordingColor = Color(0xFFFF3B30); // Red
 
-    // Video kayıt progress (0.0 - 1.0)
+    // Video recording progress (0.0 - 1.0)
     final videoProgress =
         _handsFreeRecordingElapsed / _handsFreeMaxRecordingSeconds;
 
-    // Süre formatı: 00:44
+    // Duration format: 00:44
     final timeString =
         '00:${_handsFreeRecordingElapsed.toString().padLeft(2, '0')}';
 
@@ -2435,7 +2559,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Süre göstergesi - butonun üstünde (kayıt sırasında veya başlangıç bilgisi)
+          // Duration indicator - above button (during recording or start info)
           Container(
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -2455,14 +2579,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
 
-          // Ana buton
+          // Main button
           SizedBox(
             width: size,
             height: size,
             child: Stack(
               alignment: Alignment.center,
               children: [
-                // Dış halka - video kaydında progress gösterir
+                // Outer ring - shows progress during video recording
                 SizedBox(
                   width: size,
                   height: size,
@@ -2483,7 +2607,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                         ),
                 ),
 
-                // İç daire - video kaydında küçülür ve kırmızı olur
+                // Inner circle - shrinks and turns red during video recording
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   width: _isVideoRecording ? 35 : 70,
@@ -2514,20 +2638,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Boomerang için özel çekim butonu - dairesel ilerleme göstergesi ile
-  /// Instagram Boomerang renkleri: turuncu -> pembe gradient
+  /// Special capture button for boomerang - with circular progress indicator
+  /// Instagram Boomerang colors: orange -> pink gradient
   Widget _buildBoomerangCaptureButton() {
     const double size = 90;
     const double strokeWidth = 6;
 
-    // Instagram Boomerang gradient renkleri
+    // Instagram Boomerang gradient colors
     const boomerangGradient = LinearGradient(
       begin: Alignment.topRight,
       end: Alignment.bottomLeft,
       colors: [
-        Color(0xFFF77737), // Turuncu
-        Color(0xFFE1306C), // Pembe
-        Color(0xFFC13584), // Koyu pembe
+        Color(0xFFF77737), // Orange
+        Color(0xFFE1306C), // Pink
+        Color(0xFFC13584), // Dark pink
       ],
     );
 
@@ -2550,7 +2674,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Üst yazı alanı - kayıt veya işleme durumuna göre
+          // Top text area - according to recording or processing state
           Visibility(
             visible: _isVideoRecording || _isProcessingVideo,
             maintainSize: true,
@@ -2582,14 +2706,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
 
-          // Ana buton alanı
+          // Main button area
           SizedBox(
             width: size,
             height: size,
             child: Stack(
               alignment: Alignment.center,
               children: [
-                // Dış halka - her zaman görünür (processing dahil)
+                // Outer ring - always visible (including processing)
                 AnimatedBuilder(
                   animation: _pulseAnimation,
                   builder: (context, child) {
@@ -2601,7 +2725,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                         width: size,
                         height: size,
                         child: _isVideoRecording
-                            // Kayıt sırasında: progress ile dolan halka
+                            // During recording: ring filling with progress
                             ? CustomPaint(
                                 painter: _GradientCircularProgressPainter(
                                   progress: _boomerangProgress,
@@ -2610,7 +2734,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                                   backgroundColor: Colors.white,
                                 ),
                               )
-                            // Normal ve Processing: beyaz border
+                            // Normal and Processing: white border
                             : Container(
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
@@ -2625,7 +2749,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   },
                 ),
 
-                // İç daire - gradient veya processing circular
+                // Inner circle - gradient or processing circular
                 _isProcessingVideo
                     ? const SizedBox(
                         width: 50,
@@ -2665,8 +2789,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Bottom bar - Column yapısı için (Positioned değil)
+  /// Bottom bar - for Column structure (not Positioned)
   Widget _buildBottomBarRow() {
+    // Hide buttons during recording or processing
+    final shouldHide = _isProcessingVideo || _isVideoRecording || _isLayoutProcessing || _isHandsFreeCountingDown;
+
     return Container(
       padding: EdgeInsets.only(
         left: 20,
@@ -2675,36 +2802,42 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         bottom: MediaQuery.of(context).viewPadding.bottom + 16,
       ),
       decoration: const BoxDecoration(color: Colors.black),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          _buildGalleryButton(),
-          if (!_isLayoutMode) _buildModeSelector(),
-          if (_isLayoutMode) const SizedBox(width: 40),
-          _buildIconButton(
-            iconWidget: SvgPicture.asset(
-              'packages/story_editor_pro/assets/icons/refresh-double.svg',
-              width: 24,
-              height: 24,
-              colorFilter: ColorFilter.mode(
-                _isProcessingVideo || _isVideoRecording
-                    ? Colors.white.withValues(alpha: 0.3)
-                    : Colors.white,
-                BlendMode.srcIn,
+      child: AnimatedOpacity(
+        opacity: shouldHide ? 0.0 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        child: IgnorePointer(
+          ignoring: shouldHide,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildGalleryButton(),
+              if (!_isLayoutMode) _buildModeSelector(),
+              if (_isLayoutMode) const SizedBox(width: 40),
+              _buildIconButton(
+                iconWidget: SvgPicture.asset(
+                  'packages/story_editor_pro/assets/icons/refresh-double.svg',
+                  width: 24,
+                  height: 24,
+                  colorFilter: const ColorFilter.mode(
+                    Colors.white,
+                    BlendMode.srcIn,
+                  ),
+                ),
+                onTap: _switchCamera,
               ),
-            ),
-            onTap: _isProcessingVideo || _isVideoRecording
-                ? null
-                : _switchCamera,
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  /// Eski _buildBottomBar - Layout mode için hala kullanılıyor
+  /// Old _buildBottomBar - still used for Layout mode
   Widget _buildBottomBar() {
+    // Hide buttons during recording or processing
+    final shouldHide = _isProcessingVideo || _isVideoRecording || _isLayoutProcessing || _isHandsFreeCountingDown;
+
     return Positioned(
       left: 0,
       right: 0,
@@ -2717,32 +2850,35 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           bottom: MediaQuery.of(context).viewPadding.bottom + 16,
         ),
         decoration: const BoxDecoration(color: Colors.black),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildGalleryButton(),
-            // Layout modunda mode selector'ı gizle
-            if (!_isLayoutMode) _buildModeSelector(),
-            // Layout modunda boşluk için SizedBox
-            if (_isLayoutMode) const SizedBox(width: 40),
-            _buildIconButton(
-              iconWidget: SvgPicture.asset(
-                'packages/story_editor_pro/assets/icons/refresh-double.svg',
-                width: 24,
-                height: 24,
-                colorFilter: ColorFilter.mode(
-                  _isProcessingVideo || _isVideoRecording
-                      ? Colors.white.withValues(alpha: 0.3)
-                      : Colors.white,
-                  BlendMode.srcIn,
+        child: AnimatedOpacity(
+          opacity: shouldHide ? 0.0 : 1.0,
+          duration: const Duration(milliseconds: 200),
+          child: IgnorePointer(
+            ignoring: shouldHide,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _buildGalleryButton(),
+                // Hide mode selector in layout mode
+                if (!_isLayoutMode) _buildModeSelector(),
+                // SizedBox for spacing in layout mode
+                if (_isLayoutMode) const SizedBox(width: 40),
+                _buildIconButton(
+                  iconWidget: SvgPicture.asset(
+                    'packages/story_editor_pro/assets/icons/refresh-double.svg',
+                    width: 24,
+                    height: 24,
+                    colorFilter: const ColorFilter.mode(
+                      Colors.white,
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                  onTap: _switchCamera,
                 ),
-              ),
-              onTap: _isProcessingVideo || _isVideoRecording
-                  ? null
-                  : _switchCamera,
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -2750,28 +2886,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Widget _buildGalleryButton() {
     final hasThumbnail = _hasGalleryPermission && _lastGalleryThumbnail != null;
-    final isDisabled = _isProcessingVideo || _isVideoRecording;
 
-    // %30 küçültülmüş boyutlar: 56->40, 48->34, 8->6, 2->1.5, 24->17, 20->14, 10->7
-    return Opacity(
-      opacity: isDisabled ? 0.5 : 1.0,
-      child: GestureDetector(
-        onTap: isDisabled
-            ? null
-            : () {
-                // Layout modunda aktif tile'a galeri resmi seç
-                if (_isLayoutMode) {
-                  _pickImageForLayoutTile(_activeLayoutIndex);
-                } else {
-                  _openGallery();
-                }
-              },
+    // 30% reduced sizes: 56->40, 48->34, 8->6, 2->1.5, 24->17, 20->14, 10->7
+    return GestureDetector(
+      onTap: () {
+        // Select gallery image for active tile in layout mode
+        if (_isLayoutMode) {
+          _pickImageForLayoutTile(_activeLayoutIndex);
+        } else {
+          _openGallery();
+        }
+      },
         child: SizedBox(
           width: 40,
           height: 40,
           child: Stack(
             children: [
-              // Ana galeri kutusu - beyaz border ile
+              // Main gallery box - with white border
               Container(
                 width: 34,
                 height: 34,
@@ -2813,7 +2944,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                         ),
                       ),
               ),
-              // Sağ alt köşede artı simgesi
+              // Plus icon at bottom right corner
               Positioned(
                 right: 0,
                 bottom: 0,
@@ -2841,7 +2972,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ],
           ),
         ),
-      ),
     );
   }
 
@@ -2904,18 +3034,22 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Sağ (veya sol) taraftaki araç butonları - Positioned olarak döner
-  /// Eski _buildSideTools - Layout mode için hala kullanılıyor
+  /// Tool buttons on the right (or left) side - returns as Positioned
+  /// Old _buildSideTools - still used for Layout mode
   Widget _buildSideTools() {
+    // Hide during recording or processing
+    final shouldHide = _isProcessingVideo || _isLayoutProcessing || _isHandsFreeCountingDown ||
+        _isVideoRecording;
     return Positioned(
       right: _toolsOnLeft ? null : 16,
       left: _toolsOnLeft ? 16 : null,
       top: 0,
       bottom: 120,
-      child: IgnorePointer(
-        ignoring: _isProcessingVideo,
-        child: Opacity(
-          opacity: _isProcessingVideo ? 0.5 : 1.0,
+      child: AnimatedOpacity(
+        opacity: shouldHide ? 0.0 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        child: IgnorePointer(
+          ignoring: shouldHide,
           child: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2935,22 +3069,26 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Sağ taraftaki araç butonları - Column yapısı için
+  /// Tool buttons on the right side - for Column structure
   Widget _buildSideToolsColumn() {
     final screenHeight = MediaQuery.of(context).size.height;
-    // Küçük ekranlarda daha az boşluk, büyük ekranlarda daha fazla
-    final bottomOffset = screenHeight * 0.15; // Ekranın %15'i
-    final itemSpacing = screenHeight < 700 ? 8.0 : 16.0; // Küçük ekranda 8, büyükte 16
+    // Less spacing on small screens, more on large screens
+    final bottomOffset = screenHeight * 0.15; // 15% of screen
+    final itemSpacing = screenHeight < 700 ? 8.0 : 16.0; // 8 on small screen, 16 on large
 
+    // Hide during recording or processing
+    final shouldHide = _isProcessingVideo || _isLayoutProcessing || _isHandsFreeCountingDown ||
+        _isVideoRecording;
     return Positioned(
       right: _toolsOnLeft ? null : 16,
       left: _toolsOnLeft ? 16 : null,
       top: 0,
       bottom: bottomOffset,
-      child: IgnorePointer(
-        ignoring: _isProcessingVideo,
-        child: Opacity(
-          opacity: _isProcessingVideo ? 0.5 : 1.0,
+      child: AnimatedOpacity(
+        opacity: shouldHide ? 0.0 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        child: IgnorePointer(
+          ignoring: shouldHide,
           child: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2970,25 +3108,26 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Boomerang butonu
+  /// Boomerang button
   Widget _buildBoomerangButton() {
     // Instagram Boomerang gradient
     const boomerangGradient = LinearGradient(
       begin: Alignment.topRight,
       end: Alignment.bottomLeft,
       colors: [
-        Color(0xFFF77737), // Turuncu
-        Color(0xFFE1306C), // Pembe
-        Color(0xFFC13584), // Koyu pembe
+        Color(0xFFF77737), // Orange
+        Color(0xFFE1306C), // Pink
+        Color(0xFFC13584), // Dark pink
       ],
     );
 
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
         HapticFeedback.selectionClick();
+        final wasBoomerangMode = _isBoomerangMode;
         setState(() {
           _isBoomerangMode = !_isBoomerangMode;
-          // Boomerang açılırsa diğer modları kapat
+          // Close other modes if boomerang is opened
           if (_isBoomerangMode) {
             _isLayoutMode = false;
             _showLayoutSelector = false;
@@ -2996,6 +3135,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             _showHandsFreeSelector = false;
           }
         });
+
+        // Pre-warm encoder when switching to boomerang mode
+        // This prevents delay when recording starts
+        if (!wasBoomerangMode && _isBoomerangMode && _cameraController != null) {
+          try {
+            debugPrint('Boomerang: Pre-warming encoder...');
+            await _cameraController!.startVideoRecording();
+            await Future.delayed(const Duration(milliseconds: 100));
+            await _cameraController!.stopVideoRecording();
+            debugPrint('Boomerang: Encoder pre-warmed');
+          } catch (e) {
+            debugPrint('Boomerang pre-warm error: $e');
+          }
+        }
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -3016,22 +3169,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Create Mode (Gradient Text Editor) butonu
+  /// Create Mode (Gradient Text Editor) button
   Widget _buildCreateModeButton() {
     return GestureDetector(
       onTap: () async {
         HapticFeedback.selectionClick();
-        // Gradient Text Editor'ı aç
+        // Open Gradient Text Editor
         await openGradientTextEditor(
           context,
           onComplete: (text, gradient) async {
             debugPrint('Create Mode: onComplete called with text: $text');
 
-            // Sadece gradient arka plan görseli oluştur (yazısız)
+            // Create only gradient background image (without text)
             final bgImagePath = await _createGradientBackground(gradient);
 
             if (bgImagePath != null && mounted) {
-              final screenSize = MediaQuery.of(context).size;
               await Navigator.push<Map<String, dynamic>?>(
                 context,
                 MaterialPageRoute(
@@ -3040,16 +3192,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     primaryColor: widget.primaryColor,
                     closeFriendsList: widget.closeFriendsList,
                     onShare: widget.onStoryShare,
-                    // Yazıyı TextOverlay olarak gönder (taşınabilir, düzenlenebilir)
+                    // Send text as TextOverlay (movable, editable)
+                    // offset: Offset.zero - will be auto centered on editor side
                     initialTextOverlay: TextOverlay(
                       text: text,
                       color: Colors.white,
                       fontSize: 32,
                       textStyle: const TextStyle(fontWeight: FontWeight.bold),
-                      offset: Offset(
-                        screenSize.width / 2 - 80,
-                        screenSize.height / 2 - 30,
-                      ),
+                      offset: Offset.zero,
                     ),
                   ),
                 ),
@@ -3070,9 +3220,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Hands-free butonu - tıklandığında aşağı doğru genişleyerek süre seçenekleri gösterir
+  /// Hands-free button - expands downward to show duration options when clicked
   Widget _buildHandsFreeButton() {
-    // Süre seçenekleri (saniye)
+    // Duration options (seconds)
     const List<int> delayOptions = [3, 5, 10, 15];
 
     return AnimatedContainer(
@@ -3090,20 +3240,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Ana hands-free butonu (her zaman görünür)
+          // Main hands-free button (always visible)
           GestureDetector(
             onTap: () {
               HapticFeedback.selectionClick();
               setState(() {
                 if (!_isHandsFreeMode) {
-                  // Hands-free modunu ve selector'ü aç
+                  // Open hands-free mode and selector
                   _isHandsFreeMode = true;
                   _showHandsFreeSelector = true;
                   _isBoomerangMode = false;
                   _isLayoutMode = false;
                   _showLayoutSelector = false;
                 } else {
-                  // Mod aktifken tıklayınca her şeyi kapat (normal moda dön)
+                  // Close everything when clicked while mode is active (return to normal mode)
                   _isHandsFreeMode = false;
                   _showHandsFreeSelector = false;
                 }
@@ -3120,7 +3270,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
 
-          // Süre seçenekleri (aşağı doğru açılır)
+          // Duration options (expands downward)
           AnimatedSize(
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOutCubic,
@@ -3137,7 +3287,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                             setState(() {
                               _handsFreeDelaySeconds = seconds;
                             });
-                            // Sadece süreyi seç, butona basınca başlayacak
+                            // Just select duration, will start when button is pressed
                           },
                           child: Container(
                             width: 32,
@@ -3181,9 +3331,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Collage butonu - tıklandığında aşağı doğru genişleyerek layout seçenekleri gösterir
+  /// Collage button - expands downward to show layout options when clicked
   Widget _buildCollageButton() {
-    // Layout SVG ikon yolları
+    // Layout SVG icon paths
     const Map<LayoutType, String> layoutIcons = {
       LayoutType.twoVertical:
           'packages/story_editor_pro/assets/icons/collage-frame-two-horizontal.svg',
@@ -3210,13 +3360,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Ana collage butonu (her zaman görünür)
+          // Main collage button (always visible)
           GestureDetector(
             onTap: () {
               HapticFeedback.selectionClick();
               setState(() {
                 if (!_isLayoutMode) {
-                  // Layout modunu ve selector'ü aç
+                  // Open layout mode and selector
                   _isLayoutMode = true;
                   _showLayoutSelector = true;
                   _isBoomerangMode = false;
@@ -3228,19 +3378,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   );
                   _activeLayoutIndex = 0;
                 } else if (_showLayoutSelector) {
-                  // Selector açıkken tıklayınca modu kapat
+                  // Close mode when clicked while selector is open
                   _isLayoutMode = false;
                   _showLayoutSelector = false;
                   _capturedLayoutPhotos = [];
                   _activeLayoutIndex = 0;
                 } else {
-                  // Selector kapalıyken tıklayınca selector'ü aç
+                  // Open selector when clicked while selector is closed
                   _showLayoutSelector = true;
                 }
               });
             },
             onLongPress: () {
-              // Uzun basınca layout modunu kapat
+              // Close layout mode on long press
               if (_isLayoutMode) {
                 HapticFeedback.mediumImpact();
                 setState(() {
@@ -3262,7 +3412,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
 
-          // Layout seçenekleri (aşağı doğru açılır)
+          // Layout options (expands downward)
           AnimatedSize(
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOutCubic,
@@ -3311,7 +3461,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 }
 
-/// Gradient ile circular progress indicator çizen CustomPainter
+/// CustomPainter that draws circular progress indicator with gradient
 class _GradientCircularProgressPainter extends CustomPainter {
   final double progress;
   final double strokeWidth;
@@ -3330,7 +3480,7 @@ class _GradientCircularProgressPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.width - strokeWidth) / 2;
 
-    // Arka plan çemberi (beyaz, dolmamış kısım)
+    // Background circle (white, unfilled part)
     final backgroundPaint = Paint()
       ..color = backgroundColor
       ..style = PaintingStyle.stroke
@@ -3339,7 +3489,7 @@ class _GradientCircularProgressPainter extends CustomPainter {
 
     canvas.drawCircle(center, radius, backgroundPaint);
 
-    // Progress varsa gradient çember çiz
+    // Draw gradient circle if progress exists
     if (progress > 0) {
       final rect = Rect.fromCircle(center: center, radius: radius);
 
@@ -3349,8 +3499,8 @@ class _GradientCircularProgressPainter extends CustomPainter {
         ..strokeWidth = strokeWidth
         ..strokeCap = StrokeCap.round;
 
-      // -90 derece (üstten başla), progress kadar çiz
-      const startAngle = -3.14159 / 2; // -90 derece (üst)
+      // -90 degrees (start from top), draw up to progress
+      const startAngle = -3.14159 / 2; // -90 degrees (top)
       final sweepAngle = 2 * 3.14159 * progress;
 
       canvas.drawArc(rect, startAngle, sweepAngle, false, progressPaint);
@@ -3363,7 +3513,7 @@ class _GradientCircularProgressPainter extends CustomPainter {
   }
 }
 
-/// Video kayıt için circular progress painter
+/// Circular progress painter for video recording
 class _VideoProgressPainter extends CustomPainter {
   final double progress;
   final double strokeWidth;
@@ -3382,7 +3532,7 @@ class _VideoProgressPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.width - strokeWidth) / 2;
 
-    // Arka plan çemberi (beyaz, dolmamış kısım)
+    // Background circle (white, unfilled part)
     final backgroundPaint = Paint()
       ..color = backgroundColor
       ..style = PaintingStyle.stroke
@@ -3391,7 +3541,7 @@ class _VideoProgressPainter extends CustomPainter {
 
     canvas.drawCircle(center, radius, backgroundPaint);
 
-    // Progress varsa kırmızı çember çiz
+    // Draw red circle if progress exists
     if (progress > 0) {
       final rect = Rect.fromCircle(center: center, radius: radius);
 
@@ -3401,8 +3551,8 @@ class _VideoProgressPainter extends CustomPainter {
         ..strokeWidth = strokeWidth
         ..strokeCap = StrokeCap.round;
 
-      // -90 derece (üstten başla), progress kadar çiz
-      const startAngle = -3.14159 / 2; // -90 derece (üst)
+      // -90 degrees (start from top), draw up to progress
+      const startAngle = -3.14159 / 2; // -90 degrees (top)
       final sweepAngle = 2 * 3.14159 * progress;
 
       canvas.drawArc(rect, startAngle, sweepAngle, false, progressPaint);
@@ -3415,7 +3565,7 @@ class _VideoProgressPainter extends CustomPainter {
   }
 }
 
-/// Galeri seçici sayfası
+/// Gallery picker page
 class _GalleryPickerPage extends StatefulWidget {
   final AssetPathEntity album;
   final int totalCount;
@@ -3515,7 +3665,7 @@ class _GalleryPickerPageState extends State<_GalleryPickerPage> {
   }
 }
 
-/// Galeri thumbnail widget'ı
+/// Gallery thumbnail widget
 class _GalleryThumbnail extends StatefulWidget {
   final AssetEntity asset;
   final VoidCallback onTap;
@@ -3551,7 +3701,7 @@ class _GalleryThumbnailState extends State<_GalleryThumbnail> {
           _loadFailed = false;
         });
       } else if (mounted && _retryCount < _maxRetries) {
-        // Thumbnail alınamadı, biraz bekleyip tekrar dene
+        // Could not get thumbnail, wait a bit and retry
         _retryCount++;
         await Future.delayed(Duration(milliseconds: 500 * _retryCount));
         if (mounted) {
@@ -3598,7 +3748,7 @@ class _GalleryThumbnailState extends State<_GalleryThumbnail> {
                   ),
                 ),
 
-          // Video ise süre göster
+          // Show duration if video
           if (widget.asset.type == AssetType.video)
             Positioned(
               right: 4,

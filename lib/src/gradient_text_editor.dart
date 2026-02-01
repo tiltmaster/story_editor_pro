@@ -170,55 +170,53 @@ class _GradientTextEditorState extends State<GradientTextEditor> {
                 // Top Bar - Close and Done buttons
                 _buildTopBar(isWhite, strings, theme),
 
-                // Text Field (Expanded) - Satır limiti ile
+                // Text Field (Expanded) - Centered
                 Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      // Ekran yüksekliğine göre maksimum satır sayısı
-                      const fontSize = 32.0;
-                      const lineHeight = fontSize * 1.3; // Line height factor
-                      final maxLines = (constraints.maxHeight / lineHeight).floor().clamp(3, 12);
-
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          child: TextField(
-                            controller: _textController,
-                            focusNode: _focusNode,
-                            textAlign: TextAlign.center,
-                            maxLines: maxLines,
-                            enabled: !_isProcessing,
-                            style: TextStyle(
-                              color: isWhite ? Colors.black : Colors.white,
-                              fontSize: fontSize,
-                              fontWeight: FontWeight.bold,
-                              shadows: isWhite
-                                  ? null
-                                  : [
-                                      const Shadow(
-                                        color: Colors.black38,
-                                        offset: Offset(2, 2),
-                                        blurRadius: 8,
-                                      ),
-                                    ],
-                            ),
-                            decoration: InputDecoration(
-                              hintText: strings.gradientWriteSomething,
-                              hintStyle: TextStyle(
-                                color: isWhite ? Colors.black38 : Colors.white54,
-                                fontSize: fontSize,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                            ),
-                            cursorColor: isWhite ? Colors.black : Colors.white,
-                            cursorWidth: 3,
-                          ),
+                  child: GestureDetector(
+                    onTap: () => _focusNode.requestFocus(),
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      alignment: Alignment.center,
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: TextField(
+                        controller: _textController,
+                        focusNode: _focusNode,
+                        textAlign: TextAlign.center,
+                        maxLines: null,
+                        minLines: 1,
+                        enabled: !_isProcessing,
+                        style: TextStyle(
+                          color: isWhite ? Colors.black : Colors.white,
+                          fontSize: 32.0,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none,
+                          shadows: isWhite
+                              ? null
+                              : [
+                                  const Shadow(
+                                    color: Colors.black38,
+                                    offset: Offset(2, 2),
+                                    blurRadius: 8,
+                                  ),
+                                ],
                         ),
-                      );
-                    },
+                        decoration: InputDecoration(
+                          hintText: strings.gradientWriteSomething,
+                          hintStyle: TextStyle(
+                            color: isWhite ? Colors.black38 : Colors.white54,
+                            fontSize: 32.0,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none,
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          isCollapsed: true,
+                        ),
+                        cursorColor: isWhite ? Colors.black : Colors.white,
+                        cursorWidth: 3,
+                      ),
+                    ),
                   ),
                 ),
 
@@ -241,20 +239,21 @@ class _GradientTextEditorState extends State<GradientTextEditor> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Close button
-          IconButton(
-            onPressed: _isProcessing
-                ? null
-                : () {
-                    widget.onCancel?.call();
-                    Navigator.pop(context);
-                  },
-            icon: Icon(
-              theme.icons.closeIcon,
-              color: _isProcessing ? iconColor.withValues(alpha: 0.3) : iconColor,
-              size: 28,
-            ),
-          ),
+          // Close button - hidden during processing
+          if (!_isProcessing)
+            IconButton(
+              onPressed: () {
+                widget.onCancel?.call();
+                Navigator.pop(context);
+              },
+              icon: Icon(
+                theme.icons.closeIcon,
+                color: iconColor,
+                size: 28,
+              ),
+            )
+          else
+            const SizedBox(width: 48), // Placeholder for layout balance
 
           // Done button or processing indicator
           _isProcessing
@@ -299,6 +298,11 @@ class _GradientTextEditorState extends State<GradientTextEditor> {
 
   /// Bottom control panel
   Widget _buildBottomPanel(bool isWhite, bool isSolid, StoryEditorStrings strings, StoryEditorTheme theme) {
+    // Hide during processing
+    if (_isProcessing) {
+      return const SizedBox.shrink();
+    }
+
     final nextColors = _nextGradientColors;
     final nextIsSolid = nextColors[0] == nextColors[1];
     final directionIcons = _directionIcons;
@@ -315,7 +319,7 @@ class _GradientTextEditorState extends State<GradientTextEditor> {
               children: [
                 // Direction Button
                 GestureDetector(
-                  onTap: _isProcessing ? null : _changeDirection,
+                  onTap: _changeDirection,
                   child: Container(
                     width: 44,
                     height: 44,
@@ -377,13 +381,11 @@ class _GradientTextEditorState extends State<GradientTextEditor> {
                           value: _balance,
                           min: 0.0,
                           max: 0.9,
-                          onChanged: _isProcessing
-                              ? null
-                              : (value) {
-                                  setState(() {
-                                    _balance = value;
-                                  });
-                                },
+                          onChanged: (value) {
+                            setState(() {
+                              _balance = value;
+                            });
+                          },
                         ),
                       ),
                     ],
@@ -394,7 +396,7 @@ class _GradientTextEditorState extends State<GradientTextEditor> {
 
                 // Next Gradient Button (shows preview)
                 GestureDetector(
-                  onTap: _isProcessing ? null : _nextGradient,
+                  onTap: _nextGradient,
                   child: Container(
                     width: 44,
                     height: 44,

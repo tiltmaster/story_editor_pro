@@ -1,17 +1,15 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
+import 'dart:io';
 
-/// Boomerang frame'lerini oynatır
+/// Plays boomerang frames
 class BoomerangPlayer extends StatefulWidget {
   final List<String> framePaths;
   final Duration frameDuration;
-  final VoidCallback? onComplete;
 
   const BoomerangPlayer({
     super.key,
     required this.framePaths,
     this.frameDuration = const Duration(milliseconds: 100),
-    this.onComplete,
   });
 
   @override

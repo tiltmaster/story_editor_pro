@@ -275,17 +275,3 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     );
   }
 }
-
-/// Helper class to load camera settings
-/// Deprecated: Use StoryEditorConfigProvider.of(context).settings instead
-class CameraSettings {
-  static Future<bool> getFrontCameraDefault() async {
-    // This is now a fallback - users should use config.settings
-    return false;
-  }
-
-  static Future<bool> getToolsOnLeft() async {
-    // This is now a fallback - users should use config.settings
-    return false;
-  }
-}

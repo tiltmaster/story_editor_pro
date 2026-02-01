@@ -16,6 +16,8 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         registrar.addMethodCallDelegate(instance, channel: channel)
     }
 
+    private var boomerangProcessor: BoomerangProcessor?
+
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "checkPermission":
@@ -44,10 +46,72 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             setZoomLevel(level: level, result: result)
         case "getLastGalleryImage":
             getLastGalleryImage(result: result)
+        case "createBoomerang":
+            createBoomerang(call: call, result: result)
+        case "createBoomerangFromFrames":
+            createBoomerangFromFrames(call: call, result: result)
         case "dispose":
             dispose(result: result)
         default:
             result(FlutterMethodNotImplemented)
+        }
+    }
+
+    private func createBoomerang(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let inputPath = args["inputPath"] as? String,
+              let outputPath = args["outputPath"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "inputPath and outputPath are required", details: nil))
+            return
+        }
+
+        let loopCount = args["loopCount"] as? Int ?? 3
+        let fps = args["fps"] as? Int ?? 30
+
+        if boomerangProcessor == nil {
+            boomerangProcessor = BoomerangProcessor()
+        }
+
+        boomerangProcessor?.createBoomerang(
+            inputPath: inputPath,
+            outputPath: outputPath,
+            loopCount: loopCount,
+            fps: fps
+        ) { output in
+            if let output = output {
+                result(output)
+            } else {
+                result(FlutterError(code: "BOOMERANG_FAILED", message: "Failed to create boomerang", details: nil))
+            }
+        }
+    }
+
+    private func createBoomerangFromFrames(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let frameDir = args["frameDir"] as? String,
+              let outputPath = args["outputPath"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "frameDir and outputPath are required", details: nil))
+            return
+        }
+
+        let fps = args["fps"] as? Int ?? 30
+        let loopCount = args["loopCount"] as? Int ?? 3
+
+        if boomerangProcessor == nil {
+            boomerangProcessor = BoomerangProcessor()
+        }
+
+        boomerangProcessor?.createBoomerangFromFrames(
+            frameDir: frameDir,
+            outputPath: outputPath,
+            fps: fps,
+            loopCount: loopCount
+        ) { output in
+            if let output = output {
+                result(output)
+            } else {
+                result(FlutterError(code: "BOOMERANG_FAILED", message: "Failed to create boomerang from frames", details: nil))
+            }
         }
     }
 

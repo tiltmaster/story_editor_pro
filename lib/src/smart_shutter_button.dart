@@ -2,32 +2,32 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Instagram/Snapchat tarzı hibrit fotoğraf/video çekim butonu.
+/// Instagram/Snapchat style hybrid photo/video capture button.
 ///
-/// - Kısa dokunuş (< 300ms): Fotoğraf çeker
-/// - Uzun basılı tutma (>= 300ms): Video kaydı başlatır
+/// - Short tap (< 300ms): Takes photo
+/// - Long press (>= 300ms): Starts video recording
 ///
-/// Sıfır gecikme için GestureDetector yerine Listener kullanır.
+/// Uses Listener instead of GestureDetector for zero delay.
 class SmartShutterButton extends StatefulWidget {
-  /// Fotoğraf çekildiğinde tetiklenir (kısa dokunuş)
+  /// Triggered when photo is taken (short tap)
   final VoidCallback onPhoto;
 
-  /// Video kaydı başladığında tetiklenir (uzun basılı tutma)
+  /// Triggered when video recording starts (long press)
   final VoidCallback onVideoStart;
 
-  /// Video kaydı bittiğinde tetiklenir (parmak kaldırıldığında)
+  /// Triggered when video recording ends (finger lifted)
   final VoidCallback onVideoEnd;
 
-  /// Butonun boyutu (varsayılan: 80)
+  /// Button size (default: 80)
   final double size;
 
-  /// Fotoğraf modundaki renk (varsayılan: beyaz)
+  /// Color in photo mode (default: white)
   final Color idleColor;
 
-  /// Video kayıt modundaki renk (varsayılan: kırmızı)
+  /// Color in video recording mode (default: red)
   final Color recordingColor;
 
-  /// Fotoğraf/video ayrımı için eşik süresi (varsayılan: 300ms)
+  /// Threshold duration for photo/video distinction (default: 300ms)
   final Duration longPressThreshold;
 
   const SmartShutterButton({
@@ -47,25 +47,25 @@ class SmartShutterButton extends StatefulWidget {
 
 class _SmartShutterButtonState extends State<SmartShutterButton>
     with SingleTickerProviderStateMixin {
-  /// Kayıt durumu
+  /// Recording state
   bool _isRecording = false;
 
-  /// Parmak basılı mı?
+  /// Is finger pressed?
   bool _isPressed = false;
 
   /// Long press timer
   Timer? _longPressTimer;
 
-  /// Animasyon controller'ı
+  /// Animation controller
   late AnimationController _animationController;
 
-  /// Dış halka büyüme animasyonu
+  /// Outer ring scale up animation
   late Animation<double> _outerRingScale;
 
-  /// İç daire küçülme animasyonu
+  /// Inner circle scale down animation
   late Animation<double> _innerCircleScale;
 
-  /// Renk geçiş animasyonu
+  /// Color transition animation
   late Animation<Color?> _colorAnimation;
 
   @override
@@ -80,7 +80,7 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
       duration: const Duration(milliseconds: 200),
     );
 
-    // Dış halka: 1.0 -> 1.3 (büyür)
+    // Outer ring: 1.0 -> 1.3 (grows)
     _outerRingScale = Tween<double>(
       begin: 1.0,
       end: 1.3,
@@ -89,7 +89,7 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
       curve: Curves.easeOutCubic,
     ));
 
-    // İç daire: 1.0 -> 0.6 (küçülür)
+    // Inner circle: 1.0 -> 0.6 (shrinks)
     _innerCircleScale = Tween<double>(
       begin: 1.0,
       end: 0.6,
@@ -98,7 +98,7 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
       curve: Curves.easeOutCubic,
     ));
 
-    // Renk: Beyaz -> Kırmızı
+    // Color: White -> Red
     _colorAnimation = ColorTween(
       begin: widget.idleColor,
       end: widget.recordingColor,
@@ -115,46 +115,46 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
     super.dispose();
   }
 
-  /// Parmak basıldığında - SIFIR GECİKME
+  /// When finger is pressed - ZERO DELAY
   void _onPointerDown(PointerDownEvent event) {
     if (_isPressed) return;
 
     setState(() => _isPressed = true);
 
-    // Hafif haptic feedback
+    // Light haptic feedback
     HapticFeedback.lightImpact();
 
-    // Long press timer başlat
+    // Start long press timer
     _longPressTimer = Timer(widget.longPressThreshold, () {
-      // 300ms doldu ve parmak hala basılı -> Video modu
+      // 300ms elapsed and finger still pressed -> Video mode
       if (_isPressed && mounted) {
         _startRecording();
       }
     });
   }
 
-  /// Parmak kaldırıldığında
+  /// When finger is lifted
   void _onPointerUp(PointerUpEvent event) {
     if (!_isPressed) return;
 
     final wasRecording = _isRecording;
 
-    // Timer'ı iptal et
+    // Cancel timer
     _longPressTimer?.cancel();
     _longPressTimer = null;
 
     setState(() => _isPressed = false);
 
     if (wasRecording) {
-      // Video kaydı bitir
+      // End video recording
       _stopRecording();
     } else {
-      // 300ms dolmadan parmak kalktı -> Fotoğraf
+      // Finger lifted before 300ms -> Photo
       _takePhoto();
     }
   }
 
-  /// Parmak ekrandan çıktığında (iptal)
+  /// When finger leaves screen (cancel)
   void _onPointerCancel(PointerCancelEvent event) {
     _longPressTimer?.cancel();
     _longPressTimer = null;
@@ -166,32 +166,32 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
     setState(() => _isPressed = false);
   }
 
-  /// Fotoğraf çek
+  /// Take photo
   void _takePhoto() {
     HapticFeedback.mediumImpact();
     widget.onPhoto();
   }
 
-  /// Video kaydını başlat
+  /// Start video recording
   void _startRecording() {
     setState(() => _isRecording = true);
 
-    // Güçlü haptic feedback
+    // Strong haptic feedback
     HapticFeedback.heavyImpact();
 
-    // Animasyonu başlat (büyüme + kırmızıya dönüşme)
+    // Start animation (grow + turn red)
     _animationController.forward();
 
     widget.onVideoStart();
   }
 
-  /// Video kaydını bitir
+  /// Stop video recording
   void _stopRecording() {
     setState(() => _isRecording = false);
 
     HapticFeedback.mediumImpact();
 
-    // Animasyonu geri al (küçülme + beyaza dönüşme)
+    // Reverse animation (shrink + turn white)
     _animationController.reverse();
 
     widget.onVideoEnd();
@@ -211,13 +211,13 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
         animation: _animationController,
         builder: (context, child) {
           return SizedBox(
-            width: outerSize * 1.4, // Büyüme için alan
+            width: outerSize * 1.4, // Space for growth
             height: outerSize * 1.4,
             child: Center(
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Dış halka (border)
+                  // Outer ring (border)
                   Transform.scale(
                     scale: _outerRingScale.value,
                     child: Container(
@@ -233,7 +233,7 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
                     ),
                   ),
 
-                  // İç daire (dolu)
+                  // Inner circle (filled)
                   Transform.scale(
                     scale: _innerCircleScale.value,
                     child: Container(

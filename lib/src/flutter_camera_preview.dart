@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'flutter_camera_controller.dart';
 
-/// Flutter camera paketi ile tam ekran kamera önizleme widget'ı.
+/// Fullscreen camera preview widget with Flutter camera package.
 ///
-/// Instagram kalitesinde, bozulmasız tam ekran önizleme sağlar.
+/// Provides Instagram quality, distortion-free fullscreen preview.
 class FlutterCameraPreview extends StatelessWidget {
   final FlutterCameraController controller;
 
@@ -23,15 +23,15 @@ class FlutterCameraPreview extends StatelessWidget {
 
     final cameraController = controller.controller!;
 
-    // Tam ekran, bozulmasız önizleme
+    // Fullscreen, distortion-free preview
     return LayoutBuilder(
       builder: (context, constraints) {
         final screenSize = MediaQuery.of(context).size;
         final screenAspectRatio = screenSize.width / screenSize.height;
         final cameraAspectRatio = cameraController.value.aspectRatio;
 
-        // Scale hesaplama: görüntüyü ekrana sığdır ve crop yap
-        // Kısa kenar ekrana oturur, uzun kenar taşar (bozulma olmaz)
+        // Scale calculation: fit image to screen and crop
+        // Short edge fits screen, long edge overflows (no distortion)
         var scale = screenAspectRatio * cameraAspectRatio;
         if (scale < 1) scale = 1 / scale;
 

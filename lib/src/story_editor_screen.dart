@@ -1,50 +1,52 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:video_player/video_player.dart';
 import 'gradient_text_editor.dart';
 import 'models/story_result.dart';
 import 'config/story_editor_config.dart';
 
-/// Medya tipi - fotoğraf mı video mu
+/// Media type - photo or video
 enum MediaType {
   image,
   video,
 }
 
-/// Fırça tipleri
+/// Brush types
 enum BrushType {
-  normal,     // Normal düz çizgi
-  arrow,      // Ok uçlu
-  marker,     // Kırık/marker uçlu
-  glow,       // Glow efektli (neon)
-  eraser,     // Silgi
-  chalk,      // Tebeşir
+  normal,     // Normal straight line
+  arrow,      // Arrow tip
+  marker,     // Broken/marker tip
+  glow,       // Glow effect (neon)
+  eraser,     // Eraser
+  chalk,      // Chalk
 }
 
 class StoryEditorScreen extends StatefulWidget {
-  /// Medya dosyasının yolu (fotoğraf veya video)
+  /// Path to media file (photo or video)
   final String mediaPath;
 
-  /// Geriye dönük uyumluluk için imagePath alias'ı
+  /// imagePath alias for backwards compatibility
   String get imagePath => mediaPath;
 
-  /// Medya tipi - otomatik algılanır veya manuel belirtilebilir
+  /// Media type - automatically detected or can be specified manually
   final MediaType? mediaType;
 
   final Color? primaryColor;
 
-  /// Galeriden mi seçildi? (true: fitWidth, false: cover)
+  /// Is it selected from gallery? (true: fitWidth, false: cover)
   final bool isFromGallery;
 
-  /// Create Mode'dan gelen başlangıç metin overlay'i
+  /// Initial text overlay from Create Mode
   final TextOverlay? initialTextOverlay;
 
-  /// Create Mode'dan gelen taşınabilir görsel overlay'i
+  /// Movable image overlay from Create Mode
   final ImageOverlay? initialImageOverlay;
 
   /// List of close friends to show in the share bottomsheet
@@ -97,46 +99,41 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   @override
   void initState() {
     super.initState();
-    // Medya tipini belirle
+    // Determine media type
     _mediaType = widget.mediaType ?? _detectMediaType(widget.mediaPath);
 
-    // Video ise player'ı başlat
+    // If video, start the player
     if (_mediaType == MediaType.video) {
       _initVideoPlayer();
     }
 
-    // Create Mode'dan gelen başlangıç overlay'ini ekle (ilk frame'de merkeze konumlandır)
+    // Add initial overlay from Create Mode (position at center in first frame)
     if (widget.initialTextOverlay != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _addInitialTextOverlayCentered(widget.initialTextOverlay!);
       });
     }
-    // Create Mode'dan gelen başlangıç görsel overlay'ini ekle
+    // Add initial image overlay from Create Mode
     if (widget.initialImageOverlay != null) {
       _imageOverlays.add(widget.initialImageOverlay!);
     }
 
-    // Tüm yakın arkadaşları varsayılan olarak seçili yap
+    // Select all close friends by default
     if (widget.closeFriendsEnabled) {
       _selectedCloseFriends.addAll(widget.closeFriendsList);
     }
   }
 
-  /// Başlangıç text overlay'ini ekranın tam ortasına konumlandırarak ekle
+  /// Add initial text overlay positioned at the exact center of the screen
   void _addInitialTextOverlayCentered(TextOverlay overlay) {
     if (!mounted) return;
 
     final screenSize = MediaQuery.of(context).size;
+    final viewPadding = MediaQuery.of(context).viewPadding;
 
-    // Container padding değerleri (_buildTextOverlays'daki ile aynı)
-    const containerPaddingH = 24.0; // horizontal
-    const containerPaddingV = 16.0; // vertical
-
-    // Text'in boyutunu hesapla - wrap edilmiş haliyle (Google Fonts ile)
+    // Calculate text size
     final textStyle = overlay.toTextStyle();
-
-    // Maksimum text genişliği (ekran - container padding)
-    final maxTextWidth = screenSize.width - (containerPaddingH * 2) - 48;
+    final maxTextWidth = screenSize.width - 80;
 
     final textPainter = TextPainter(
       text: TextSpan(text: overlay.text, style: textStyle),
@@ -145,13 +142,18 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
     textPainter.layout(maxWidth: maxTextWidth);
 
-    // Toplam widget boyutu (text + padding)
-    final totalWidth = textPainter.width + (containerPaddingH * 2);
-    final totalHeight = textPainter.height + (containerPaddingV * 2);
+    // Widget size - no padding (when backgroundColor is null)
+    final totalWidth = textPainter.width;
+    final totalHeight = textPainter.height;
 
-    // Tam merkeze konumlandır
+    // Calculate available area
+    final topOffset = viewPadding.top + 60;
+    final bottomOffset = viewPadding.bottom + 100;
+    final availableHeight = screenSize.height - topOffset - bottomOffset;
+
+    // Position at exact center
     final centerX = (screenSize.width - totalWidth) / 2;
-    final centerY = (screenSize.height - totalHeight) / 2;
+    final centerY = topOffset + (availableHeight - totalHeight) / 2;
 
     setState(() {
       _textOverlays.add(overlay.copyWith(
@@ -160,7 +162,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     });
   }
 
-  /// Dosya uzantısına göre medya tipini algıla
+  /// Detect media type based on file extension
   MediaType _detectMediaType(String path) {
     final ext = path.toLowerCase().split('.').last;
     if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].contains(ext)) {
@@ -169,7 +171,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     return MediaType.image;
   }
 
-  /// Video player'ı başlat
+  /// Initialize video player
   Future<void> _initVideoPlayer() async {
     _videoController = VideoPlayerController.file(File(widget.mediaPath));
     try {
@@ -194,20 +196,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   bool _isDrawing = false;
   bool _isTextEditing = false;
-  bool _isSliding = false; // Slider kaydırılıyor mu
+  bool _isSliding = false; // Is slider being dragged
   Color _currentColor = Colors.white;
   double _brushSize = 5.0;
   BrushType _currentBrushType = BrushType.normal;
   DrawingPath? _currentPath;
-  int _drawingCountBeforeSession = 0; // Çizim moduna girmeden önceki çizim sayısı
+  int _drawingCountBeforeSession = 0; // Drawing count before entering drawing mode
 
-  // Text overlay sürükleme ve scale için state değişkenleri
+  // State variables for text overlay dragging and scaling
   int? _draggingTextIndex;
   Offset? _textDragStartOffset;
   Offset? _textDragStartPosition;
   double? _textScaleStart;
 
-  // Arka plan resmi zoom/pan için state değişkenleri
+  // State variables for background image zoom/pan
   double _bgImageScale = 1.0;
   Offset _bgImageOffset = Offset.zero;
   double? _bgScaleStart;
@@ -236,17 +238,17 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       backgroundColor: Colors.black,
       body: Column(
         children: [
-          // Status bar alanı - siyah
+          // Status bar area - black
           Container(
             height: statusBarHeight,
             color: Colors.black,
           ),
-          // Geri kalan alan
+          // Remaining area
           Expanded(
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // Görüntü alanı - köşeleri yuvarlatılmış
+                // Image area - rounded corners
                 ClipRRect(
                   borderRadius: const BorderRadius.only(
                     topLeft: Radius.circular(16),
@@ -255,15 +257,15 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Siyah zemin
+                      // Black background
                       Container(color: Colors.black),
-                      // RepaintBoundary - çizimler ve image overlay'ler için
+                      // RepaintBoundary - for drawings and image overlays
                       RepaintBoundary(
                         key: _repaintKey,
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            // Arka plan medyası (fotoğraf veya video)
+                            // Background media (photo or video)
                             Transform.translate(
                               offset: _bgImageOffset,
                               child: Transform.scale(
@@ -271,7 +273,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                 child: _buildBackgroundMedia(),
                               ),
                             ),
-                            // SaveLayer ile sarmalayarak silgi blendMode.clear çalışsın
+                            // Wrap with SaveLayer so eraser blendMode.clear works
                             ClipRect(
                               child: CustomPaint(
                                 painter: DrawingPainter(paths: _drawings),
@@ -287,7 +289,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     ],
                   ),
                 ),
-                // Arka plan resmi gesture handler - her zaman aktif (çift parmakla çalışır)
+                // Background image gesture handler - always active (works with two fingers)
                 _buildBackgroundImageGesture(),
                 // Text overlays
                 if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
@@ -305,10 +307,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  /// Arka plan medyasını oluştur (fotoğraf veya video)
+  /// Build background media (photo or video)
   Widget _buildBackgroundMedia() {
     if (_mediaType == MediaType.video) {
-      // Video arka plan
+      // Video background
       if (_isVideoInitialized && _videoController != null) {
         return SizedBox.expand(
           child: FittedBox(
@@ -321,7 +323,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           ),
         );
       } else {
-        // Video yüklenirken loading göster
+        // Show loading while video is loading
         return Container(
           color: Colors.black,
           child: const Center(
@@ -330,8 +332,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         );
       }
     } else {
-      // Fotoğraf arka plan
-      // Galeriden: fitWidth (genişliğe göre), Kameradan: cover (tam ekran)
+      // Photo background
+      // From gallery: fitWidth (fit to width), From camera: cover (fullscreen)
       return Image.file(
         File(widget.mediaPath),
         fit: widget.isFromGallery ? BoxFit.fitWidth : BoxFit.cover,
@@ -341,13 +343,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }
   }
 
-  /// Arka plan resmi gesture handler - sadece çift parmakla çalışır
+  /// Background image gesture handler - only works with two fingers
   Widget _buildBackgroundImageGesture() {
     return Positioned.fill(
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onScaleStart: (details) {
-          // Sadece çift parmak ile başla
+          // Only start with two fingers
           if (details.pointerCount >= 2) {
             _bgScaleStart = _bgImageScale;
             _bgOffsetStart = _bgImageOffset;
@@ -355,7 +357,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           }
         },
         onScaleUpdate: (details) {
-          // Sadece çift parmak ile güncelle
+          // Only update with two fingers
           if (details.pointerCount >= 2 && _bgScaleStart != null && _bgOffsetStart != null && _bgFocalPointStart != null) {
             final delta = details.focalPoint - _bgFocalPointStart!;
             setState(() {
@@ -363,8 +365,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 _bgOffsetStart!.dx + delta.dx,
                 _bgOffsetStart!.dy + delta.dy,
               );
-              // Scale'i güncelle (0.5 ile 3.0 arası sınırla)
-              _bgImageScale = (_bgScaleStart! * details.scale).clamp(0.5, 3.0);
+              // Update scale (limit between 0.3 and 10.0)
+              _bgImageScale = (_bgScaleStart! * details.scale).clamp(0.3, 10.0);
             });
           }
         },
@@ -403,7 +405,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  /// Taşınabilir görsel overlay'ları oluştur (Create Mode'dan gelen gradient+text görselleri)
+  /// Build movable image overlays (gradient+text images from Create Mode)
   List<Widget> _buildImageOverlays() {
     return _imageOverlays.asMap().entries.map((entry) {
       final index = entry.key;
@@ -427,7 +429,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               overlay.offset.dy + details.delta.dy,
             );
 
-            // Çöp kutusu alanını kontrol et (sağ altta, check butonunun solunda)
+            // Check trash zone (bottom right, left of check button)
             final screenHeight = MediaQuery.of(context).size.height;
             final screenWidth = MediaQuery.of(context).size.width;
             final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
@@ -444,7 +446,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             });
           },
           onPanEnd: (details) {
-            // Çöp kutusunun üzerindeyse sil
+            // Delete if over trash
             if (_isOverTrash && _draggingOverlayIndex == index) {
               setState(() {
                 _imageOverlays.removeAt(index);
@@ -494,16 +496,16 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }).toList();
   }
 
-  /// Görsel overlay düzenleme dialogu
+  /// Image overlay editing dialog
   void _editImageOverlay(int index) {
     final overlay = _imageOverlays[index];
 
-    // Eğer text ve gradient varsa, düzenleme için GradientTextEditor'ı aç
+    // If text and gradient exist, open GradientTextEditor for editing
     if (overlay.text != null && overlay.gradient != null) {
       openGradientTextEditor(
         context,
         onComplete: (newText, newGradient) async {
-          // Yeni görsel oluştur
+          // Create new image
           final newImagePath = await _createGradientTextImage(newText, newGradient);
           if (newImagePath != null) {
             setState(() {
@@ -519,7 +521,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       return;
     }
 
-    // Text/gradient yoksa sadece silme seçeneği göster
+    // If no text/gradient, only show delete option
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -566,17 +568,17 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  /// Gradient arka plan + ortada metin ile PNG görsel oluştur
+  /// Create PNG image with gradient background + centered text
   Future<String?> _createGradientTextImage(String text, LinearGradient gradient) async {
     try {
-      // Canvas boyutu (1080x1920 story formatı)
+      // Canvas size (1080x1920 story format)
       const int canvasWidth = 1080;
       const int canvasHeight = 1920;
 
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
 
-      // Gradient arka planı çiz
+      // Draw gradient background
       final gradientPaint = Paint()
         ..shader = gradient.createShader(
           Rect.fromLTWH(0, 0, canvasWidth.toDouble(), canvasHeight.toDouble()),
@@ -586,7 +588,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         gradientPaint,
       );
 
-      // Metin stilini ayarla
+      // Set text style
       final textStyle = ui.TextStyle(
         color: Colors.white,
         fontSize: 72,
@@ -641,7 +643,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       final index = entry.key;
       final overlay = entry.value;
 
-      // Gradient veya solid renk arka plan
+      // Gradient or solid color background
       final bool hasGradient = overlay.backgroundGradient != null;
 
       return Positioned(
@@ -671,7 +673,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 _textDragStartOffset!.dy + delta.dy,
               );
 
-              // Çöp kutusu alanını kontrol et (sağ altta, check butonunun solunda)
+              // Check trash zone (bottom right, left of check button)
               final screenHeight = MediaQuery.of(context).size.height;
               final screenWidth = MediaQuery.of(context).size.width;
               final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
@@ -692,7 +694,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             }
           },
           onScaleEnd: (details) {
-            // Çöp kutusunun üzerindeyse sil
+            // Delete if over trash
             if (_isOverTrash && _draggingOverlayIndex == index) {
               setState(() {
                 _textOverlays.removeAt(index);
@@ -746,20 +748,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     ),
                   ),
                 )
-              // Her satır ayrı kutu - soft wrap satırları da dahil
+              // Each line as separate box - including soft wrap lines
               : Builder(
                   builder: (context) {
                     final textStyle = overlay.toTextStyle();
 
-                    // Maksimum genişlik (ekran genişliği - padding)
-                    // Arka plan varsa horizontal padding (20*2=40) de çıkar
+                    // Maximum width (screen width - padding)
+                    // If background exists, also subtract horizontal padding (20*2=40)
                     final bgPadding = overlay.backgroundColor != null ? 40.0 : 0.0;
                     final maxWidth = MediaQuery.of(context).size.width - 80 - bgPadding;
 
-                    // Satırları hesapla
+                    // Calculate lines
                     final lines = _calculateTextLines(overlay.text, textStyle, maxWidth);
 
-                    // Eğer satır hesaplanamadıysa orijinal metni kullan
+                    // If lines couldn't be calculated, use original text
                     if (lines.isEmpty) {
                       lines.add(overlay.text);
                     }
@@ -772,7 +774,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         final line = lineEntry.value;
 
                         return Transform.translate(
-                          offset: Offset(0, lineIndex * -6.0), // Her satır 6px yukarı kayar
+                          offset: Offset(0, lineIndex * -6.0), // Each line shifts 6px up
                           child: IntrinsicWidth(
                             child: Container(
                               padding: overlay.backgroundColor != null
@@ -832,7 +834,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   icon: _isDrawing ? Icons.edit_off : Icons.edit,
                   onTap: () => setState(() {
                     if (!_isDrawing) {
-                      // Çizim moduna girerken mevcut çizim sayısını kaydet
+                      // Save current drawing count when entering drawing mode
                       _drawingCountBeforeSession = _drawings.length;
                     }
                     _isDrawing = !_isDrawing;
@@ -843,6 +845,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 _buildControlButton(
                   icon: Icons.text_fields,
                   onTap: _addText,
+                ),
+                const SizedBox(width: 12),
+                _buildControlButton(
+                  icon: Icons.save,
+                  onTap: _isSaving ? () {} : () => _saveToGallery(),
                 ),
               ],
             ),
@@ -855,7 +862,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   Widget _buildBottomControls() {
     return Stack(
       children: [
-        // Çöp kutusu (sürükleme sırasında görünür) - ekranın ortasında
+        // Trash bin (visible during dragging) - center of screen
         if (_isDraggingOverlay)
           Positioned(
             left: 0,
@@ -886,7 +893,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               ),
             ),
           ),
-        // Check butonu - sağ altta
+        // Check button - bottom right
         Positioned(
           right: 16,
           bottom: MediaQuery.of(context).viewPadding.bottom + 24,
@@ -926,7 +933,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  // Paylaşım seçenekleri için state
+  // State for share options
   bool _shareToStory = true;
   bool _shareToCloseFriends = false;
 
@@ -941,7 +948,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       return;
     }
 
-    // State'i sıfırla
+    // Reset state
     _shareToStory = true;
     _shareToCloseFriends = false;
     _selectedCloseFriends.clear();
@@ -969,7 +976,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Üst çizgi (handle)
+                // Top line (handle)
                 Container(
                   width: 40,
                   height: 4,
@@ -980,7 +987,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
                 const SizedBox(height: 20),
 
-                // Başlık
+                // Title
                 const Text(
                   'Share',
                   style: TextStyle(
@@ -991,7 +998,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
                 const SizedBox(height: 24),
 
-                // Hikayene seçeneği
+                // Your Story option
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
@@ -1005,7 +1012,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Row(
                       children: [
-                        // Profil resmi placeholder
+                        // Profile picture placeholder
                         Container(
                           width: 56,
                           height: 56,
@@ -1038,7 +1045,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           ),
                         ),
                         const SizedBox(width: 16),
-                        // Metin
+                        // Text
                         const Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1091,7 +1098,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   ),
                 ),
 
-                // Yakın Arkadaşlar seçeneği
+                // Close Friends option
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
@@ -1104,7 +1111,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Row(
                       children: [
-                        // Yeşil yıldız ikonu
+                        // Green star icon
                         Container(
                           width: 56,
                           height: 56,
@@ -1125,7 +1132,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           ),
                         ),
                         const SizedBox(width: 16),
-                        // Metin
+                        // Text
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1296,7 +1303,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
                 const SizedBox(height: 24),
 
-                // Paylaş butonu
+                // Share button
                 GestureDetector(
                   onTap: _canShare()
                       ? () {
@@ -1356,13 +1363,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Fırça boyutu slider (yatay) - ikonlar üstte hizalı
+              // Brush size slider (horizontal) - icons aligned at top
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Küçük daire ikonu - üstte
+                    // Small circle icon - at top
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Container(
@@ -1401,7 +1408,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         ),
                       ),
                     ),
-                    // Büyük daire ikonu - üstte
+                    // Large circle icon - at top
                     Container(
                       width: 18,
                       height: 18,
@@ -1414,7 +1421,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              // Renkler (yatay) - Silgi modunda gizle
+              // Colors (horizontal) - Hide in eraser mode
               if (_currentBrushType != BrushType.eraser)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1439,7 +1446,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
               if (_currentBrushType != BrushType.eraser)
                 const SizedBox(height: 16),
-              // Fırça tipleri (yatay)
+              // Brush types (horizontal)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Row(
@@ -1461,7 +1468,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  /// Fırça tipi butonu
+  /// Brush type button
   Widget _buildBrushTypeButton(BrushType type, IconData icon) {
     final isSelected = _currentBrushType == type;
     return GestureDetector(
@@ -1488,11 +1495,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  /// Fırça boyutu preview - slider kaydırılırken slider'ın hemen üstünde gösterilir
+  /// Brush size preview - shown just above the slider while sliding
   Widget _buildBrushSizePreview() {
-    // Slider'ın üstünde, renklerden yukarıda
+    // Above the slider, above the colors
     final bottomPadding = MediaQuery.of(context).viewPadding.bottom + 16 + 32 + 12 + 50 + 20;
-    // viewPadding + container bottom + renk yüksekliği + margin + slider yüksekliği + boşluk
+    // viewPadding + container bottom + color height + margin + slider height + gap
 
     return Positioned(
       left: 0,
@@ -1500,7 +1507,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       bottom: bottomPadding,
       child: Center(
         child: Container(
-          width: _brushSize + 4, // Border için +4
+          width: _brushSize + 4, // +4 for border
           height: _brushSize + 4,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
@@ -1563,7 +1570,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     });
   }
 
-  /// Çizim modu üst bar - X (çık), Geri al ve Check butonu
+  /// Drawing mode top bar - X (exit), Undo and Check button
   Widget _buildDrawingTopBar() {
     return Positioned(
       top: 0,
@@ -1574,14 +1581,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            // Sol taraf - X butonu ve Geri al butonu
+            // Left side - X button and Undo button
             Row(
               children: [
-                // X butonu - çizim modundan çık (bu oturumdaki çizimleri iptal et)
+                // X button - exit drawing mode (cancel drawings from this session)
                 GestureDetector(
                   onTap: () {
                     setState(() {
-                      // Sadece bu oturumda yapılan çizimleri sil, önceki çizimleri koru
+                      // Only delete drawings from this session, keep previous drawings
                       while (_drawings.length > _drawingCountBeforeSession) {
                         _drawings.removeLast();
                       }
@@ -1605,7 +1612,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Geri al butonu - sadece çizim varsa göster
+                // Undo button - only show if there are drawings
                 if (_drawings.isNotEmpty)
                   GestureDetector(
                     onTap: () {
@@ -1631,7 +1638,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   ),
               ],
             ),
-            // Check butonu - çizimleri kaydet ve moddan çık
+            // Check button - save drawings and exit mode
             GestureDetector(
               onTap: () {
                 setState(() => _isDrawing = false);
@@ -1662,13 +1669,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
   }
 
-  /// Metni satırlara böl - getLineBoundary kullanarak tutarlı sonuç verir
+  /// Split text into lines - consistent results using getLineBoundary
   List<String> _calculateTextLines(String text, TextStyle style, double maxWidth) {
     if (text.isEmpty) return [];
 
     final List<String> result = [];
 
-    // Önce manuel satır kırılmalarına göre böl
+    // First split by manual line breaks
     final paragraphs = text.split('\n');
 
     for (final paragraph in paragraphs) {
@@ -1677,11 +1684,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         continue;
       }
 
-      // Boşluk var mı kontrol et
+      // Check if there are spaces
       final hasSpaces = paragraph.contains(' ');
 
       if (hasSpaces) {
-        // Kelime bazlı satır kırma
+        // Word-based line breaking
         final words = paragraph.split(' ');
         String currentLine = '';
 
@@ -1703,7 +1710,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               result.add(currentLine);
               currentLine = word;
             } else {
-              // Kelime tek başına sığmıyor, karakter bazlı kır
+              // Word doesn't fit alone, break by characters
               final charLines = _breakLongWord(word, style, maxWidth);
               result.addAll(charLines);
               currentLine = '';
@@ -1715,7 +1722,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           result.add(currentLine);
         }
       } else {
-        // Boşluk yok, karakter bazlı satır kırma
+        // No spaces, character-based line breaking
         final charLines = _breakLongWord(paragraph, style, maxWidth);
         result.addAll(charLines);
       }
@@ -1724,13 +1731,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     return result;
   }
 
-  /// Uzun kelimeyi karakter bazlı kır (minimum 3 karakter kalacak şekilde)
+  /// Break long word by characters (keeping minimum 3 characters)
   List<String> _breakLongWord(String word, TextStyle style, double maxWidth) {
     final List<String> lines = [];
     String remaining = word;
 
     while (remaining.isNotEmpty) {
-      // Binary search ile maksimum sığan karakter sayısını bul
+      // Find maximum fitting character count using binary search
       int low = 1;
       int high = remaining.length;
       int bestFit = 1;
@@ -1754,10 +1761,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         }
       }
 
-      // Kalan kısım çok kısa kalacaksa (3 veya daha az), önceki satırdan biraz al
+      // If remaining part would be too short (3 or less), take some from previous line
       final remainingAfter = remaining.length - bestFit;
       if (remainingAfter > 0 && remainingAfter <= 3 && bestFit > 3) {
-        // Son satırda en az 4 karakter kalacak şekilde ayarla
+        // Adjust so at least 4 characters remain in the last line
         bestFit = remaining.length - 4;
         if (bestFit < 1) bestFit = 1;
       }
@@ -1778,10 +1785,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   void _showTextDialog({int? existingIndex}) {
-    // Text edit moduna gir
+    // Enter text edit mode
     setState(() => _isTextEditing = true);
 
-    // Config'den fontları al
+    // Get fonts from config
     final fontsConfig = context.storyFonts;
     final fontStyles = fontsConfig.fontStyles;
 
@@ -1795,7 +1802,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     bool hasBackground = existing?.backgroundColor != null;
     bool isItalic = existing?.isItalic ?? false;
 
-    // Hangi seçici açık
+    // Which picker is open
     String? openPicker; // 'color', 'bgColor'
 
     Navigator.push(
@@ -1805,7 +1812,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         pageBuilder: (context, animation, secondaryAnimation) {
           return StatefulBuilder(
             builder: (context, setDialogState) {
-              // Font stiline göre TextStyle (config'den)
+              // TextStyle based on font style (from config)
               TextStyle getTextStyle() {
                 final fontConfig = fontsConfig.getFontStyle(selectedFontIndex);
                 return fontConfig.toTextStyle(
@@ -1827,7 +1834,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   bottom: false,
                   child: Column(
                     children: [
-                      // Üst bar - sadece Bitti butonu
+                      // Top bar - only Done button
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: Row(
@@ -1840,12 +1847,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                     _isTextEditing = false;
 
                                     final selectedFont = fontsConfig.getFontStyle(selectedFontIndex);
-                                    // isItalic ise textStyle'a italic ekle
+                                    // If isItalic, add italic to textStyle
                                     final finalTextStyle = isItalic
                                         ? selectedFont.textStyle.copyWith(fontStyle: FontStyle.italic)
                                         : selectedFont.textStyle;
 
-                                    // Yazının boyutunu gerçek font stiliyle hesapla
+                                    // Calculate text size with actual font style
                                     final actualTextStyle = finalTextStyle.copyWith(
                                       fontSize: fontSize,
                                       color: selectedColor,
@@ -1860,13 +1867,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                     );
                                     textPainter.layout(maxWidth: maxWidth);
 
-                                    // Padding'i hesaba kat (arka planlı metin için)
+                                    // Account for padding (for text with background)
                                     final horizontalPadding = hasBackground ? 20.0 * 2 : 0.0;
                                     final verticalPadding = hasBackground ? 4.0 * 2 : 0.0;
                                     final totalWidth = textPainter.width + horizontalPadding;
                                     final totalHeight = textPainter.height + verticalPadding;
 
-                                    // Ekranın tam ortasına yerleştir
+                                    // Position at exact center of screen
                                     final overlay = TextOverlay(
                                       text: controller.text,
                                       color: selectedColor,
@@ -1916,11 +1923,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         ),
                       ),
 
-                      // Orta alan - Metin girişi
+                      // Center area - Text input
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
-                          // Metin alanı - her satır ayrı kutu (görünmez TextField + görünür satırlar)
+                          // Text area - each line as separate box (invisible TextField + visible lines)
                           child: GestureDetector(
                             behavior: HitTestBehavior.translucent,
                             onTap: () {
@@ -1930,15 +1937,15 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                             child: Center(
                               child: LayoutBuilder(
                                 builder: (context, constraints) {
-                                  // Arka plan varsa horizontal padding (20*2=40) de çıkar
+                                  // If background exists, also subtract horizontal padding (20*2=40)
                                   final bgPadding = hasBackground ? 40.0 : 0.0;
                                   final maxWidth = constraints.maxWidth - 40 - bgPadding;
                                   final text = controller.text;
 
-                                  // Satırları hesapla - aynı metodu kullan
+                                  // Calculate lines - use the same method
                                   List<String> lines = _calculateTextLines(text, getTextStyle(), maxWidth);
 
-                                  // Metin yoksa veya boşsa TextField göster
+                                  // If no text or empty, show TextField
                                   if (lines.isEmpty) {
                                     return IntrinsicWidth(
                                       child: Container(
@@ -1975,20 +1982,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                     );
                                   }
 
-                                  // Ekran yüksekliğine göre maksimum satır sayısı hesapla
+                                  // Calculate maximum line count based on screen height
                                   final availableHeight = constraints.maxHeight;
                                   final lineHeight = fontSize + 12; // Font size + padding
                                   final maxVisibleLines = (availableHeight / lineHeight).floor().clamp(3, 15);
 
-                                  // Satır sayısı limitini aştıysa, sadece son satırları göster
+                                  // If line count exceeds limit, only show last lines
                                   final visibleLines = lines.length > maxVisibleLines
                                       ? lines.sublist(lines.length - maxVisibleLines)
                                       : lines;
 
-                                  // Metin varsa her satırı ayrı kutu olarak göster
+                                  // If text exists, show each line as separate box
                                   return Stack(
                                     children: [
-                                      // Görünür satırlar
+                                      // Visible lines
                                       Column(
                                         mainAxisSize: MainAxisSize.min,
                                         crossAxisAlignment: CrossAxisAlignment.center,
@@ -2018,7 +2025,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                           );
                                         }).toList(),
                                       ),
-                                      // Görünmez TextField (klavye için)
+                                      // Invisible TextField (for keyboard)
                                       Positioned.fill(
                                         child: Opacity(
                                           opacity: 0,
@@ -2046,7 +2053,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         ),
                       ),
 
-                      // Alt kısım - Instagram gibi (klavye üstünde sabit)
+                      // Bottom section - Instagram style (fixed above keyboard)
                       Padding(
                         padding: EdgeInsets.only(
                           bottom: MediaQuery.of(context).viewInsets.bottom > 0
@@ -2056,7 +2063,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Font boyutu slider (yatay)
+                            // Font size slider (horizontal)
                             Container(
                               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                             child: Row(
@@ -2088,11 +2095,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                             ),
                           ),
 
-                          // Tab bar alanı - Font stilleri VEYA Renkler
+                          // Tab bar area - Font styles OR Colors
                           SizedBox(
                             height: 44,
                             child: openPicker == 'color'
-                                // Yazı renk seçici
+                                // Text color picker
                                 ? ListView(
                                     scrollDirection: Axis.horizontal,
                                     padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2118,7 +2125,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                     )).toList(),
                                   )
                                 : openPicker == 'bgColor'
-                                    // Arka plan renk seçici
+                                    // Background color picker
                                     ? ListView(
                                         scrollDirection: Axis.horizontal,
                                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2143,7 +2150,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                           ),
                                         )).toList(),
                                       )
-                                    // Font stilleri (config'den)
+                                    // Font styles (from config)
                                     : ListView.builder(
                                         scrollDirection: Axis.horizontal,
                                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2176,7 +2183,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           ),
                           const SizedBox(height: 8),
 
-                          // Araç çubuğu - altta
+                          // Toolbar - at bottom
                           Container(
                             margin: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -2187,11 +2194,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                               children: [
-                                // Aa - Font
+                                // Aa - Font button
                                 GestureDetector(
                                   onTap: () {
                                     setDialogState(() {
-                                      openPicker = null; // Font sekmesine dön
+                                      openPicker = null; // Return to font tab
                                     });
                                   },
                                   child: Container(
@@ -2214,7 +2221,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                   ),
                                 ),
 
-                                // Renk seçici
+                                // Color picker
                                 GestureDetector(
                                   onTap: () {
                                     setDialogState(() {
@@ -2244,7 +2251,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                   ),
                                 ),
 
-                                // İtalik //A
+                                // Italic //A
                                 GestureDetector(
                                   onTap: () {
                                     setDialogState(() => isItalic = !isItalic);
@@ -2269,19 +2276,19 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                   ),
                                 ),
 
-                                // Arka plan A (noktalı çerçeve)
+                                // Background A (dotted border)
                                 GestureDetector(
                                   onTap: () {
                                     setDialogState(() {
                                       if (openPicker == 'bgColor') {
-                                        // Renk seçici açıksa kapat ve arka planı kapat
+                                        // If color picker is open, close it and disable background
                                         openPicker = null;
                                         hasBackground = false;
                                       } else if (hasBackground) {
-                                        // Arka plan varsa renk seçici aç
+                                        // If background exists, open color picker
                                         openPicker = 'bgColor';
                                       } else {
-                                        // Arka plan yoksa aç ve renk seçici göster
+                                        // If no background, enable it and show color picker
                                         hasBackground = true;
                                         openPicker = 'bgColor';
                                       }
@@ -2330,6 +2337,98 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           return FadeTransition(opacity: animation, child: child);
         },
       ),
+    );
+  }
+
+  /// Save to gallery
+  Future<void> _saveToGallery() async {
+    setState(() => _isSaving = true);
+
+    try {
+      final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) throw Exception('Render boundary not found');
+
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) throw Exception('Failed to convert image');
+
+      final Uint8List pngBytes = byteData.buffer.asUint8List();
+
+      // Save to temp file
+      final tempDir = Directory.systemTemp;
+      final fileName = 'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsBytes(pngBytes);
+
+      // Save to gallery
+      await PhotoManager.editor.saveImageWithPath(
+        file.path,
+        title: fileName,
+      );
+
+      if (mounted) {
+        _showSavedModal();
+      }
+    } catch (e) {
+      debugPrint('Save to gallery error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save to gallery: $e')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() => _isSaving = false);
+    }
+  }
+
+  /// Show saved modal - closes after 3 seconds
+  void _showSavedModal() {
+    final config = context.storyEditorConfig;
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.transparent,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        // Auto close after 3 seconds
+        Future.delayed(const Duration(seconds: 3), () {
+          if (Navigator.of(dialogContext).canPop()) {
+            Navigator.of(dialogContext).pop();
+          }
+        });
+
+        return Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.check_circle_outline,
+                  color: Colors.white,
+                  size: 48,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  config.strings.editorSaved,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -2395,11 +2494,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 }
 
-/// Üçgen şeklinde dikey slider çizen CustomPainter
+/// CustomPainter that draws a triangle-shaped vertical slider
 class TriangleSliderPainter extends CustomPainter {
-  final double value; // 0-1 arası
+  final double value; // 0-1 range
   final Color activeColor;
-  final double brushSize; // Fırça boyutu (2-20)
+  final double brushSize; // Brush size (2-20)
 
   TriangleSliderPainter({
     required this.value,
@@ -2412,11 +2511,11 @@ class TriangleSliderPainter extends CustomPainter {
     final width = size.width;
     final height = size.height;
 
-    // Arka plan üçgen (gri) - üstte geniş, altta dar
+    // Background triangle (gray) - wide at top, narrow at bottom
     final bgPath = Path()
-      ..moveTo(0, 0) // Sol üst
-      ..lineTo(width, 0) // Sağ üst
-      ..lineTo(width / 2, height) // Alt orta (dar)
+      ..moveTo(0, 0) // Top left
+      ..lineTo(width, 0) // Top right
+      ..lineTo(width / 2, height) // Bottom center (narrow)
       ..close();
 
     final bgPaint = Paint()
@@ -2425,18 +2524,18 @@ class TriangleSliderPainter extends CustomPainter {
 
     canvas.drawPath(bgPath, bgPaint);
 
-    // Aktif kısım (renkli) - alttan yukarı doğru doluyor
-    // value=0 -> hiç dolu değil (altta), value=1 -> tamamen dolu (üstte)
-    final activeStartY = height * (1 - value); // Aktif kısmın başladığı Y
+    // Active part (colored) - fills from bottom to top
+    // value=0 -> not filled at all (bottom), value=1 -> fully filled (top)
+    final activeStartY = height * (1 - value); // Y where active part starts
 
-    // Bu Y noktasındaki üçgen genişliği
+    // Triangle width at this Y point
     final widthAtY = (1 - activeStartY / height) * width;
     final activeLeft = (width - widthAtY) / 2;
 
     final activePath = Path()
-      ..moveTo(activeLeft, activeStartY) // Sol nokta
-      ..lineTo(activeLeft + widthAtY, activeStartY) // Sağ nokta
-      ..lineTo(width / 2, height) // Alt orta
+      ..moveTo(activeLeft, activeStartY) // Left point
+      ..lineTo(activeLeft + widthAtY, activeStartY) // Right point
+      ..lineTo(width / 2, height) // Bottom center
       ..close();
 
     final activePaint = Paint()
@@ -2445,26 +2544,26 @@ class TriangleSliderPainter extends CustomPainter {
 
     canvas.drawPath(activePath, activePaint);
 
-    // Slider göstergesi (yuvarlak) - fırça boyutuyla orantılı
+    // Slider indicator (round) - proportional to brush size
     final indicatorY = height * (1 - value);
     final indicatorX = width / 2;
 
-    // Gösterge boyutu fırça boyutuna göre (4-16 arası)
+    // Indicator size based on brush size (4-16 range)
     final indicatorRadius = 4 + (brushSize - 2) / 18 * 12;
 
-    // Gölge efekti
+    // Shadow effect
     final shadowPaint = Paint()
       ..color = Colors.black.withValues(alpha: 0.4)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
     canvas.drawCircle(Offset(indicatorX + 1, indicatorY + 2), indicatorRadius, shadowPaint);
 
-    // Beyaz dış halka (daha kalın)
+    // White outer ring (thicker)
     final outerBorderPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
     canvas.drawCircle(Offset(indicatorX, indicatorY), indicatorRadius + 3, outerBorderPaint);
 
-    // Aktif renk daire
+    // Active color circle
     final indicatorPaint = Paint()
       ..color = activeColor
       ..style = PaintingStyle.fill;
@@ -2479,7 +2578,7 @@ class TriangleSliderPainter extends CustomPainter {
   }
 }
 
-/// Noktalı çerçeve çizen CustomPainter
+/// CustomPainter that draws a dotted border
 class DottedBorderPainter extends CustomPainter {
   final Color color;
 
@@ -2567,7 +2666,7 @@ class TextOverlay {
     );
   }
 
-  /// TextStyle'ı renk ve boyut ile döndür
+  /// Return TextStyle with color and size
   TextStyle toTextStyle({List<Shadow>? shadows}) {
     return textStyle.copyWith(
       color: color,
@@ -2593,13 +2692,13 @@ class DrawingPath {
 
 class DrawingPainter extends CustomPainter {
   final List<DrawingPath> paths;
-  final List<DrawingPath>? erasedPaths; // Silinen çizgiler için
+  final List<DrawingPath>? erasedPaths; // For erased lines
 
   DrawingPainter({required this.paths, this.erasedPaths});
 
   @override
   void paint(Canvas canvas, Size size) {
-    // saveLayer kullanarak silgi BlendMode.clear çalışsın
+    // Use saveLayer so eraser BlendMode.clear works
     canvas.saveLayer(Rect.fromLTWH(0, 0, size.width, size.height), Paint());
 
     for (final path in paths) {
@@ -2630,7 +2729,7 @@ class DrawingPainter extends CustomPainter {
     canvas.restore();
   }
 
-  /// Normal düz çizgi
+  /// Normal straight line
   void _drawNormal(Canvas canvas, DrawingPath path) {
     final paint = Paint()
       ..color = path.color
@@ -2651,7 +2750,7 @@ class DrawingPainter extends CustomPainter {
     }
   }
 
-  /// Ok uçlu çizgi
+  /// Arrow-tipped line
   void _drawArrow(Canvas canvas, DrawingPath path) {
     final paint = Paint()
       ..color = path.color
@@ -2667,7 +2766,7 @@ class DrawingPainter extends CustomPainter {
       return;
     }
 
-    // Çizgiyi çiz
+    // Draw the line
     final drawPath = Path();
     drawPath.moveTo(path.points.first.dx, path.points.first.dy);
     for (int i = 1; i < path.points.length; i++) {
@@ -2675,7 +2774,7 @@ class DrawingPainter extends CustomPainter {
     }
     canvas.drawPath(drawPath, paint);
 
-    // Ok ucu çiz
+    // Draw arrow head
     final lastPoint = path.points.last;
     final secondLast = path.points[path.points.length > 5 ? path.points.length - 5 : 0];
     final angle = (lastPoint - secondLast).direction;
@@ -2695,13 +2794,13 @@ class DrawingPainter extends CustomPainter {
     canvas.drawPath(arrowPath, paint);
   }
 
-  /// Marker/Highlighter stili (kırık kenar, yarı saydam)
+  /// Marker/Highlighter style (broken edge, semi-transparent)
   void _drawMarker(Canvas canvas, DrawingPath path) {
     final paint = Paint()
       ..color = path.color.withValues(alpha: 0.5)
       ..strokeWidth = path.strokeWidth * 2
-      ..strokeCap = StrokeCap.square // Kare uç
-      ..strokeJoin = StrokeJoin.bevel // Kırık köşe
+      ..strokeCap = StrokeCap.square // Square tip
+      ..strokeJoin = StrokeJoin.bevel // Broken corner
       ..style = PaintingStyle.stroke;
 
     if (path.points.length == 1) {
@@ -2719,11 +2818,11 @@ class DrawingPainter extends CustomPainter {
     }
   }
 
-  /// Glow/Neon efektli çizgi
+  /// Glow/Neon effect line
   void _drawGlow(Canvas canvas, DrawingPath path) {
     if (path.points.isEmpty) return;
 
-    // Dış glow katmanları - seçilen renkte parlak ışık
+    // Outer glow layers - bright light in selected color
     for (int i = 4; i >= 1; i--) {
       final glowPaint = Paint()
         ..color = path.color.withValues(alpha: 0.15 + (0.15 * (4 - i)))
@@ -2745,7 +2844,7 @@ class DrawingPainter extends CustomPainter {
       }
     }
 
-    // Orta katman - seçilen renk daha yoğun
+    // Middle layer - selected color more intense
     final middlePaint = Paint()
       ..color = path.color.withValues(alpha: 0.9)
       ..strokeWidth = path.strokeWidth
@@ -2764,7 +2863,7 @@ class DrawingPainter extends CustomPainter {
       canvas.drawPath(drawPath, middlePaint);
     }
 
-    // Ana çizgi (parlak beyaz merkez)
+    // Main line (bright white center)
     final corePaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.95)
       ..strokeWidth = path.strokeWidth * 0.4
@@ -2784,7 +2883,7 @@ class DrawingPainter extends CustomPainter {
     }
   }
 
-  /// Silgi - saydam/beyaz çizgi
+  /// Eraser - transparent/white line
   void _drawEraser(Canvas canvas, DrawingPath path) {
     final paint = Paint()
       ..color = Colors.transparent
@@ -2806,21 +2905,21 @@ class DrawingPainter extends CustomPainter {
     }
   }
 
-  /// Tebeşir efekti (pürüzlü, dokulu)
+  /// Chalk effect (rough, textured)
   void _drawChalk(Canvas canvas, DrawingPath path) {
     if (path.points.isEmpty) return;
 
-    final random = math.Random(42); // Sabit seed tutarlılık için
+    final random = math.Random(42); // Fixed seed for consistency
 
     for (int i = 0; i < path.points.length; i++) {
       final point = path.points[i];
 
-      // Ana nokta
+      // Main point
       final paint = Paint()
         ..color = path.color.withValues(alpha: 0.7 + random.nextDouble() * 0.3)
         ..style = PaintingStyle.fill;
 
-      // Rastgele dağılmış noktalar
+      // Randomly scattered points
       for (int j = 0; j < 5; j++) {
         final offsetX = (random.nextDouble() - 0.5) * path.strokeWidth;
         final offsetY = (random.nextDouble() - 0.5) * path.strokeWidth;
@@ -2834,7 +2933,7 @@ class DrawingPainter extends CustomPainter {
       }
     }
 
-    // Pürüzlü kenar efekti için çizgiyi de çiz
+    // Also draw line for rough edge effect
     if (path.points.length > 1) {
       final linePaint = Paint()
         ..color = path.color.withValues(alpha: 0.5)
@@ -2855,7 +2954,7 @@ class DrawingPainter extends CustomPainter {
   bool shouldRepaint(covariant DrawingPainter oldDelegate) => true;
 }
 
-/// Taşınabilir görsel overlay - Create Mode'dan gelen gradient+text görseli için
+/// Movable image overlay - for gradient+text image from Create Mode
 class ImageOverlay {
   final String imagePath;
   final Offset offset;

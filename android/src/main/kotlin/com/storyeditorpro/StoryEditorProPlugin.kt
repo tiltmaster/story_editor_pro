@@ -75,8 +75,84 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getLastGalleryImage" -> getLastGalleryImage(result)
             "startVideoRecording" -> startVideoRecording(call, result)
             "stopVideoRecording" -> stopVideoRecording(result)
+            "createBoomerang" -> createBoomerang(call, result)
+            "createBoomerangFromFrames" -> createBoomerangFromFrames(call, result)
             "dispose" -> dispose(result)
             else -> result.notImplemented()
+        }
+    }
+
+    private fun createBoomerang(call: MethodCall, result: Result) {
+        val inputPath = call.argument<String>("inputPath")
+        val outputPath = call.argument<String>("outputPath")
+        val loopCount = call.argument<Int>("loopCount") ?: 3
+        val fps = call.argument<Int>("fps") ?: 30
+
+        if (inputPath == null || outputPath == null) {
+            result.error("INVALID_ARGS", "inputPath and outputPath are required", null)
+            return
+        }
+
+        // Background thread'de işle
+        cameraExecutor?.execute {
+            try {
+                val processor = BoomerangProcessor()
+                val output = processor.createBoomerang(
+                    inputPath = inputPath,
+                    outputPath = outputPath,
+                    loopCount = loopCount,
+                    fps = fps
+                )
+
+                activity?.runOnUiThread {
+                    if (output != null) {
+                        result.success(output)
+                    } else {
+                        result.error("BOOMERANG_FAILED", "Failed to create boomerang", null)
+                    }
+                }
+            } catch (e: Exception) {
+                activity?.runOnUiThread {
+                    result.error("BOOMERANG_ERROR", e.message, null)
+                }
+            }
+        }
+    }
+
+    private fun createBoomerangFromFrames(call: MethodCall, result: Result) {
+        val frameDir = call.argument<String>("frameDir")
+        val outputPath = call.argument<String>("outputPath")
+        val fps = call.argument<Int>("fps") ?: 30
+        val loopCount = call.argument<Int>("loopCount") ?: 3
+
+        if (frameDir == null || outputPath == null) {
+            result.error("INVALID_ARGS", "frameDir and outputPath are required", null)
+            return
+        }
+
+        // Background thread'de işle
+        cameraExecutor?.execute {
+            try {
+                val processor = BoomerangProcessor()
+                val output = processor.createBoomerangFromFrames(
+                    frameDir = frameDir,
+                    outputPath = outputPath,
+                    fps = fps,
+                    loopCount = loopCount
+                )
+
+                activity?.runOnUiThread {
+                    if (output != null) {
+                        result.success(output)
+                    } else {
+                        result.error("BOOMERANG_FAILED", "Failed to create boomerang from frames", null)
+                    }
+                }
+            } catch (e: Exception) {
+                activity?.runOnUiThread {
+                    result.error("BOOMERANG_ERROR", e.message, null)
+                }
+            }
         }
     }
 
