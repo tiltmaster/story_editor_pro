@@ -890,7 +890,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             right: 0,
             bottom: MediaQuery.of(context).viewPadding.bottom + 24,
             child: Center(
-              child: AnimatedContainer(
+                  child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 width: 56,
                 height: 56,
@@ -898,7 +898,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   shape: BoxShape.circle,
                   color: _isOverTrash
                       ? Colors.red.withValues(alpha: 0.8)
-                      : Colors.white.withValues(alpha: 0.15),
+                      : Colors.white.withValues(alpha: 0.08),
                 ),
                 child: Center(
                   child: SvgPicture.asset(
@@ -925,7 +925,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               height: 56,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.15),
+                color: Colors.white.withValues(alpha: 0.08),
               ),
               child: Center(
                 child: _isSaving
@@ -1568,8 +1568,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: isActive
-              ? Colors.white.withValues(alpha: 0.3)
-              : Colors.white.withValues(alpha: 0.15),
+              ? Colors.white.withValues(alpha: 0.2)
+              : Colors.white.withValues(alpha: 0.08),
         ),
         child: Center(
           child: iconWidget ?? Icon(
@@ -1622,7 +1622,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     height: 44,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.15),
+                      color: Colors.white.withValues(alpha: 0.08),
                     ),
                     child: const Center(
                       child: Icon(
@@ -1647,7 +1647,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                       height: 44,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.white.withValues(alpha: 0.15),
+                        color: Colors.white.withValues(alpha: 0.08),
                       ),
                       child: const Center(
                         child: Icon(
@@ -1670,7 +1670,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 height: 44,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: Colors.white.withValues(alpha: 0.08),
                 ),
                 child: Center(
                   child: SvgPicture.asset(
