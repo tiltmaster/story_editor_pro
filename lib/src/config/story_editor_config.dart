@@ -81,6 +81,10 @@ class StoryEditorConfig {
   /// Number of images to load per page in gallery (default: 50)
   final int galleryPageSize;
 
+  /// Whether to show the collage/layout button in the camera tools UI.
+  /// Default: true
+  final bool showCollageButton;
+
   // ============ Animation Configuration (Medium Priority) ============
 
   /// Default animation duration for UI transitions
@@ -120,6 +124,7 @@ class StoryEditorConfig {
     this.shutterButtonSizeLarge = 90,
     this.shutterButtonSizeSmall = 70,
     this.galleryPageSize = 50,
+    this.showCollageButton = true,
     // Medium Priority Animation Config
     this.animationDuration = const Duration(milliseconds: 200),
     this.savedModalAutoCloseDelay = const Duration(seconds: 3),
@@ -151,6 +156,7 @@ class StoryEditorConfig {
     double? shutterButtonSizeLarge,
     double? shutterButtonSizeSmall,
     int? galleryPageSize,
+    bool? showCollageButton,
     // Medium Priority Animation Config
     Duration? animationDuration,
     Duration? savedModalAutoCloseDelay,
@@ -180,6 +186,7 @@ class StoryEditorConfig {
       shutterButtonSizeLarge: shutterButtonSizeLarge ?? this.shutterButtonSizeLarge,
       shutterButtonSizeSmall: shutterButtonSizeSmall ?? this.shutterButtonSizeSmall,
       galleryPageSize: galleryPageSize ?? this.galleryPageSize,
+      showCollageButton: showCollageButton ?? this.showCollageButton,
       // Medium Priority Animation Config
       animationDuration: animationDuration ?? this.animationDuration,
       savedModalAutoCloseDelay: savedModalAutoCloseDelay ?? this.savedModalAutoCloseDelay,

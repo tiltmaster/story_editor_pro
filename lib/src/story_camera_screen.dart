@@ -3133,6 +3133,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Boomerang button
   Widget _buildBoomerangButton() {
     final config = context.storyEditorConfig;
+    final icons = config.theme.icons;
     // Instagram Boomerang gradient - uses config colors
     final boomerangGradient = LinearGradient(
       begin: Alignment.topRight,
@@ -3176,13 +3177,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ? BoxDecoration(shape: BoxShape.circle, gradient: boomerangGradient)
             : BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.02),
+                color: icons.boomerangIconBackgroundColor ??
+                    Colors.white.withValues(alpha: 0.02),
               ),
         child: SvgPicture.asset(
           'packages/story_editor_pro/assets/icons/infinite.svg',
           width: 24,
           height: 24,
-          colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+          colorFilter: ColorFilter.mode(
+            icons.boomerangIconColor ?? Colors.white,
+            BlendMode.srcIn,
+          ),
         ),
       ),
     );
@@ -3190,6 +3195,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Create Mode (Gradient Text Editor) button
   Widget _buildCreateModeButton() {
+    final config = context.storyEditorConfig;
+    final icons = config.theme.icons;
     return GestureDetector(
       onTap: () async {
         HapticFeedback.selectionClick();
@@ -3233,15 +3240,26 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.02),
+          color: icons.gradientTextIconBackgroundColor ??
+              Colors.white.withValues(alpha: 0.02),
         ),
-        child: const Icon(Icons.text_fields, color: Colors.white, size: 24),
+        child: Icon(
+          Icons.text_fields,
+          color: icons.gradientTextIconColor ?? Colors.white,
+          size: 24,
+        ),
       ),
     );
   }
 
   /// Hands-free button - expands downward to show duration options when clicked
   Widget _buildHandsFreeButton() {
+    final config = context.storyEditorConfig;
+    final icons = config.theme.icons;
+    final inactiveColor = icons.handsFreeIconBackgroundColor ??
+        Colors.white.withValues(alpha: 0.02);
+    final activeColor = icons.handsFreeIconBackgroundColor ??
+        Colors.white.withValues(alpha: 0.06);
     // Duration options (seconds)
     const List<int> delayOptions = [3, 5, 10, 15];
 
@@ -3253,9 +3271,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         borderRadius: _showHandsFreeSelector
             ? BorderRadius.circular(24)
             : BorderRadius.circular(100),
-        color: _isHandsFreeMode
-            ? Colors.white.withValues(alpha: 0.06)
-            : Colors.white.withValues(alpha: 0.02),
+        color: _isHandsFreeMode ? activeColor : inactiveColor,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3283,8 +3299,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               'packages/story_editor_pro/assets/icons/hand-free.svg',
               width: 24,
               height: 24,
-              colorFilter: const ColorFilter.mode(
-                Colors.white,
+              colorFilter: ColorFilter.mode(
+                icons.handsFreeIconColor ?? Colors.white,
                 BlendMode.srcIn,
               ),
             ),
