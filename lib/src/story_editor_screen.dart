@@ -299,6 +299,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               ),
                             ),
                             if (!_isDrawing) ..._buildImageOverlays(),
+                            if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
                           ],
                         ),
                       ),
@@ -308,7 +309,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 // Background image gesture handler - always active (works with two fingers)
                 _buildBackgroundImageGesture(),
                 // Text overlays
-                if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
                 if (_isDrawing) _buildDrawingLayer(),
                 if (!_isTextEditing && !_isDrawing) _buildTopControls(),
                 if (!_isTextEditing && !_isDrawing) _buildBottomControls(),
