@@ -1689,7 +1689,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             Container(height: statusBarHeight, color: Colors.black),
             // Remaining area
             Expanded(
-              child: _isLayoutMode ? _buildLayoutModeBody() : _buildNormalModeBody(),
+              child: _buildNormalModeBody(),
             ),
           ],
         ),
@@ -3025,7 +3025,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.15),
+          color: Colors.white.withValues(alpha: 0.03),
         ),
         child: Center(
           child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
@@ -3176,7 +3176,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ? BoxDecoration(shape: BoxShape.circle, gradient: boomerangGradient)
             : BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.15),
+                color: Colors.white.withValues(alpha: 0.03),
               ),
         child: SvgPicture.asset(
           'packages/story_editor_pro/assets/icons/infinite.svg',
@@ -3233,7 +3233,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.15),
+          color: Colors.white.withValues(alpha: 0.03),
         ),
         child: const Icon(Icons.text_fields, color: Colors.white, size: 24),
       ),
@@ -3254,8 +3254,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ? BorderRadius.circular(24)
             : BorderRadius.circular(100),
         color: _isHandsFreeMode
-            ? Colors.white.withValues(alpha: 0.25)
-            : Colors.white.withValues(alpha: 0.15),
+            ? Colors.white.withValues(alpha: 0.08)
+            : Colors.white.withValues(alpha: 0.03),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3374,8 +3374,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ? BorderRadius.circular(24)
             : BorderRadius.circular(100),
         color: _isLayoutMode
-            ? Colors.white.withValues(alpha: 0.25)
-            : Colors.white.withValues(alpha: 0.15),
+            ? Colors.white.withValues(alpha: 0.08)
+            : Colors.white.withValues(alpha: 0.03),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
