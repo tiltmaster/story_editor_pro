@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -81,7 +82,9 @@ class StoryEditorScreen extends StatefulWidget {
 }
 
 class _StoryEditorScreenState extends State<StoryEditorScreen> {
+  static const MethodChannel _platform = MethodChannel('story_editor_pro');
   final GlobalKey _repaintKey = GlobalKey();
+  final GlobalKey _overlayRepaintKey = GlobalKey();
   final List<TextOverlay> _textOverlays = [];
   final List<DrawingPath> _drawings = [];
   final List<ImageOverlay> _imageOverlays = [];
@@ -270,51 +273,53 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     topLeft: Radius.circular(16),
                     topRight: Radius.circular(16),
                   ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Black background
-                      Container(color: Colors.black),
-                      // RepaintBoundary - for drawings and image overlays
-                      RepaintBoundary(
-                        key: _repaintKey,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            // Background media (photo or video)
-                            Transform.translate(
-                              offset: _bgImageOffset,
-                              child: Transform.scale(
-                                scale: _bgImageScale,
-                                child: _buildBackgroundMedia(),
-                              ),
-                            ),
-                            _buildBackgroundImageGesture(),
-                            // Wrap with SaveLayer so eraser blendMode.clear works
-                            ClipRect(
-                              child: CustomPaint(
-                                painter: DrawingPainter(paths: _drawings),
-                                size: Size.infinite,
-                                isComplex: true,
-                                willChange: true,
-                              ),
-                            ),
-                            if (!_isDrawing) ..._buildImageOverlays(),
-                            if (_mediaType != MediaType.video && !_isTextEditing && !_isDrawing)
-                              ..._buildTextOverlays(),
-                          ],
+                  child: RepaintBoundary(
+                    key: _repaintKey,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Black background
+                        Container(color: Colors.black),
+                        // Background media (photo or video)
+                        Transform.translate(
+                          offset: _bgImageOffset,
+                          child: Transform.scale(
+                            scale: _bgImageScale,
+                            child: _buildBackgroundMedia(),
+                          ),
                         ),
-                      ),
-                    ],
+                        _buildBackgroundImageGesture(),
+                        // RepaintBoundary - overlays only (for export on video)
+                        RepaintBoundary(
+                          key: _overlayRepaintKey,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              // Wrap with SaveLayer so eraser blendMode.clear works
+                              ClipRect(
+                                child: CustomPaint(
+                                  painter: DrawingPainter(paths: _drawings),
+                                  size: Size.infinite,
+                                  isComplex: true,
+                                  willChange: true,
+                                ),
+                              ),
+                              if (!_isDrawing) ..._buildImageOverlays(),
+                              if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 // Text overlays
-                if (_mediaType != MediaType.video && _isDrawing) _buildDrawingLayer(),
+                if (_isDrawing) _buildDrawingLayer(),
                 if (!_isTextEditing && !_isDrawing) _buildTopControls(),
                 if (!_isTextEditing && !_isDrawing) _buildBottomControls(),
-                if (_mediaType != MediaType.video && _isDrawing) _buildDrawingTools(),
-                if (_mediaType != MediaType.video && _isDrawing) _buildDrawingTopBar(),
-                if (_mediaType != MediaType.video && _isDrawing && _isSliding) _buildBrushSizePreview(),
+                if (_isDrawing) _buildDrawingTools(),
+                if (_isDrawing) _buildDrawingTopBar(),
+                if (_isDrawing && _isSliding) _buildBrushSizePreview(),
               ],
             ),
           ),
@@ -823,7 +828,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   Widget _buildTopControls() {
-    final allowEditorTools = _mediaType != MediaType.video;
+    final allowEditorTools = true;
     return Positioned(
       top: 0,
       left: 0,
@@ -1560,6 +1565,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     required VoidCallback onTap,
     bool isActive = false,
   }) {
+    final config = context.storyEditorConfig;
+    final icons = config.theme.icons;
+    final inactiveColor = icons.gradientTextIconBackgroundColor ??
+        Colors.white.withValues(alpha: 0.03);
+    final activeColor =
+        (icons.gradientTextIconBackgroundColor ?? Colors.white).withValues(alpha: 0.1);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1567,9 +1578,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         height: 44,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: isActive
-              ? Colors.white.withValues(alpha: 0.1)
-              : Colors.white.withValues(alpha: 0.03),
+          color: isActive ? activeColor : inactiveColor,
         ),
         child: Center(
           child: iconWidget ?? Icon(
@@ -1594,6 +1603,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   /// Drawing mode top bar - X (exit), Undo and Check button
   Widget _buildDrawingTopBar() {
+    final config = context.storyEditorConfig;
+    final icons = config.theme.icons;
+    final barIconBg = icons.gradientTextIconBackgroundColor ??
+        Colors.white.withValues(alpha: 0.03);
     return Positioned(
       top: 0,
       left: 0,
@@ -1622,7 +1635,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     height: 44,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.03),
+                      color: barIconBg,
                     ),
                     child: const Center(
                       child: Icon(
@@ -1647,7 +1660,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                       height: 44,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.white.withValues(alpha: 0.03),
+                        color: barIconBg,
                       ),
                       child: const Center(
                         child: Icon(
@@ -1670,7 +1683,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 height: 44,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.03),
+                  color: barIconBg,
                 ),
                 child: Center(
                   child: SvgPicture.asset(
@@ -2386,6 +2399,15 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     setState(() => _isSaving = true);
 
     try {
+      if (_mediaType == MediaType.video) {
+        final outputPath = await _exportVideoWithOverlays();
+        await PhotoManager.editor.saveVideo(File(outputPath));
+        if (mounted) {
+          _showSavedModal();
+        }
+        return;
+      }
+
       final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
       if (boundary == null) throw Exception('Render boundary not found');
 
@@ -2502,6 +2524,35 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     setState(() => _isSaving = true);
 
     try {
+      if (_mediaType == MediaType.video) {
+        final outputPath = await _exportVideoWithOverlays();
+        if (mounted) {
+          final durationMs = _videoController?.value.duration.inMilliseconds;
+          final storyResult = await StoryResult.fromFile(
+            outputPath,
+            mediaType: StoryMediaType.video,
+            durationMs: durationMs,
+          );
+
+          final shareResult = StoryShareResult(
+            story: storyResult,
+            shareTarget: closeFriends ? ShareTarget.closeFriends : ShareTarget.story,
+            selectedFriends: selectedFriends,
+          );
+
+          widget.onShare?.call(shareResult);
+
+          Navigator.pop(context, {
+            'path': outputPath,
+            'toStory': toStory,
+            'closeFriends': closeFriends,
+            'selectedFriends': selectedFriends.map((f) => f.toJson()).toList(),
+            'shareResult': shareResult,
+          });
+        }
+        return;
+      }
+
       final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
       if (boundary == null) throw Exception('Render boundary not found');
 
@@ -2553,6 +2604,68 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     if (mounted) {
       setState(() => _isSaving = false);
     }
+  }
+
+  Future<String> _exportVideoWithOverlays() async {
+    int? targetWidth;
+    int? targetHeight;
+    final videoSize = _videoController?.value.size;
+    if (videoSize != null && videoSize.width > 0 && videoSize.height > 0) {
+      targetWidth = videoSize.width.round();
+      targetHeight = videoSize.height.round();
+    }
+
+    final overlayPath = await _renderOverlayToPng(
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
+    final tempDir = await getTemporaryDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final outputPath = '${tempDir.path}/story_video_$timestamp.mp4';
+    final config = context.storyEditorConfig;
+
+    final args = {
+      'inputPath': widget.mediaPath,
+      'outputPath': outputPath,
+      'overlayPath': overlayPath,
+      'canvasWidth': targetWidth ?? config.storyCanvasWidth,
+      'canvasHeight': targetHeight ?? config.storyCanvasHeight,
+      if (config.videoColorMatrix != null) 'colorMatrix': config.videoColorMatrix,
+    };
+
+    final result = await _platform.invokeMethod<String>('exportEditedVideo', args);
+    if (result == null || result.isEmpty) {
+      throw Exception('Video export failed');
+    }
+    return result;
+  }
+
+  Future<String> _renderOverlayToPng({
+    int? targetWidth,
+    int? targetHeight,
+  }) async {
+    final boundary = _overlayRepaintKey.currentContext?.findRenderObject()
+        as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw Exception('Overlay render boundary not found');
+    }
+
+    final config = context.storyEditorConfig;
+    final targetWidthPx = (targetWidth ?? config.storyCanvasWidth).toDouble();
+    final size = boundary.size;
+    final pixelRatio = size.width == 0 ? 3.0 : targetWidthPx / size.width;
+
+    final image = await boundary.toImage(pixelRatio: pixelRatio);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) throw Exception('Failed to convert overlay');
+
+    final overlayBytes = byteData.buffer.asUint8List();
+    final tempDir = await getTemporaryDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final overlayPath = '${tempDir.path}/story_overlay_$timestamp.png';
+    final overlayFile = File(overlayPath);
+    await overlayFile.writeAsBytes(overlayBytes);
+    return overlayPath;
   }
 }
 

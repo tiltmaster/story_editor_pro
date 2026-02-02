@@ -85,6 +85,10 @@ class StoryEditorConfig {
   /// Default: true
   final bool showCollageButton;
 
+  /// Optional 4x5 color matrix (20 values) to apply to video export.
+  /// When null, no color filter is applied.
+  final List<double>? videoColorMatrix;
+
   // ============ Animation Configuration (Medium Priority) ============
 
   /// Default animation duration for UI transitions
@@ -125,6 +129,7 @@ class StoryEditorConfig {
     this.shutterButtonSizeSmall = 70,
     this.galleryPageSize = 50,
     this.showCollageButton = true,
+    this.videoColorMatrix,
     // Medium Priority Animation Config
     this.animationDuration = const Duration(milliseconds: 200),
     this.savedModalAutoCloseDelay = const Duration(seconds: 3),
@@ -157,6 +162,7 @@ class StoryEditorConfig {
     double? shutterButtonSizeSmall,
     int? galleryPageSize,
     bool? showCollageButton,
+    List<double>? videoColorMatrix,
     // Medium Priority Animation Config
     Duration? animationDuration,
     Duration? savedModalAutoCloseDelay,
@@ -187,6 +193,7 @@ class StoryEditorConfig {
       shutterButtonSizeSmall: shutterButtonSizeSmall ?? this.shutterButtonSizeSmall,
       galleryPageSize: galleryPageSize ?? this.galleryPageSize,
       showCollageButton: showCollageButton ?? this.showCollageButton,
+      videoColorMatrix: videoColorMatrix ?? this.videoColorMatrix,
       // Medium Priority Animation Config
       animationDuration: animationDuration ?? this.animationDuration,
       savedModalAutoCloseDelay: savedModalAutoCloseDelay ?? this.savedModalAutoCloseDelay,

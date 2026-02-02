@@ -2665,16 +2665,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     const double size = 90;
     const double strokeWidth = 6;
 
-    // Instagram Boomerang gradient colors
-    const boomerangGradient = LinearGradient(
+    final config = context.storyEditorConfig;
+    // Boomerang gradient colors - use config
+    final boomerangGradient = LinearGradient(
       begin: Alignment.topRight,
       end: Alignment.bottomLeft,
-      colors: [
-        Color(0xFFF77737), // Orange
-        Color(0xFFE1306C), // Pink
-        Color(0xFFC13584), // Dark pink
-      ],
+      colors: config.boomerangGradientColors,
     );
+    final ringColor = config.boomerangGradientColors.isNotEmpty
+        ? config.boomerangGradientColors.last
+        : Colors.white;
 
     return GestureDetector(
       onLongPressStart: (_) {
@@ -2752,7 +2752,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                                   progress: _boomerangProgress,
                                   strokeWidth: strokeWidth,
                                   gradient: boomerangGradient,
-                                  backgroundColor: Colors.white,
+                                  backgroundColor: ringColor,
                                 ),
                               )
                             // Normal and Processing: white border
@@ -2760,7 +2760,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                    color: Colors.white,
+                                    color: ringColor,
                                     width: 4,
                                   ),
                                 ),
@@ -3018,6 +3018,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     VoidCallback? onTap,
     double size = 44,
   }) {
+    final config = context.storyEditorConfig;
+    final icons = config.theme.icons;
+    final bgColor = icons.gradientTextIconBackgroundColor ??
+        Colors.white.withValues(alpha: 0.02);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -3025,7 +3029,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.02),
+          color: bgColor,
         ),
         child: Center(
           child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
