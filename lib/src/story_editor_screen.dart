@@ -290,6 +290,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               ),
                             ),
                             // Wrap with SaveLayer so eraser blendMode.clear works
+                            _buildBackgroundImageGesture(),
                             ClipRect(
                               child: CustomPaint(
                                 painter: DrawingPainter(paths: _drawings),
