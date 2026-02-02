@@ -300,7 +300,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               ),
                             ),
                             if (!_isDrawing) ..._buildImageOverlays(),
-                            if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
+                            if (_mediaType != MediaType.video && !_isTextEditing && !_isDrawing)
+                              ..._buildTextOverlays(),
                           ],
                         ),
                       ),
@@ -308,12 +309,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   ),
                 ),
                 // Text overlays
-                if (_isDrawing) _buildDrawingLayer(),
+                if (_mediaType != MediaType.video && _isDrawing) _buildDrawingLayer(),
                 if (!_isTextEditing && !_isDrawing) _buildTopControls(),
                 if (!_isTextEditing && !_isDrawing) _buildBottomControls(),
-                if (_isDrawing) _buildDrawingTools(),
-                if (_isDrawing) _buildDrawingTopBar(),
-                if (_isDrawing && _isSliding) _buildBrushSizePreview(),
+                if (_mediaType != MediaType.video && _isDrawing) _buildDrawingTools(),
+                if (_mediaType != MediaType.video && _isDrawing) _buildDrawingTopBar(),
+                if (_mediaType != MediaType.video && _isDrawing && _isSliding) _buildBrushSizePreview(),
               ],
             ),
           ),
@@ -822,6 +823,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   Widget _buildTopControls() {
+    final allowEditorTools = _mediaType != MediaType.video;
     return Positioned(
       top: 0,
       left: 0,
@@ -842,32 +844,34 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             ),
             Row(
               children: [
-                _buildControlButton(
-                  icon: Icons.undo,
-                  onTap: _undo,
-                ),
-                const SizedBox(width: 12),
-                _buildControlButton(
-                  icon: _isDrawing ? Icons.edit_off : Icons.edit,
-                  onTap: () => setState(() {
-                    if (!_isDrawing) {
-                      // Save current drawing count when entering drawing mode
-                      _drawingCountBeforeSession = _drawings.length;
-                    }
-                    _isDrawing = !_isDrawing;
-                  }),
-                  isActive: _isDrawing,
-                ),
-                const SizedBox(width: 12),
-                _buildControlButton(
-                  icon: Icons.text_fields,
-                  onTap: _addText,
-                ),
-                const SizedBox(width: 12),
-                _buildControlButton(
-                  icon: Icons.save,
-                  onTap: _isSaving ? () {} : () => _saveToGallery(),
-                ),
+                if (allowEditorTools) ...[
+                  _buildControlButton(
+                    icon: Icons.undo,
+                    onTap: _undo,
+                  ),
+                  const SizedBox(width: 12),
+                  _buildControlButton(
+                    icon: _isDrawing ? Icons.edit_off : Icons.edit,
+                    onTap: () => setState(() {
+                      if (!_isDrawing) {
+                        // Save current drawing count when entering drawing mode
+                        _drawingCountBeforeSession = _drawings.length;
+                      }
+                      _isDrawing = !_isDrawing;
+                    }),
+                    isActive: _isDrawing,
+                  ),
+                  const SizedBox(width: 12),
+                  _buildControlButton(
+                    icon: Icons.text_fields,
+                    onTap: _addText,
+                  ),
+                  const SizedBox(width: 12),
+                  _buildControlButton(
+                    icon: Icons.save,
+                    onTap: _isSaving ? () {} : () => _saveToGallery(),
+                  ),
+                ],
               ],
             ),
           ],
