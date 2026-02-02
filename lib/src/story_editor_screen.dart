@@ -289,8 +289,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                 child: _buildBackgroundMedia(),
                               ),
                             ),
-                            // Wrap with SaveLayer so eraser blendMode.clear works
                             _buildBackgroundImageGesture(),
+                            // Wrap with SaveLayer so eraser blendMode.clear works
                             ClipRect(
                               child: CustomPaint(
                                 painter: DrawingPainter(paths: _drawings),
@@ -307,8 +307,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     ],
                   ),
                 ),
-                // Background image gesture handler - always active (works with two fingers)
-                _buildBackgroundImageGesture(),
                 // Text overlays
                 if (_isDrawing) _buildDrawingLayer(),
                 if (!_isTextEditing && !_isDrawing) _buildTopControls(),
