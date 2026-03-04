@@ -56,6 +56,10 @@ class VideoOverlayProcessor {
             }
 
             let asset = AVAsset(url: sourceVideoURL)
+            let inputDuration = CMTimeGetSeconds(asset.duration)
+            let inputVideoTracks = asset.tracks(withMediaType: .video).count
+            let inputAudioTracks = asset.tracks(withMediaType: .audio).count
+            print("VideoOverlayProcessor: Input duration=\(inputDuration)s, videoTracks=\(inputVideoTracks), audioTracks=\(inputAudioTracks), filtered=\(tempFilteredURL != nil)")
 
             // 1. Create mutable composition
             let composition = AVMutableComposition()
@@ -137,10 +141,12 @@ class VideoOverlayProcessor {
 
             parentLayer.frame = CGRect(origin: .zero, size: renderSize)
             parentLayer.masksToBounds = true
-            // Flip parent layer so overlay coordinates match Flutter's top-left origin
-            parentLayer.isGeometryFlipped = true
+            // Keep video layer in default geometry to avoid black-frame exports on some iOS devices.
+            // We flip only overlay layer coordinates to match Flutter's top-left origin.
+            parentLayer.isGeometryFlipped = false
             videoLayer.frame = CGRect(origin: .zero, size: renderSize)
             overlayLayer.contents = overlayImage.cgImage
+            overlayLayer.isGeometryFlipped = true
 
             // Scale overlay to cover renderSize while preserving aspect ratio (center crop)
             let overlayAspect = overlayImage.size.width / overlayImage.size.height
@@ -190,6 +196,23 @@ class VideoOverlayProcessor {
                         try? FileManager.default.removeItem(at: tempFilteredURL)
                     }
                     if exporter.status == .completed {
+                        do {
+                            let attrs = try FileManager.default.attributesOfItem(atPath: outputPath)
+                            let fileSize = (attrs[.size] as? NSNumber)?.intValue ?? 0
+                            let outAsset = AVAsset(url: outputURL)
+                            let outDuration = CMTimeGetSeconds(outAsset.duration)
+                            let outVideoTracks = outAsset.tracks(withMediaType: .video).count
+                            print("VideoOverlayProcessor: Output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks)")
+
+                            if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 100 * 1024 {
+                                let diag = "Invalid output (size=\(fileSize), duration=\(outDuration), tracks=\(outVideoTracks))"
+                                print("VideoOverlayProcessor: Export validation failed: \(diag)")
+                                completion(nil, "Export produced invalid video: \(diag)")
+                                return
+                            }
+                        } catch {
+                            print("VideoOverlayProcessor: Could not inspect output file: \(error)")
+                        }
                         print("VideoOverlayProcessor: Export completed successfully")
                         completion(outputPath, nil)
                     } else {

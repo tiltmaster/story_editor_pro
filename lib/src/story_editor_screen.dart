@@ -699,6 +699,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }
   }
 
+  bool _requiresVideoExport() {
+    final hasOverlay = _textOverlays.isNotEmpty || _drawings.isNotEmpty || _imageOverlays.isNotEmpty;
+    final hasFilter = widget.initialFilterPreset != StoryEditorFilters.none && widget.initialFilterStrength > 0.01;
+    return hasOverlay || hasFilter || widget.flipHorizontally;
+  }
+
   Future<Uint8List> _captureImageAtStoryCanvas() async {
     final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (boundary == null) {
@@ -2657,6 +2663,22 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     try {
       if (_mediaType == MediaType.video) {
+        if (!_requiresVideoExport()) {
+          debugPrint('VideoOverlayProcessor: No video edits detected, skipping export and using original file');
+          await PhotoManager.editor.saveVideo(
+            File(widget.mediaPath),
+            title: 'story_edited_${DateTime.now().millisecondsSinceEpoch}.mp4',
+          );
+          if (mounted) {
+            _showSavedModal();
+            setState(() {
+              _isSaving = false;
+              _isSharing = false;
+            });
+          }
+          return;
+        }
+
         // VIDEO: Briefly pause to capture overlay, then resume playback
         final stopwatch = Stopwatch()..start();
         _videoController?.pause();
@@ -2808,6 +2830,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       StoryMediaType resultMediaType;
 
       if (_mediaType == MediaType.video) {
+        if (!_requiresVideoExport()) {
+          debugPrint('VideoOverlayProcessor: No video edits detected, skipping export and returning original file');
+          filePath = widget.mediaPath;
+          resultMediaType = StoryMediaType.video;
+        } else {
         // VIDEO: Pause video briefly to capture overlay, then resume
         final stopwatch = Stopwatch()..start();
         _videoController?.pause();
@@ -2833,8 +2860,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           throw Exception('Video export failed: $details');
         }
 
-        filePath = exportedPath;
-        resultMediaType = StoryMediaType.video;
+          filePath = exportedPath;
+          resultMediaType = StoryMediaType.video;
+        }
       } else {
         // IMAGE: Export on fixed story canvas (e.g. 1080x1920)
         final pngBytes = await _captureImageAtStoryCanvas();
