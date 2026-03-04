@@ -114,6 +114,8 @@ class VideoOverlayProcessor {
                 track: videoTrack,
                 renderSize: renderSize
             )
+            print("VideoOverlayProcessor: source naturalSize=\(videoTrack.naturalSize), preferredTransform=\(videoTrack.preferredTransform)")
+            print("VideoOverlayProcessor: renderSize=\(renderSize), computedTransform=\(transform)")
             if mirrorHorizontally {
                 let mirror = CGAffineTransform(translationX: renderSize.width, y: 0).scaledBy(x: -1, y: 1)
                 transform = transform.concatenating(mirror)
@@ -425,9 +427,16 @@ class VideoOverlayProcessor {
         let scaledHeight = orientedSize.height * scale
         let tx = (renderSize.width - scaledWidth) / 2.0
         let ty = (renderSize.height - scaledHeight) / 2.0
-
-        return preferred
-            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            .concatenating(CGAffineTransform(translationX: tx, y: ty))
+        
+        // Avoid scaling translation terms, which can push content fully off-canvas
+        // on some iOS exports and result in black video with audio-only playback.
+        var scaled = preferred
+        scaled.a *= scale
+        scaled.b *= scale
+        scaled.c *= scale
+        scaled.d *= scale
+        scaled.tx += tx
+        scaled.ty += ty
+        return scaled
     }
 }
