@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_C"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_D"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -63,6 +63,17 @@ class VideoOverlayProcessor {
             let inputAudioTracks = asset.tracks(withMediaType: .audio).count
             print("VideoOverlayProcessor: Input duration=\(inputDuration)s, videoTracks=\(inputVideoTracks), audioTracks=\(inputAudioTracks), filtered=\(tempFilteredURL != nil)")
 
+            // Always load the ORIGINAL video track for orientation/transform calculations.
+            // exportFilteredVideo (AVVideoComposition block-based) pre-orients pixel content
+            // but the output track still carries the original preferredTransform metadata,
+            // which would cause makeVideoTransform to double-rotate → off-canvas → black video.
+            let originalAsset = AVAsset(url: videoURL)
+            guard let orientationTrack = originalAsset.tracks(withMediaType: .video).first else {
+                print("VideoOverlayProcessor: No video track found in original file")
+                DispatchQueue.main.async { completion(nil, "No video track found in original file.") }
+                return
+            }
+
             // 1. Create mutable composition
             let composition = AVMutableComposition()
 
@@ -96,12 +107,13 @@ class VideoOverlayProcessor {
                 try? compositionAudioTrack.insertTimeRange(timeRange, of: audioTrack, at: .zero)
             }
 
-            // 4. Calculate render size (requested target wins, else source-based size)
+            // 4. Calculate render size using original track (not filtered) to avoid
+            //    orientation metadata mismatch after the filter pre-pass.
             let renderSize: CGSize
             if let outputWidth = outputWidth, let outputHeight = outputHeight, outputWidth > 0, outputHeight > 0 {
                 renderSize = CGSize(width: outputWidth, height: outputHeight)
             } else {
-                renderSize = self.calculateRenderSize(track: videoTrack)
+                renderSize = self.calculateRenderSize(track: orientationTrack)
             }
 
             // 5. Create video composition
@@ -117,10 +129,10 @@ class VideoOverlayProcessor {
                 assetTrack: compositionVideoTrack
             )
             var transform = self.makeVideoTransform(
-                track: videoTrack,
+                track: orientationTrack,
                 renderSize: renderSize
             )
-            print("VideoOverlayProcessor: source naturalSize=\(videoTrack.naturalSize), preferredTransform=\(videoTrack.preferredTransform)")
+            print("VideoOverlayProcessor: source naturalSize=\(orientationTrack.naturalSize), preferredTransform=\(orientationTrack.preferredTransform)")
             print("VideoOverlayProcessor: renderSize=\(renderSize), computedTransform=\(transform)")
             if mirrorHorizontally {
                 let mirror = CGAffineTransform(translationX: renderSize.width, y: 0).scaledBy(x: -1, y: 1)
