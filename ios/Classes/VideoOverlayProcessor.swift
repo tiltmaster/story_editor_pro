@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_B"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_C"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -143,11 +143,14 @@ class VideoOverlayProcessor {
 
             parentLayer.frame = CGRect(origin: .zero, size: renderSize)
             parentLayer.masksToBounds = true
-            // Keep video layer in default geometry to avoid black-frame exports on some iOS devices.
-            // We flip only overlay layer coordinates to match Flutter's top-left origin.
-            parentLayer.isGeometryFlipped = false
+            // AVVideoCompositionCoreAnimationTool composites in AVFoundation's y-up coordinate system.
+            // isGeometryFlipped = true on the parent makes the CALayer coordinate system match,
+            // which is required to prevent video frames from being rendered off-canvas (black video).
+            parentLayer.isGeometryFlipped = true
             videoLayer.frame = CGRect(origin: .zero, size: renderSize)
             overlayLayer.contents = overlayImage.cgImage
+            // isGeometryFlipped = true on the overlay counteracts the parent flip so that the
+            // UIKit PNG image (y-down / top-left origin) appears in its correct orientation.
             overlayLayer.isGeometryFlipped = true
 
             // Scale overlay to cover renderSize while preserving aspect ratio (center crop)
