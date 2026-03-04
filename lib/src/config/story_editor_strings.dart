@@ -47,6 +47,26 @@ class StoryEditorStrings {
   final String cameraPhoto;
   final String cameraVideo;
   final String cameraBoomerang;
+  final String cameraFilterNormal;
+  final String cameraFilterVivid;
+  final String cameraFilterWarm;
+  final String cameraFilterCool;
+  final String cameraFilterSunset;
+  final String cameraFilterFade;
+  final String cameraFilterMono;
+  final String cameraFilterNoir;
+  final String cameraFilterDream;
+  final String cameraFilterVignette;
+  final String cameraFilter2044;
+  final String cameraFilterCinematic;
+  final String cameraFilterTealOrange;
+  final String cameraFilterBulge;
+  final String cameraFilterSwirl;
+  final String cameraFilterPortraitPop;
+  final String cameraFilterNightNeon;
+  final String cameraFilterProductCrisp;
+  final String cameraFilterFilmicFade;
+  final String cameraFilterPastelMist;
 
   // ============ Gradient Text Editor ============
   final String gradientBalance;
@@ -120,6 +140,26 @@ class StoryEditorStrings {
     this.cameraPhoto = 'Photo',
     this.cameraVideo = 'Video',
     this.cameraBoomerang = 'Boomerang',
+    this.cameraFilterNormal = 'Normal',
+    this.cameraFilterVivid = 'Vivid',
+    this.cameraFilterWarm = 'Warm',
+    this.cameraFilterCool = 'Cool',
+    this.cameraFilterSunset = 'Sunset',
+    this.cameraFilterFade = 'Fade',
+    this.cameraFilterMono = 'Mono',
+    this.cameraFilterNoir = 'Noir',
+    this.cameraFilterDream = 'Dream',
+    this.cameraFilterVignette = 'Vignette',
+    this.cameraFilter2044 = '2044',
+    this.cameraFilterCinematic = 'Cinematic',
+    this.cameraFilterTealOrange = 'Teal Orange',
+    this.cameraFilterBulge = 'Bulge',
+    this.cameraFilterSwirl = 'Swirl',
+    this.cameraFilterPortraitPop = 'Portrait Pop',
+    this.cameraFilterNightNeon = 'Night Neon',
+    this.cameraFilterProductCrisp = 'Product Crisp',
+    this.cameraFilterFilmicFade = 'Filmic Fade',
+    this.cameraFilterPastelMist = 'Pastel Mist',
 
     // ─────────────────────────────────────────────────────────────
     // Gradient Text Editor
@@ -162,8 +202,50 @@ class StoryEditorStrings {
   String formatStartAfter(int seconds) => '$cameraStartAfter ${seconds}s';
 
   /// Format people count: "5 people"
-  String formatPeopleCount(int count) => '$count people';
+  String formatPeopleCount(int count) => editorPeopleCount.replaceFirst('0', '$count');
 
   /// Format error with details
   String formatError(String baseError, String details) => '$baseError: $details';
+
+  String filterNameForPreset(String presetId) {
+    switch (presetId) {
+      case 'vivid':
+        return cameraFilterVivid;
+      case 'warm':
+        return cameraFilterWarm;
+      case 'cool':
+        return cameraFilterCool;
+      case 'sunset':
+        return cameraFilterSunset;
+      case 'fade':
+        return cameraFilterFade;
+      case 'mono':
+        return cameraFilterMono;
+      case 'noir':
+        return cameraFilterNoir;
+      case 'dream':
+        return cameraFilterDream;
+      case 'vignette':
+        return cameraFilterVignette;
+      case 'retro2044':
+        return cameraFilter2044;
+      case 'cinematic':
+        return cameraFilterCinematic;
+      case 'tealorange':
+        return cameraFilterTealOrange;
+      case 'portraitpop':
+        return cameraFilterPortraitPop;
+      case 'nightneon':
+        return cameraFilterNightNeon;
+      case 'productcrisp':
+        return cameraFilterProductCrisp;
+      case 'filmicfade':
+        return cameraFilterFilmicFade;
+      case 'pastelmist':
+        return cameraFilterPastelMist;
+      case 'none':
+      default:
+        return cameraFilterNormal;
+    }
+  }
 }

@@ -39,8 +39,48 @@ class TextureRenderer {
             precision mediump float;
             varying vec2 vTexCoord;
             uniform samplerExternalOES uTexture;
+            uniform float uBrightness;
+            uniform float uContrast;
+            uniform float uSaturation;
+            uniform vec3 uChannelScale;
+            uniform float uVignette;
+            uniform float uWarpMode;
+            uniform float uWarpAmount;
             void main() {
-                gl_FragColor = texture2D(uTexture, vTexCoord);
+                vec2 uv = vTexCoord;
+                vec2 center = vec2(0.5, 0.5);
+                vec2 delta = uv - center;
+                float r = length(delta);
+                if (uWarpMode > 0.5 && uWarpMode < 1.5) {
+                    float amount = uWarpAmount * (1.0 - smoothstep(0.0, 0.65, r));
+                    uv = uv - delta * amount;
+                } else if (uWarpMode >= 1.5) {
+                    float angle = uWarpAmount * (1.0 - smoothstep(0.0, 0.7, r));
+                    float s = sin(angle);
+                    float c = cos(angle);
+                    delta = vec2(delta.x * c - delta.y * s, delta.x * s + delta.y * c);
+                    uv = center + delta;
+                }
+                uv = clamp(uv, 0.0, 1.0);
+
+                vec4 tex = texture2D(uTexture, uv);
+                vec3 color = tex.rgb;
+
+                color = (color - 0.5) * uContrast + 0.5;
+
+                float luma = dot(color, vec3(0.299, 0.587, 0.114));
+                color = mix(vec3(luma), color, uSaturation);
+
+                color = color + vec3(uBrightness);
+                color = color * uChannelScale;
+                if (uVignette > 0.001) {
+                    float dist = distance(vTexCoord, center);
+                    float vig = smoothstep(0.35, 0.82, dist);
+                    color *= (1.0 - vig * uVignette);
+                }
+                color = clamp(color, 0.0, 1.0);
+
+                gl_FragColor = vec4(color, tex.a);
             }
         """
 
@@ -86,6 +126,16 @@ class TextureRenderer {
 
     private var outputWidth = 0
     private var outputHeight = 0
+    private var mirrorVideoHorizontally = false
+    private var filterBrightness = 0f
+    private var filterContrast = 1f
+    private var filterSaturation = 1f
+    private var filterRed = 1f
+    private var filterGreen = 1f
+    private var filterBlue = 1f
+    private var filterVignette = 0f
+    private var filterWarpMode = 0f
+    private var filterWarpAmount = 0f
 
     init {
         vertexBuffer = createFloatBuffer(QUAD_VERTICES)
@@ -177,6 +227,32 @@ class TextureRenderer {
         Log.d(TAG, "Overlay texture uploaded: ${bitmap.width}x${bitmap.height}")
     }
 
+    fun setMirrorVideoHorizontally(enabled: Boolean) {
+        mirrorVideoHorizontally = enabled
+    }
+
+    fun setColorFilter(
+        brightness: Float,
+        contrast: Float,
+        saturation: Float,
+        red: Float,
+        green: Float,
+        blue: Float,
+        vignette: Float = 0f,
+        warpMode: Float = 0f,
+        warpAmount: Float = 0f,
+    ) {
+        filterBrightness = brightness
+        filterContrast = contrast
+        filterSaturation = saturation
+        filterRed = red
+        filterGreen = green
+        filterBlue = blue
+        filterVignette = vignette
+        filterWarpMode = warpMode
+        filterWarpAmount = warpAmount
+    }
+
     /**
      * Get the video texture ID for SurfaceTexture
      */
@@ -196,7 +272,17 @@ class TextureRenderer {
         // Draw video frame (OES texture)
         val texMatrix = FloatArray(16)
         surfaceTexture.getTransformMatrix(texMatrix)
-        drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texMatrix)
+        if (mirrorVideoHorizontally) {
+            val mirrorMatrix = FloatArray(16)
+            android.opengl.Matrix.setIdentityM(mirrorMatrix, 0)
+            android.opengl.Matrix.translateM(mirrorMatrix, 0, 1f, 0f, 0f)
+            android.opengl.Matrix.scaleM(mirrorMatrix, 0, -1f, 1f, 1f)
+            val combined = FloatArray(16)
+            android.opengl.Matrix.multiplyMM(combined, 0, texMatrix, 0, mirrorMatrix, 0)
+            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, combined)
+        } else {
+            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texMatrix)
+        }
 
         // Draw overlay on top (2D texture with alpha blending)
         GLES20.glEnable(GLES20.GL_BLEND)
@@ -241,6 +327,21 @@ class TextureRenderer {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(textureTarget, textureId)
         GLES20.glUniform1i(textureLoc, 0)
+
+        val brightnessLoc = GLES20.glGetUniformLocation(program, "uBrightness")
+        if (brightnessLoc >= 0) GLES20.glUniform1f(brightnessLoc, filterBrightness)
+        val contrastLoc = GLES20.glGetUniformLocation(program, "uContrast")
+        if (contrastLoc >= 0) GLES20.glUniform1f(contrastLoc, filterContrast)
+        val saturationLoc = GLES20.glGetUniformLocation(program, "uSaturation")
+        if (saturationLoc >= 0) GLES20.glUniform1f(saturationLoc, filterSaturation)
+        val channelScaleLoc = GLES20.glGetUniformLocation(program, "uChannelScale")
+        if (channelScaleLoc >= 0) GLES20.glUniform3f(channelScaleLoc, filterRed, filterGreen, filterBlue)
+        val vignetteLoc = GLES20.glGetUniformLocation(program, "uVignette")
+        if (vignetteLoc >= 0) GLES20.glUniform1f(vignetteLoc, filterVignette)
+        val warpModeLoc = GLES20.glGetUniformLocation(program, "uWarpMode")
+        if (warpModeLoc >= 0) GLES20.glUniform1f(warpModeLoc, filterWarpMode)
+        val warpAmountLoc = GLES20.glGetUniformLocation(program, "uWarpAmount")
+        if (warpAmountLoc >= 0) GLES20.glUniform1f(warpAmountLoc, filterWarpAmount)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 

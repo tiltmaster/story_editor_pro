@@ -13,6 +13,7 @@ import 'boomerang_recorder.dart';
 import 'gradient_text_editor.dart';
 import 'camera_settings_screen.dart';
 import 'config/story_editor_config.dart';
+import 'config/story_editor_filters.dart';
 import 'models/story_result.dart';
 
 /// Layout types - Instagram Layout style collage layouts
@@ -122,7 +123,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   // Boomerang state
   bool _isBoomerangMode = false;
-  static const int _boomerangMaxSeconds = 4; // Max 4 seconds
+  int get _boomerangMaxSeconds => context.storyEditorConfig.maxBoomerangSeconds;
 
   // Video recording state
   bool _isVideoRecording = false;
@@ -167,6 +168,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // Animation controller (for boomerang button)
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  late final PageController _filterPageController;
+  int _activeFilterIndex = 0;
+  double _activeFilterStrength = 0.95;
+
+  bool get _isFrontCameraActive {
+    if (_cameras.isEmpty) return false;
+    if (_currentCameraIndex < 0 || _currentCameraIndex >= _cameras.length) return false;
+    return _cameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
+  }
+
+  StoryFilterPreset get _activeFilterPreset => StoryEditorFilters.presets[_activeFilterIndex];
+  String get _activeFilterId => _activeFilterPreset.id;
+  bool get _hasActiveFilter => _activeFilterId != StoryEditorFilters.none;
 
   @override
   void initState() {
@@ -182,6 +196,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
     _pulseController.repeat(reverse: true);
+    _filterPageController = PageController(
+      viewportFraction: 0.18,
+      initialPage: _activeFilterIndex,
+    );
+    _filterPageController.addListener(_onFilterScroll);
 
     _loadSettings();
     _requestPermissionsAndInitialize();
@@ -276,7 +295,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _handsFreeCountdownTimer?.cancel();
     _handsFreeRecordingTimer?.cancel();
     _pulseController.dispose();
+    _filterPageController.removeListener(_onFilterScroll);
+    _filterPageController.dispose();
     super.dispose();
+  }
+
+  void _onFilterScroll() {
+    if (!_filterPageController.hasClients) return;
+    final page = _filterPageController.page;
+    if (page == null) return;
+    final nextIndex = page.round().clamp(0, StoryEditorFilters.presets.length - 1);
+    if (nextIndex != _activeFilterIndex && mounted) {
+      setState(() => _activeFilterIndex = nextIndex);
+    }
+  }
+
+  void _resetFilterSelection() {
+    if (_activeFilterIndex != 0 && mounted) {
+      setState(() => _activeFilterIndex = 0);
+    }
+    if (_filterPageController.hasClients) {
+      _filterPageController.jumpToPage(0);
+    }
   }
 
   @override
@@ -583,6 +623,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     ),
                   ),
                 );
+                _resetFilterSelection();
                 // onStoryShare callback is called from StoryEditorScreen
               }
             } else if (selectedAsset.type == AssetType.video) {
@@ -645,6 +686,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 builder: (context) => StoryEditorScreen(
                   imagePath: imagePath,
                   primaryColor: widget.primaryColor,
+                  flipHorizontally: _isFrontCameraActive,
+                  initialFilterPreset: _activeFilterId,
+                  initialFilterStrength: _activeFilterStrength,
                   initialTextOverlay: pendingOverlay,
                   closeFriendsList: widget.closeFriendsList,
                   userProfileImageUrl: widget.userProfileImageUrl,
@@ -652,6 +696,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 ),
               ),
             );
+            _resetFilterSelection();
             // onStoryShare callback is called from StoryEditorScreen
           }
 
@@ -868,6 +913,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               ),
             ),
           );
+          _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         }
 
@@ -1175,12 +1221,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: videoPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
+                flipHorizontally: _isFrontCameraActive,
+                initialFilterPreset: _activeFilterId,
+                initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
               ),
             ),
           );
+          _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         } else {
           // No editor - call onStoryShare directly
@@ -1336,7 +1386,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         // Apply native boomerang effect
         final boomerangPath = await _createBoomerangEffect(
           videoPath,
-          maxDuration: recordedSeconds.clamp(0.5, _boomerangMaxSeconds.toDouble()),
+          // Keep processing responsive in boomerang mode.
+          maxDuration: recordedSeconds.clamp(0.5, 2.0),
         );
         final finalPath = boomerangPath ?? videoPath;
 
@@ -1354,12 +1405,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: finalPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
+                flipHorizontally: _isFrontCameraActive,
+                initialFilterPreset: _activeFilterId,
+                initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
               ),
             ),
           );
+          _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         } else {
           // No editor - call onStoryShare directly
@@ -1416,6 +1471,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         'outputPath': outputPath,
         'loopCount': config.boomerangLoopCount,
         'fps': config.boomerangFps,
+        'maxDuration': maxDuration,
       });
 
       if (result != null) {
@@ -1569,12 +1625,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: videoPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
+                flipHorizontally: _isFrontCameraActive,
+                initialFilterPreset: _activeFilterId,
+                initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
               ),
             ),
           );
+          _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         } else {
           // No editor - call onStoryShare directly
@@ -2214,9 +2274,34 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
     }
 
+    final config = StoryEditorConfigProvider.read(context);
+    final isFrontCamera = _cameras.isNotEmpty &&
+        _currentCameraIndex >= 0 &&
+        _currentCameraIndex < _cameras.length &&
+        _cameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
+
     return GestureDetector(
       onScaleStart: _onScaleStart,
       onScaleUpdate: _onScaleUpdate,
+      onHorizontalDragEnd: (details) {
+        if (_isVideoRecording || _isProcessingVideo || _isHandsFreeCountingDown) return;
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity.abs() < 120) return;
+        int next = _activeFilterIndex;
+        setState(() {
+          if (velocity < 0 && _activeFilterIndex < StoryEditorFilters.presets.length - 1) {
+            _activeFilterIndex++;
+          } else if (velocity > 0 && _activeFilterIndex > 0) {
+            _activeFilterIndex--;
+          }
+          next = _activeFilterIndex;
+        });
+        _filterPageController.animateToPage(
+          next,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
+      },
       child: LayoutBuilder(
         builder: (context, constraints) {
           // Use positioned area dimensions (excluding bottom bar)
@@ -2228,11 +2313,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           var scale = availableAspectRatio * cameraAspectRatio;
           if (scale < 1) scale = 1 / scale;
 
+          Widget preview = _buildLiveFilteredPreview(
+            CameraPreview(_cameraController!),
+            _activeFilterId,
+            _activeFilterStrength,
+          );
+
           return ClipRect(
             child: Transform.scale(
               scale: scale,
               alignment: Alignment.center,
-              child: Center(child: CameraPreview(_cameraController!)),
+              child: Center(
+                child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+                    ? Transform(
+                        alignment: Alignment.center,
+                        transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+                        child: preview,
+                      )
+                    : preview,
+              ),
             ),
           );
         },
@@ -2241,6 +2340,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Widget _buildPermissionDenied() {
+    final config = context.storyEditorConfig;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -2253,19 +2353,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               color: Colors.white54,
             ),
             const SizedBox(height: 24),
-            const Text(
-              'Camera Permission Required',
-              style: TextStyle(
+            Text(
+              config.strings.cameraPermissionRequired,
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 12),
-            const Text(
-              'We need camera access to create stories.',
+            Text(
+              config.strings.cameraPermissionDescription,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+              style: const TextStyle(color: Colors.white70, fontSize: 16),
             ),
             const SizedBox(height: 32),
             ElevatedButton(
@@ -2280,9 +2380,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   borderRadius: BorderRadius.circular(30),
                 ),
               ),
-              child: const Text(
-                'Grant Permission',
-                style: TextStyle(fontSize: 18, color: Colors.white),
+              child: Text(
+                config.strings.cameraGrantPermission,
+                style: const TextStyle(fontSize: 18, color: Colors.white),
               ),
             ),
           ],
@@ -2394,8 +2494,237 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       left: 0,
       right: 0,
       bottom: bottomOffset,
-      child: Center(child: captureButton),
+      child: Center(
+        child: (!_isBoomerangMode &&
+                !_isVideoRecording &&
+                !_isProcessingVideo &&
+                !_isHandsFreeCountingDown)
+            ? _buildIntegratedCaptureWithFilters(captureButton)
+            : captureButton,
+      ),
     );
+  }
+
+  Widget _buildIntegratedCaptureWithFilters(Widget captureButton) {
+    return SizedBox(
+      height: 126,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.center,
+              child: _buildFilterSelector(),
+            ),
+          ),
+          Center(child: captureButton),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterSelector() {
+    final strings = context.storyEditorConfig.strings;
+    final presets = StoryEditorFilters.presets;
+    const bubbleSize = 52.0;
+
+    return SizedBox(
+      height: 108,
+      child: PageView.builder(
+        controller: _filterPageController,
+        pageSnapping: true,
+        physics: const BouncingScrollPhysics(),
+        itemCount: presets.length,
+        itemBuilder: (context, index) {
+          final preset = presets[index];
+          return AnimatedBuilder(
+            animation: _filterPageController,
+            builder: (context, child) {
+              double page = _activeFilterIndex.toDouble();
+              if (_filterPageController.hasClients &&
+                  _filterPageController.position.hasPixels) {
+                page = _filterPageController.page ?? _activeFilterIndex.toDouble();
+              }
+              final distance = (page - index).abs();
+              final focus = (1.0 - distance).clamp(0.0, 1.0);
+              final scale = 0.82 + (0.22 * focus);
+              final selected = distance < 0.5;
+
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 7),
+                  child: SizedBox(
+                    width: bubbleSize + 8,
+                    height: 96,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.center,
+                      children: [
+                        Positioned(
+                          top: 0,
+                          left: -10,
+                          right: -10,
+                          child: selected
+                              ? const SizedBox.shrink()
+                              : Text(
+                                  strings.filterNameForPreset(preset.id),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Color.lerp(
+                                      Colors.white60,
+                                      Colors.white,
+                                      focus,
+                                    ),
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                        ),
+                        Transform.scale(
+                          scale: scale,
+                          child: Container(
+                            width: bubbleSize,
+                            height: bubbleSize,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Color.lerp(Colors.white38, Colors.white, focus) ??
+                                    Colors.white38,
+                                width: 1.1 + (1.5 * focus),
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black45,
+                                  blurRadius: 6,
+                                  spreadRadius: 0.5,
+                                ),
+                              ],
+                            ),
+                            child: ClipOval(
+                              child: Opacity(
+                                opacity: selected ? 0.95 : 0.72,
+                                child: _buildFilterBubblePreview(preset.id),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFilterBubblePreview(String filterId) {
+    if (_cameraController == null || !_isInitialized) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(color: Color(0xFF444444)),
+      );
+    }
+
+    final config = StoryEditorConfigProvider.read(context);
+    final isFrontCamera = _isFrontCameraActive;
+
+    final Widget preview = _buildLiveFilteredPreview(
+      CameraPreview(_cameraController!),
+      filterId,
+      _activeFilterStrength,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableAspectRatio = constraints.maxWidth / constraints.maxHeight;
+        final cameraAspectRatio = _cameraController!.value.aspectRatio;
+        var scale = availableAspectRatio * cameraAspectRatio;
+        if (scale < 1) scale = 1 / scale;
+
+        return ClipRect(
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.center,
+            child: Center(
+              child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+                  ? Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+                      child: preview,
+                    )
+                  : preview,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLiveFilteredPreview(
+    Widget basePreview,
+    String filterId,
+    double strength,
+  ) {
+    final s = strength.clamp(0.0, 1.0);
+
+    Widget buildBaseLayer() {
+      Widget layer = (_cameraController != null && _isInitialized)
+          ? CameraPreview(_cameraController!)
+          : basePreview;
+      if (filterId != StoryEditorFilters.none) {
+        layer = ColorFiltered(
+          colorFilter: StoryEditorFilters.colorFilter(filterId, s),
+          child: layer,
+        );
+      }
+      return layer;
+    }
+
+    Widget preview = buildBaseLayer();
+
+    final bool needsVignette = filterId == 'vignette' ||
+        filterId == 'cinematic' ||
+        filterId == 'nightneon' ||
+        filterId == 'filmicfade' ||
+        filterId == 'retro2044';
+    if (needsVignette) {
+      final vignetteOpacity = switch (filterId) {
+        'cinematic' => 0.48,
+        'nightneon' => 0.36,
+        'filmicfade' => 0.42,
+        'retro2044' => 0.30,
+        _ => 0.52,
+      } * s;
+      preview = Stack(
+        fit: StackFit.expand,
+        children: [
+          preview,
+          IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.center,
+                  radius: 0.95,
+                  colors: [
+                    Colors.transparent,
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: vignetteOpacity),
+                  ],
+                  stops: const [0.0, 0.58, 1.0],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return preview;
   }
 
   /// Old method - still used for Layout mode
@@ -2439,9 +2768,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildNormalCaptureButton() {
     final config = context.storyEditorConfig;
     final screenHeight = MediaQuery.of(context).size.height;
-    final double size = screenHeight < config.smallScreenBreakpoint
+    final double baseSize = screenHeight < config.smallScreenBreakpoint
         ? config.shutterButtonSizeSmall
         : config.shutterButtonSizeLarge;
+    final double size = baseSize * 0.9;
     final double strokeWidth = screenHeight < config.smallScreenBreakpoint ? 4 : 6;
     final Color recordingColor = config.recordingIndicatorColor;
 
@@ -2452,41 +2782,62 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final seconds = (_videoRecordingElapsedMs / 1000).floor();
     final timeString = '00:${seconds.toString().padLeft(2, '0')}';
 
-    return GestureDetector(
-      onTap: () {
-        // Short tap - take photo
-        if (!_isVideoRecording && !_isCapturing) {
-          _takePicture();
-        }
-      },
-      onLongPressStart: (details) {
-        // Long press - start video recording
-        if (!_isVideoRecording && !_isCapturing) {
-          _longPressStartY = details.globalPosition.dy;
-          _longPressZoomStart = _zoomLevel;
-          _startVideoRecording();
-        }
-      },
-      onLongPressMoveUpdate: (details) {
-        // Swipe up = zoom in, swipe down = zoom out
-        if (_isVideoRecording && _cameraController != null) {
-          final deltaY = _longPressStartY - details.globalPosition.dy;
-          // Every 100 pixels = 1x zoom change
-          final zoomDelta = deltaY / 100.0;
-          final newZoom = (_longPressZoomStart + zoomDelta).clamp(_minZoom, _maxZoom);
-          if (newZoom != _zoomLevel) {
-            setState(() => _zoomLevel = newZoom);
-            _cameraController!.setZoomLevel(_zoomLevel);
-          }
-        }
-      },
-      onLongPressEnd: (_) {
-        // Finger lifted - stop video recording
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerUp: (_) {
         if (_isVideoRecording) {
           _stopVideoRecording();
         }
       },
-      child: Column(
+      onPointerCancel: (_) {
+        if (_isVideoRecording) {
+          _stopVideoRecording();
+        }
+      },
+      child: GestureDetector(
+        onTap: () {
+          // Short tap - take photo
+          if (!_isVideoRecording && !_isCapturing) {
+            _takePicture();
+          }
+        },
+        onLongPressStart: (details) {
+          // Long press - start video recording
+          if (!_isVideoRecording && !_isCapturing) {
+            _longPressStartY = details.globalPosition.dy;
+            _longPressZoomStart = _zoomLevel;
+            _startVideoRecording();
+          }
+        },
+        onLongPressMoveUpdate: (details) {
+          // Swipe up = zoom in, swipe down = zoom out
+          if (_isVideoRecording && _cameraController != null) {
+            final deltaY = _longPressStartY - details.globalPosition.dy;
+            // Every 100 pixels = 1x zoom change
+            final zoomDelta = deltaY / 100.0;
+            final newZoom = (_longPressZoomStart + zoomDelta).clamp(_minZoom, _maxZoom);
+            if (newZoom != _zoomLevel) {
+              setState(() => _zoomLevel = newZoom);
+              _cameraController!.setZoomLevel(_zoomLevel);
+            }
+          }
+        },
+        onLongPressEnd: (_) {
+          if (_isVideoRecording) {
+            _stopVideoRecording();
+          }
+        },
+        onLongPressUp: () {
+          if (_isVideoRecording) {
+            _stopVideoRecording();
+          }
+        },
+        onLongPressCancel: () {
+          if (_isVideoRecording) {
+            _stopVideoRecording();
+          }
+        },
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           // Duration indicator - above button (only during recording)
@@ -2550,6 +2901,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -2557,7 +2909,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Special capture button for hands-free - same appearance as video recording
   Widget _buildHandsFreeCaptureButton() {
     final config = context.storyEditorConfig;
-    final double size = config.shutterButtonSizeLarge;
+    final double size = config.shutterButtonSizeLarge * 0.9;
     const double strokeWidth = 6;
     final Color recordingColor = config.recordingIndicatorColor;
 
@@ -2591,7 +2943,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             child: Text(
               _isVideoRecording
                   ? timeString
-                  : 'Start after ${_handsFreeDelaySeconds}s',
+                  : config.strings.formatStartAfter(_handsFreeDelaySeconds),
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 14,
@@ -2662,18 +3014,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Special capture button for boomerang - with circular progress indicator
   /// Instagram Boomerang colors: orange -> pink gradient
   Widget _buildBoomerangCaptureButton() {
-    const double size = 90;
+    const double size = 82;
     const double strokeWidth = 6;
+    final config = context.storyEditorConfig;
 
-    // Instagram Boomerang gradient colors
-    const boomerangGradient = LinearGradient(
+    final boomerangGradient = LinearGradient(
       begin: Alignment.topRight,
       end: Alignment.bottomLeft,
-      colors: [
-        Color(0xFFF77737), // Orange
-        Color(0xFFE1306C), // Pink
-        Color(0xFFC13584), // Dark pink
-      ],
+      colors: config.boomerangGradientColors,
     );
 
     return GestureDetector(
@@ -2713,8 +3061,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               child: Text(
                 _isProcessingVideo
                     ? (_isLayoutMode
-                          ? 'Processing image...'
-                          : 'Processing video...')
+                          ? config.strings.cameraProcessingImage
+                          : config.strings.cameraProcessingVideo)
                     : '${(_boomerangElapsedMs / 1000).toStringAsFixed(1)}s / ${_boomerangMaxSeconds}s',
                 style: TextStyle(
                   color: (_isVideoRecording || _isProcessingVideo)
@@ -2812,6 +3160,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Bottom bar - for Column structure (not Positioned)
   Widget _buildBottomBarRow() {
+    final config = StoryEditorConfigProvider.read(context);
     // Hide buttons during recording or processing
     final shouldHide = _isProcessingVideo || _isVideoRecording || _isLayoutProcessing || _isHandsFreeCountingDown;
 
@@ -2832,7 +3181,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _buildGalleryButton(),
+              config.showGalleryButton ? _buildGalleryButton() : const SizedBox(width: 40),
               if (!_isLayoutMode) _buildModeSelector(),
               if (_isLayoutMode) const SizedBox(width: 40),
               _buildIconButton(
@@ -2856,6 +3205,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Old _buildBottomBar - still used for Layout mode
   Widget _buildBottomBar() {
+    final config = StoryEditorConfigProvider.read(context);
     // Hide buttons during recording or processing
     final shouldHide = _isProcessingVideo || _isVideoRecording || _isLayoutProcessing || _isHandsFreeCountingDown;
 
@@ -2880,7 +3230,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                _buildGalleryButton(),
+                config.showGalleryButton ? _buildGalleryButton() : const SizedBox(width: 40),
                 // Hide mode selector in layout mode
                 if (!_isLayoutMode) _buildModeSelector(),
                 // SizedBox for spacing in layout mode
@@ -2997,11 +3347,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Widget _buildModeSelector() {
+    final config = context.storyEditorConfig;
     return SizedBox(
       height: 40,
       child: Center(
         child: Text(
-          'Story',
+          config.strings.cameraStory,
           style: const TextStyle(
             color: Colors.white,
             fontSize: 18,
@@ -3226,6 +3577,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   ),
                 ),
               );
+              _resetFilterSelection();
               // onStoryShare callback is called from StoryEditorScreen
             }
           },

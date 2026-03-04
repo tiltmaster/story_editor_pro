@@ -12,6 +12,7 @@ import 'gradient_text_editor.dart';
 import 'video_overlay_export_service.dart';
 import 'models/story_result.dart';
 import 'config/story_editor_config.dart';
+import 'config/story_editor_filters.dart';
 
 /// Media type - photo or video
 enum MediaType {
@@ -64,6 +65,11 @@ class StoryEditorScreen extends StatefulWidget {
   /// Callback when story is shared (returns StoryShareResult with file and selected friends)
   final Function(StoryShareResult result)? onShare;
 
+  /// Mirror media horizontally in editor/export (used for front-camera captures)
+  final bool flipHorizontally;
+  final String initialFilterPreset;
+  final double initialFilterStrength;
+
   const StoryEditorScreen({
     super.key,
     required String imagePath,
@@ -75,6 +81,9 @@ class StoryEditorScreen extends StatefulWidget {
     this.closeFriendsList = const [],
     this.userProfileImageUrl,
     this.onShare,
+    this.flipHorizontally = false,
+    this.initialFilterPreset = StoryEditorFilters.none,
+    this.initialFilterStrength = 0.95,
   }) : mediaPath = imagePath;
 
   @override
@@ -382,10 +391,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   /// Build background media (photo or video)
   Widget _buildBackgroundMedia() {
+    Widget mediaWidget;
     if (_mediaType == MediaType.video) {
       // Video background
       if (_isVideoInitialized && _videoController != null) {
-        return SizedBox.expand(
+        mediaWidget = SizedBox.expand(
           child: FittedBox(
             fit: BoxFit.cover,
             child: SizedBox(
@@ -397,7 +407,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         );
       } else {
         // Show loading while video is loading
-        return Container(
+        mediaWidget = Container(
           color: Colors.black,
           child: const Center(
             child: CircularProgressIndicator(color: Colors.white),
@@ -407,13 +417,31 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     } else {
       // Photo background
       // From gallery: fitWidth (fit to width), From camera: cover (fullscreen)
-      return Image.file(
+      mediaWidget = Image.file(
         File(widget.mediaPath),
         fit: widget.isFromGallery ? BoxFit.fitWidth : BoxFit.cover,
         width: double.infinity,
         height: widget.isFromGallery ? null : double.infinity,
       );
     }
+
+    if (widget.initialFilterPreset != StoryEditorFilters.none) {
+      mediaWidget = ColorFiltered(
+        colorFilter: StoryEditorFilters.colorFilter(
+          widget.initialFilterPreset,
+          widget.initialFilterStrength,
+        ),
+        child: mediaWidget,
+      );
+    }
+
+    if (!widget.flipHorizontally) return mediaWidget;
+
+    return Transform(
+      alignment: Alignment.center,
+      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+      child: mediaWidget,
+    );
   }
 
   /// Background image gesture handler - only works with two fingers
@@ -607,9 +635,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              'Image Settings',
-              style: TextStyle(
+            Text(
+              context.storyEditorConfig.strings.editorImageSettings,
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -624,14 +652,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     setState(() => _imageOverlays.removeAt(index));
                     Navigator.pop(context);
                   },
-                  child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                  child: Text(
+                    context.storyEditorConfig.strings.cameraDelete,
+                    style: const TextStyle(color: Colors.red),
+                  ),
                 ),
                 ElevatedButton(
                   onPressed: () => Navigator.pop(context),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: widget.primaryColor ?? Colors.blue,
                   ),
-                  child: const Text('OK', style: TextStyle(color: Colors.white)),
+                  child: Text(
+                    context.storyEditorConfig.strings.editorOk,
+                    style: const TextStyle(color: Colors.white),
+                  ),
                 ),
               ],
             ),
@@ -649,19 +683,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           as RenderRepaintBoundary?;
       if (boundary == null) return null;
 
-      // Calculate optimal pixelRatio based on video resolution
-      double pixelRatio = 1.0;
-      if (_mediaType == MediaType.video && _videoController != null && _videoController!.value.isInitialized) {
-        final videoSize = _videoController!.value.size;
-        final boundarySize = boundary.size;
-        if (boundarySize.width > 0) {
-          // Match overlay resolution to video's longest dimension
-          pixelRatio = (videoSize.width / boundarySize.width)
-              .clamp(1.0, 2.0); // Cap at 2.0 - video doesn't need 3x
-        }
-      } else {
-        pixelRatio = 3.0; // Keep high quality for images
-      }
+      // Match overlay capture to configured story canvas (e.g. 1080x1920).
+      final config = context.storyEditorConfig;
+      final boundarySize = boundary.size;
+      if (boundarySize.width <= 0) return null;
+      final targetWidth = config.storyCanvasWidth.toDouble();
+      final pixelRatio = (targetWidth / boundarySize.width).clamp(1.0, 3.0);
 
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -670,6 +697,38 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       debugPrint('VideoOverlayProcessor: Overlay capture error: $e');
       return null;
     }
+  }
+
+  Future<Uint8List> _captureImageAtStoryCanvas() async {
+    final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw Exception('Render boundary not found');
+    }
+
+    final config = context.storyEditorConfig;
+    final int canvasWidth = config.storyCanvasWidth;
+    final int canvasHeight = config.storyCanvasHeight;
+    final boundarySize = boundary.size;
+    if (boundarySize.width <= 0 || boundarySize.height <= 0) {
+      throw Exception('Invalid render boundary size');
+    }
+
+    final pixelRatio = (canvasWidth / boundarySize.width).clamp(1.0, 3.0);
+    final image = await boundary.toImage(pixelRatio: pixelRatio);
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final dstRect = Rect.fromLTWH(0, 0, canvasWidth.toDouble(), canvasHeight.toDouble());
+    canvas.drawImageRect(image, srcRect, dstRect, Paint());
+
+    final picture = recorder.endRecording();
+    final outputImage = await picture.toImage(canvasWidth, canvasHeight);
+    final byteData = await outputImage.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) {
+      throw Exception('Failed to convert image');
+    }
+    return byteData.buffer.asUint8List();
   }
 
   /// Create PNG image with gradient background + centered text
@@ -1179,9 +1238,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 const SizedBox(height: 20),
 
                 // Title
-                const Text(
-                  'Share',
-                  style: TextStyle(
+                Text(
+                  context.storyEditorConfig.strings.editorShare,
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
@@ -1231,22 +1290,22 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         ),
                         const SizedBox(width: 16),
                         // Text
-                        const Expanded(
+                        Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Your Story',
-                                style: TextStyle(
+                                context.storyEditorConfig.strings.editorYourStory,
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              SizedBox(height: 2),
+                              const SizedBox(height: 2),
                               Text(
-                                'And Facebook Story',
-                                style: TextStyle(
+                                context.storyEditorConfig.strings.editorFacebookStory,
+                                style: const TextStyle(
                                   color: Colors.grey,
                                   fontSize: 14,
                                 ),
@@ -1322,9 +1381,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
-                                'Close Friends',
-                                style: TextStyle(
+                              Text(
+                                context.storyEditorConfig.strings.editorCloseFriends,
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -1332,7 +1391,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '${widget.closeFriendsList.length} people',
+                                context.storyEditorConfig.strings.formatPeopleCount(widget.closeFriendsList.length),
                                 style: const TextStyle(
                                   color: Colors.grey,
                                   fontSize: 14,
@@ -2186,7 +2245,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                           textAlign: textAlign,
                                           maxLines: null,
                                           decoration: InputDecoration(
-                                            hintText: 'Enter text...',
+                                            hintText: context.storyEditorConfig.strings.editorEnterText,
                                             hintStyle: TextStyle(
                                               color: Colors.white38,
                                               fontSize: fontSize,
@@ -2611,9 +2670,17 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         final exportedPath = await VideoOverlayExportService.exportVideoWithOverlay(
           videoPath: widget.mediaPath,
           overlayPngBytes: overlayPng,
+          mirrorHorizontally: widget.flipHorizontally,
+          outputWidth: context.storyEditorConfig.storyCanvasWidth,
+          outputHeight: context.storyEditorConfig.storyCanvasHeight,
+          filterPreset: widget.initialFilterPreset,
+          filterStrength: widget.initialFilterStrength,
         );
         debugPrint('VideoOverlayProcessor: Total export: ${stopwatch.elapsedMilliseconds}ms');
-        if (exportedPath == null) throw Exception('Video export failed');
+        if (exportedPath == null) {
+          final details = VideoOverlayExportService.lastExportError ?? 'unknown native error';
+          throw Exception('Video export failed: $details');
+        }
 
         // Save video to gallery
         await PhotoManager.editor.saveVideo(
@@ -2621,15 +2688,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           title: 'story_edited_${DateTime.now().millisecondsSinceEpoch}.mp4',
         );
       } else {
-        // IMAGE: Existing logic
-        final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-        if (boundary == null) throw Exception('Render boundary not found');
-
-        final image = await boundary.toImage(pixelRatio: 3.0);
-        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (byteData == null) throw Exception('Failed to convert image');
-
-        final Uint8List pngBytes = byteData.buffer.asUint8List();
+        // IMAGE: Export on fixed story canvas (e.g. 1080x1920)
+        final Uint8List pngBytes = await _captureImageAtStoryCanvas();
 
         final tempDir = Directory.systemTemp;
         final fileName = 'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
@@ -2761,22 +2821,23 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         final exportedPath = await VideoOverlayExportService.exportVideoWithOverlay(
           videoPath: widget.mediaPath,
           overlayPngBytes: overlayPng,
+          mirrorHorizontally: widget.flipHorizontally,
+          outputWidth: context.storyEditorConfig.storyCanvasWidth,
+          outputHeight: context.storyEditorConfig.storyCanvasHeight,
+          filterPreset: widget.initialFilterPreset,
+          filterStrength: widget.initialFilterStrength,
         );
         debugPrint('VideoOverlayProcessor: Total export: ${stopwatch.elapsedMilliseconds}ms');
-        if (exportedPath == null) throw Exception('Video export failed');
+        if (exportedPath == null) {
+          final details = VideoOverlayExportService.lastExportError ?? 'unknown native error';
+          throw Exception('Video export failed: $details');
+        }
 
         filePath = exportedPath;
         resultMediaType = StoryMediaType.video;
       } else {
-        // IMAGE: Existing logic
-        final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-        if (boundary == null) throw Exception('Render boundary not found');
-
-        final image = await boundary.toImage(pixelRatio: 3.0);
-        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (byteData == null) throw Exception('Failed to convert image');
-
-        final pngBytes = byteData.buffer.asUint8List();
+        // IMAGE: Export on fixed story canvas (e.g. 1080x1920)
+        final pngBytes = await _captureImageAtStoryCanvas();
         final tempDir = Directory.systemTemp;
         final fileName = 'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
         final file = File('${tempDir.path}/$fileName');
@@ -2816,7 +2877,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       if (mounted) {
         if (_mediaType == MediaType.video) _videoController?.play();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not save: $e')),
+          SnackBar(content: Text('${context.storyEditorConfig.strings.editorCouldNotSave}: $e')),
         );
       }
     }

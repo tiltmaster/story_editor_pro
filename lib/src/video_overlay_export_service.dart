@@ -10,6 +10,10 @@ import 'package:path_provider/path_provider.dart';
 /// Android: MediaCodec + Surface + Canvas
 class VideoOverlayExportService {
   static const MethodChannel _channel = MethodChannel('story_editor_pro');
+  static String? _lastExportError;
+
+  /// Last export error details (if any).
+  static String? get lastExportError => _lastExportError;
 
   /// Export video with overlay PNG baked in.
   ///
@@ -19,7 +23,13 @@ class VideoOverlayExportService {
   static Future<String?> exportVideoWithOverlay({
     required String videoPath,
     required Uint8List overlayPngBytes,
+    bool mirrorHorizontally = false,
+    int? outputWidth,
+    int? outputHeight,
+    String filterPreset = 'none',
+    double filterStrength = 1.0,
   }) async {
+    _lastExportError = null;
     try {
       final sw = Stopwatch()..start();
       final tempDir = await getTemporaryDirectory();
@@ -41,6 +51,11 @@ class VideoOverlayExportService {
           'videoPath': videoPath,
           'overlayImagePath': overlayPath,
           'outputPath': outputPath,
+          'mirrorHorizontally': mirrorHorizontally,
+          'outputWidth': outputWidth,
+          'outputHeight': outputHeight,
+          'filterPreset': filterPreset,
+          'filterStrength': filterStrength,
         },
       );
 
@@ -59,13 +74,21 @@ class VideoOverlayExportService {
         }
       }
 
-      debugPrint('VideoOverlayProcessor: Export returned null');
+      _lastExportError = 'Native export returned no output file path.';
+      debugPrint('VideoOverlayProcessor: $_lastExportError');
       return null;
     } on PlatformException catch (e) {
-      debugPrint('VideoOverlayProcessor: Platform error: ${e.message}');
+      final details = [
+        if (e.code.isNotEmpty) 'code=${e.code}',
+        if (e.message != null && e.message!.isNotEmpty) 'message=${e.message}',
+        if (e.details != null) 'details=${e.details}',
+      ].join(', ');
+      _lastExportError = details.isEmpty ? 'PlatformException with no details.' : details;
+      debugPrint('VideoOverlayProcessor: Platform error: $_lastExportError');
       return null;
     } catch (e) {
-      debugPrint('VideoOverlayProcessor: Error: $e');
+      _lastExportError = e.toString();
+      debugPrint('VideoOverlayProcessor: Error: $_lastExportError');
       return null;
     }
   }

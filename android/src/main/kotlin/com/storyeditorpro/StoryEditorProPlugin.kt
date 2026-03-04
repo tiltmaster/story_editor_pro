@@ -88,6 +88,7 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         val outputPath = call.argument<String>("outputPath")
         val loopCount = call.argument<Int>("loopCount") ?: 3
         val fps = call.argument<Int>("fps") ?: 30
+        val maxDuration = call.argument<Double>("maxDuration") ?: 2.0
 
         if (inputPath == null || outputPath == null) {
             result.error("INVALID_ARGS", "inputPath and outputPath are required", null)
@@ -102,7 +103,8 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     inputPath = inputPath,
                     outputPath = outputPath,
                     loopCount = loopCount,
-                    fps = fps
+                    fps = fps,
+                    maxDurationSeconds = maxDuration
                 )
 
                 activity?.runOnUiThread {
@@ -449,6 +451,11 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         val videoPath = call.argument<String>("videoPath")
         val overlayImagePath = call.argument<String>("overlayImagePath")
         val outputPath = call.argument<String>("outputPath")
+        val mirrorHorizontally = call.argument<Boolean>("mirrorHorizontally") ?: false
+        val outputWidth = call.argument<Int>("outputWidth")
+        val outputHeight = call.argument<Int>("outputHeight")
+        val filterPreset = call.argument<String>("filterPreset") ?: "none"
+        val filterStrength = call.argument<Double>("filterStrength") ?: 1.0
 
         if (videoPath == null || overlayImagePath == null || outputPath == null) {
             result.error("INVALID_ARGS",
@@ -463,15 +470,27 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val output = processor.exportVideoWithOverlay(
                     videoPath = videoPath,
                     overlayImagePath = overlayImagePath,
-                    outputPath = outputPath
+                    outputPath = outputPath,
+                    mirrorHorizontally = mirrorHorizontally,
+                    outputWidth = outputWidth,
+                    outputHeight = outputHeight,
+                    filterPreset = filterPreset,
+                    filterStrength = filterStrength
                 )
 
                 activity?.runOnUiThread {
                     if (output != null) {
                         result.success(output)
                     } else {
+                        val details = mapOf(
+                            "videoPath" to videoPath,
+                            "overlayImagePath" to overlayImagePath,
+                            "outputPath" to outputPath,
+                            "processorError" to processor.lastError
+                        )
                         result.error("EXPORT_FAILED",
-                            "Failed to export video with overlay", null)
+                            processor.lastError ?: "Failed to export video with overlay",
+                            details)
                     }
                 }
             } catch (e: Exception) {

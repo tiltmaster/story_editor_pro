@@ -21,6 +21,8 @@ import java.nio.ByteBuffer
  * Audio is passthrough-muxed in single pass (no temp file).
  */
 class VideoOverlayProcessor {
+    var lastError: String? = null
+        private set
 
     companion object {
         private const val TAG = "VideoOverlayProcessor"
@@ -31,8 +33,14 @@ class VideoOverlayProcessor {
         videoPath: String,
         overlayImagePath: String,
         outputPath: String,
+        mirrorHorizontally: Boolean = false,
+        outputWidth: Int? = null,
+        outputHeight: Int? = null,
+        filterPreset: String = "none",
+        filterStrength: Double = 1.0,
         onProgress: ((Double) -> Unit)? = null
     ): String? {
+        lastError = null
         Log.d(TAG, "========================================")
         Log.d(TAG, "Starting GPU-accelerated video overlay export")
         Log.d(TAG, "Video: $videoPath")
@@ -41,14 +49,16 @@ class VideoOverlayProcessor {
         Log.d(TAG, "========================================")
 
         if (!File(videoPath).exists()) {
-            Log.e(TAG, "Video file does not exist")
+            lastError = "Video file does not exist: $videoPath"
+            Log.e(TAG, lastError!!)
             return null
         }
 
         val overlayDecodeStart = System.currentTimeMillis()
         val overlayBitmap = BitmapFactory.decodeFile(overlayImagePath)
         if (overlayBitmap == null) {
-            Log.e(TAG, "Failed to decode overlay image")
+            lastError = "Failed to decode overlay image: $overlayImagePath"
+            Log.e(TAG, lastError!!)
             return null
         }
         Log.d(TAG, "Overlay decoded: ${overlayBitmap.width}x${overlayBitmap.height} in ${System.currentTimeMillis() - overlayDecodeStart}ms")
@@ -76,7 +86,8 @@ class VideoOverlayProcessor {
 
             val videoTrackIndex = findTrack(videoExtractor, "video/")
             if (videoTrackIndex < 0) {
-                Log.e(TAG, "No video track found")
+                lastError = "No video track found in input."
+                Log.e(TAG, lastError!!)
                 overlayBitmap.recycle()
                 return null
             }
@@ -96,30 +107,35 @@ class VideoOverlayProcessor {
                 inputFormat.getInteger(MediaFormat.KEY_FRAME_RATE)
             } else 30
 
-            // Output dimensions (swap if rotated 90/270)
-            val outputWidth: Int
-            val outputHeight: Int
-            if (rotation == 90 || rotation == 270) {
-                outputWidth = (inputHeight / 16) * 16
-                outputHeight = (inputWidth / 16) * 16
+            // Output dimensions:
+            // 1) Use requested target size if provided (e.g. 1080x1920),
+            // 2) Otherwise derive from source and rotation.
+            val resolvedOutputWidth: Int
+            val resolvedOutputHeight: Int
+            if ((outputWidth ?: 0) > 0 && (outputHeight ?: 0) > 0) {
+                resolvedOutputWidth = outputWidth!!
+                resolvedOutputHeight = outputHeight!!
+            } else if (rotation == 90 || rotation == 270) {
+                resolvedOutputWidth = (inputHeight / 16) * 16
+                resolvedOutputHeight = (inputWidth / 16) * 16
             } else {
-                outputWidth = (inputWidth / 16) * 16
-                outputHeight = (inputHeight / 16) * 16
+                resolvedOutputWidth = (inputWidth / 16) * 16
+                resolvedOutputHeight = (inputHeight / 16) * 16
             }
 
             Log.d(TAG, "Input: ${inputWidth}x${inputHeight}, rotation=$rotation")
-            Log.d(TAG, "Output: ${outputWidth}x${outputHeight}, fps=$frameRate, duration=${durationUs/1000}ms")
+            Log.d(TAG, "Output: ${resolvedOutputWidth}x${resolvedOutputHeight}, fps=$frameRate, duration=${durationUs/1000}ms")
 
             // Scale overlay with aspect ratio preserved (cover + center crop)
-            val scaledOverlay = scaleOverlayCoverCrop(overlayBitmap, outputWidth, outputHeight)
+            val scaledOverlay = scaleOverlayCoverCrop(overlayBitmap, resolvedOutputWidth, resolvedOutputHeight)
             overlayBitmap.recycle()
 
             onProgress?.invoke(0.05)
 
             // 2. Setup encoder (lower bitrate for faster encoding)
-            val bitRate = minOf(4_000_000, outputWidth * outputHeight * 2) // 4Mbps max, adaptive
+            val bitRate = minOf(4_000_000, resolvedOutputWidth * resolvedOutputHeight * 2) // 4Mbps max, adaptive
             val encoderFormat = MediaFormat.createVideoFormat(
-                MediaFormat.MIMETYPE_VIDEO_AVC, outputWidth, outputHeight
+                MediaFormat.MIMETYPE_VIDEO_AVC, resolvedOutputWidth, resolvedOutputHeight
             ).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
@@ -134,8 +150,21 @@ class VideoOverlayProcessor {
 
             // 3. Setup OpenGL renderer (connects to encoder's Surface)
             renderer = TextureRenderer()
-            renderer.init(encoderInputSurface, outputWidth, outputHeight)
+            renderer.init(encoderInputSurface, resolvedOutputWidth, resolvedOutputHeight)
             renderer.setOverlayBitmap(scaledOverlay)
+            renderer.setMirrorVideoHorizontally(mirrorHorizontally)
+            val filter = resolveFilterSettings(filterPreset, filterStrength)
+            renderer.setColorFilter(
+                brightness = filter.brightness,
+                contrast = filter.contrast,
+                saturation = filter.saturation,
+                red = filter.red,
+                green = filter.green,
+                blue = filter.blue,
+                vignette = filter.vignette,
+                warpMode = filter.warpMode,
+                warpAmount = filter.warpAmount,
+            )
             scaledOverlay.recycle()
 
             // 4. Setup decoder (output to SurfaceTexture → OES texture on GPU)
@@ -314,6 +343,7 @@ class VideoOverlayProcessor {
 
         } catch (e: Exception) {
             Log.e(TAG, "Export failed", e)
+            lastError = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
             return null
         } finally {
             try { renderer?.release() } catch (_: Exception) {}
@@ -325,6 +355,58 @@ class VideoOverlayProcessor {
             try { videoExtractor?.release() } catch (_: Exception) {}
             try { audioExtractor?.release() } catch (_: Exception) {}
         }
+    }
+
+    private data class FilterSettings(
+        val brightness: Float,
+        val contrast: Float,
+        val saturation: Float,
+        val red: Float,
+        val green: Float,
+        val blue: Float,
+        val vignette: Float,
+        val warpMode: Float,
+        val warpAmount: Float,
+    )
+
+    private fun resolveFilterSettings(preset: String, strengthRaw: Double): FilterSettings {
+        val t = strengthRaw.coerceIn(0.0, 1.0).toFloat()
+        val neutral = FilterSettings(0f, 1f, 1f, 1f, 1f, 1f, 0f, 0f, 0f)
+
+        val target = when (preset) {
+            "vivid" -> FilterSettings(0.02f, 1.15f, 1.22f, 1.02f, 1.02f, 1.02f, 0f, 0f, 0f)
+            "warm" -> FilterSettings(0.015f, 1.08f, 1.08f, 1.11f, 1.02f, 0.92f, 0f, 0f, 0f)
+            "cool" -> FilterSettings(0.0f, 1.06f, 1.05f, 0.94f, 1.01f, 1.11f, 0f, 0f, 0f)
+            "sunset" -> FilterSettings(0.03f, 1.1f, 1.16f, 1.14f, 1.0f, 0.9f, 0f, 0f, 0f)
+            "fade" -> FilterSettings(0.03f, 0.88f, 0.86f, 1.0f, 1.0f, 1.0f, 0f, 0f, 0f)
+            "mono" -> FilterSettings(0.01f, 1.04f, 0.0f, 1.0f, 1.0f, 1.0f, 0f, 0f, 0f)
+            "noir" -> FilterSettings(-0.02f, 1.22f, 0.18f, 1.0f, 1.0f, 1.0f, 0f, 0f, 0f)
+            "dream" -> FilterSettings(0.04f, 0.94f, 1.08f, 1.06f, 1.0f, 1.05f, 0f, 0f, 0f)
+            "vignette" -> FilterSettings(-0.01f, 1.12f, 1.02f, 1.01f, 1.0f, 0.99f, 0.62f, 0f, 0f)
+            "retro2044" -> FilterSettings(0.02f, 1.18f, 1.28f, 1.12f, 0.98f, 1.14f, 0.22f, 0f, 0f)
+            "cinematic" -> FilterSettings(-0.01f, 1.16f, 0.92f, 1.03f, 1.0f, 0.96f, 0.35f, 0f, 0f)
+            "tealorange" -> FilterSettings(0.01f, 1.20f, 1.08f, 1.12f, 1.0f, 1.12f, 0.18f, 0f, 0f)
+            "portraitpop" -> FilterSettings(0.03f, 1.12f, 1.08f, 1.08f, 1.02f, 0.96f, 0.16f, 0f, 0f)
+            "nightneon" -> FilterSettings(-0.02f, 1.30f, 1.24f, 0.98f, 1.08f, 1.20f, 0.40f, 0f, 0f)
+            "productcrisp" -> FilterSettings(0.01f, 1.25f, 1.12f, 1.03f, 1.03f, 1.03f, 0.08f, 0f, 0f)
+            "filmicfade" -> FilterSettings(0.005f, 1.06f, 0.78f, 1.04f, 1.0f, 0.93f, 0.52f, 0f, 0f)
+            "pastelmist" -> FilterSettings(0.045f, 0.86f, 0.92f, 1.04f, 1.01f, 1.06f, 0.22f, 0f, 0f)
+            else -> neutral
+        }
+
+        fun lerp(a: Float, b: Float): Float = a + (b - a) * t
+
+        return FilterSettings(
+            brightness = lerp(neutral.brightness, target.brightness),
+            contrast = lerp(neutral.contrast, target.contrast),
+            saturation = lerp(neutral.saturation, target.saturation),
+            red = lerp(neutral.red, target.red),
+            green = lerp(neutral.green, target.green),
+            blue = lerp(neutral.blue, target.blue),
+            vignette = lerp(neutral.vignette, target.vignette),
+            warpMode = target.warpMode,
+            warpAmount = lerp(neutral.warpAmount, target.warpAmount),
+        )
     }
 
     /**

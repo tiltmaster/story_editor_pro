@@ -33,6 +33,12 @@ class StoryEditorConfig {
   /// Enable gradient text editor button in camera toolbar (default: true)
   final bool enableGradientTextEditor;
 
+  /// Show gallery picker button on camera screen (default: true)
+  final bool showGalleryButton;
+
+  /// Mirror front camera preview like selfie camera (default: true)
+  final bool mirrorFrontCameraPreview;
+
   // ============ Hands-Free Configuration ============
 
   /// Available delay options for hands-free mode (in seconds)
@@ -121,6 +127,8 @@ class StoryEditorConfig {
     this.enableCollage = true,
     this.enableHandsFree = true,
     this.enableGradientTextEditor = true,
+    this.showGalleryButton = false,
+    this.mirrorFrontCameraPreview = false,
     this.handsFreeDelayOptions = const [3, 5, 10, 15],
     this.defaultHandsFreeDelay = 3,
     this.maxHandsFreeRecordingSeconds = 60,
@@ -156,6 +164,8 @@ class StoryEditorConfig {
     bool? enableCollage,
     bool? enableHandsFree,
     bool? enableGradientTextEditor,
+    bool? showGalleryButton,
+    bool? mirrorFrontCameraPreview,
     List<int>? handsFreeDelayOptions,
     int? defaultHandsFreeDelay,
     int? maxHandsFreeRecordingSeconds,
@@ -189,6 +199,8 @@ class StoryEditorConfig {
       enableCollage: enableCollage ?? this.enableCollage,
       enableHandsFree: enableHandsFree ?? this.enableHandsFree,
       enableGradientTextEditor: enableGradientTextEditor ?? this.enableGradientTextEditor,
+      showGalleryButton: showGalleryButton ?? this.showGalleryButton,
+      mirrorFrontCameraPreview: mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
       handsFreeDelayOptions: handsFreeDelayOptions ?? this.handsFreeDelayOptions,
       defaultHandsFreeDelay: defaultHandsFreeDelay ?? this.defaultHandsFreeDelay,
       maxHandsFreeRecordingSeconds: maxHandsFreeRecordingSeconds ?? this.maxHandsFreeRecordingSeconds,

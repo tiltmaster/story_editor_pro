@@ -70,6 +70,11 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
                    details: nil))
             return
         }
+        let mirrorHorizontally = args["mirrorHorizontally"] as? Bool ?? false
+        let outputWidth = args["outputWidth"] as? Int
+        let outputHeight = args["outputHeight"] as? Int
+        let filterPreset = args["filterPreset"] as? String ?? "none"
+        let filterStrength = args["filterStrength"] as? Double ?? 1.0
 
         if videoOverlayProcessor == nil {
             videoOverlayProcessor = VideoOverlayProcessor()
@@ -78,14 +83,24 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         videoOverlayProcessor?.exportVideoWithOverlay(
             videoPath: videoPath,
             overlayImagePath: overlayImagePath,
-            outputPath: outputPath
-        ) { output in
+            outputPath: outputPath,
+            mirrorHorizontally: mirrorHorizontally,
+            outputWidth: outputWidth,
+            outputHeight: outputHeight,
+            filterPreset: filterPreset,
+            filterStrength: filterStrength
+        ) { output, errorMessage in
             if let output = output {
                 result(output)
             } else {
                 result(FlutterError(code: "EXPORT_FAILED",
-                       message: "Failed to export video with overlay",
-                       details: nil))
+                       message: errorMessage ?? "Failed to export video with overlay",
+                       details: [
+                            "videoPath": videoPath,
+                            "overlayImagePath": overlayImagePath,
+                            "outputPath": outputPath,
+                            "nativeError": errorMessage ?? "unknown"
+                       ]))
             }
         }
     }
@@ -100,6 +115,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
 
         let loopCount = args["loopCount"] as? Int ?? 3
         let fps = args["fps"] as? Int ?? 30
+        let maxDuration = args["maxDuration"] as? Double ?? 2.0
 
         if boomerangProcessor == nil {
             boomerangProcessor = BoomerangProcessor()
@@ -109,7 +125,8 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             inputPath: inputPath,
             outputPath: outputPath,
             loopCount: loopCount,
-            fps: fps
+            fps: fps,
+            maxDurationSeconds: maxDuration
         ) { output in
             if let output = output {
                 result(output)

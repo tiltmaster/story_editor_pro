@@ -21,6 +21,7 @@ export 'src/config/story_editor_icons.dart';
 export 'src/config/story_editor_gradients.dart';
 export 'src/config/story_editor_fonts.dart';
 export 'src/config/story_editor_settings.dart';
+export 'src/config/story_editor_filters.dart';
 
 // Models
 export 'src/models/story_result.dart';
