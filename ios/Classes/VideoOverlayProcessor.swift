@@ -4,6 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_B"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -17,6 +18,7 @@ class VideoOverlayProcessor {
         filterStrength: Double = 1.0,
         completion: @escaping (String?, String?) -> Void
     ) {
+        print("VideoOverlayProcessor: BuildMarker=\(buildMarker)")
         let videoURL = URL(fileURLWithPath: videoPath)
         let outputURL = URL(fileURLWithPath: outputPath)
 
