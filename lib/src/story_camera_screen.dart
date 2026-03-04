@@ -3381,7 +3381,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.15),
+          color: Colors.black.withValues(alpha: 0.42),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.22),
+            width: 1.0,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black54,
+              blurRadius: 8,
+              spreadRadius: 0.2,
+            ),
+          ],
         ),
         child: Center(
           child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),

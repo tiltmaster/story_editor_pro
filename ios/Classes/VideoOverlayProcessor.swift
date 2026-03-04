@@ -110,7 +110,10 @@ class VideoOverlayProcessor {
             let layerInstruction = AVMutableVideoCompositionLayerInstruction(
                 assetTrack: compositionVideoTrack
             )
-            var transform = videoTrack.preferredTransform
+            var transform = self.makeVideoTransform(
+                track: videoTrack,
+                renderSize: renderSize
+            )
             if mirrorHorizontally {
                 let mirror = CGAffineTransform(translationX: renderSize.width, y: 0).scaledBy(x: -1, y: 1)
                 transform = transform.concatenating(mirror)
@@ -389,5 +392,42 @@ class VideoOverlayProcessor {
             return CGSize(width: size.height, height: size.width)
         }
         return size
+    }
+
+    /// Build a stable transform that:
+    /// 1) applies track orientation,
+    /// 2) normalizes to positive origin,
+    /// 3) scales with aspect-fill into renderSize,
+    /// 4) centers content in output frame.
+    private func makeVideoTransform(track: AVAssetTrack, renderSize: CGSize) -> CGAffineTransform {
+        let naturalRect = CGRect(origin: .zero, size: track.naturalSize)
+        var preferred = track.preferredTransform
+        var orientedRect = naturalRect.applying(preferred)
+
+        // Normalize origin to (0,0) to avoid off-canvas rendering.
+        preferred = preferred.translatedBy(x: -orientedRect.origin.x, y: -orientedRect.origin.y)
+        orientedRect = naturalRect.applying(preferred)
+
+        let orientedSize = CGSize(
+            width: abs(orientedRect.width),
+            height: abs(orientedRect.height)
+        )
+
+        guard orientedSize.width > 0, orientedSize.height > 0 else {
+            return preferred
+        }
+
+        let scale = max(
+            renderSize.width / orientedSize.width,
+            renderSize.height / orientedSize.height
+        )
+        let scaledWidth = orientedSize.width * scale
+        let scaledHeight = orientedSize.height * scale
+        let tx = (renderSize.width - scaledWidth) / 2.0
+        let ty = (renderSize.height - scaledHeight) / 2.0
+
+        return preferred
+            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+            .concatenating(CGAffineTransform(translationX: tx, y: ty))
     }
 }
