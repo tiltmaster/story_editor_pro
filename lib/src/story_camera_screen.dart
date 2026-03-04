@@ -2495,29 +2495,34 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       right: 0,
       bottom: bottomOffset,
       child: Center(
-        child: (!_isBoomerangMode &&
-                !_isVideoRecording &&
-                !_isProcessingVideo &&
-                !_isHandsFreeCountingDown)
-            ? _buildIntegratedCaptureWithFilters(captureButton)
-            : captureButton,
+        child: _buildIntegratedCaptureWithFilters(
+          captureButton,
+          showFilters: !_isBoomerangMode &&
+              !_isVideoRecording &&
+              !_isProcessingVideo &&
+              !_isHandsFreeCountingDown,
+        ),
       ),
     );
   }
 
-  Widget _buildIntegratedCaptureWithFilters(Widget captureButton) {
+  Widget _buildIntegratedCaptureWithFilters(
+    Widget captureButton, {
+    bool showFilters = true,
+  }) {
     return SizedBox(
       height: 126,
       child: Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
         children: [
-          Positioned.fill(
-            child: Align(
-              alignment: Alignment.center,
-              child: _buildFilterSelector(),
+          if (showFilters)
+            Positioned.fill(
+              child: Align(
+                alignment: Alignment.center,
+                child: _buildFilterSelector(),
+              ),
             ),
-          ),
           Center(child: captureButton),
         ],
       ),
