@@ -209,7 +209,7 @@ class VideoOverlayProcessor {
                             let outVideoTracks = outAsset.tracks(withMediaType: .video).count
                             print("VideoOverlayProcessor: Output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks)")
 
-                            if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 100 * 1024 {
+                            if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 1024 {
                                 let diag = "Invalid output (size=\(fileSize), duration=\(outDuration), tracks=\(outVideoTracks))"
                                 print("VideoOverlayProcessor: Export validation failed: \(diag)")
                                 completion(nil, "Export produced invalid video: \(diag)")
