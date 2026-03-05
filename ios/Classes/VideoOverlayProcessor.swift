@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_06_I"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_06_J"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -392,6 +392,22 @@ class VideoOverlayProcessor {
         matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 0), forKey: "inputBiasVector")
         var output = matrix.outputImage ?? image
 
+        // S-curve tone mapping via CIToneCurve.
+        // Control points pull shadows down and lift highlights, matching the
+        // GLSL smoothstep pass on Android and the contrast approximation in Flutter.
+        // d = sCurve × 0.094 maps exactly to the GLSL smoothstep shadow drop.
+        if p.sCurve > 0.001,
+           let toneCurve = CIFilter(name: "CIToneCurve") {
+            let d = p.sCurve * 0.094
+            toneCurve.setValue(output,                                forKey: kCIInputImageKey)
+            toneCurve.setValue(CIVector(x: 0.0,  y: 0.0),           forKey: "inputPoint0")
+            toneCurve.setValue(CIVector(x: 0.25, y: 0.25 - d),      forKey: "inputPoint1")
+            toneCurve.setValue(CIVector(x: 0.5,  y: 0.5),           forKey: "inputPoint2")
+            toneCurve.setValue(CIVector(x: 0.75, y: 0.75 + d),      forKey: "inputPoint3")
+            toneCurve.setValue(CIVector(x: 1.0,  y: 1.0),           forKey: "inputPoint4")
+            if let result = toneCurve.outputImage { output = result }
+        }
+
         // CIVignette intensity is calibrated to be visually equivalent to the
         // Flutter RadialGradient / Android GLSL vignette at the same preset.
         // CIVignette uses a different internal curve, so intensity ≈ vigAmount × 1.78.
@@ -408,47 +424,32 @@ class VideoOverlayProcessor {
         return output
     }
 
-    private func resolveFilterParams(preset: String, strength: Double) -> (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, warpMode: Int, warpAmount: Double) {
-        let neutral = (brightness: 0.0, contrast: 1.0, saturation: 1.0, red: 1.0, green: 1.0, blue: 1.0, vignette: 0.0, warpMode: 0, warpAmount: 0.0)
-        let target: (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, warpMode: Int, warpAmount: Double)
+    private func resolveFilterParams(preset: String, strength: Double) -> (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double) {
+        let neutral = (brightness: 0.0, contrast: 1.0, saturation: 1.0, red: 1.0, green: 1.0, blue: 1.0, vignette: 0.0, sCurve: 0.0, warpMode: 0, warpAmount: 0.0)
+        let target: (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double)
 
+        // Tuple order: (brightness, contrast, saturation, red, green, blue, vignette, sCurve, warpMode, warpAmount)
+        // vignette: iOS CIVignette intensity, calibrated to match Android GLSL visually (≈ androidValue × 1.78 for vignette-heavy presets)
+        // sCurve: 0–1 strength for CIToneCurve; d = sCurve × 0.094 is the shadow/highlight pull
         switch preset {
-        case "vivid":
-            target = (0.02, 1.15, 1.22, 1.02, 1.02, 1.02, 0.0, 0, 0.0)
-        case "warm":
-            target = (0.015, 1.08, 1.08, 1.11, 1.02, 0.92, 0.0, 0, 0.0)
-        case "cool":
-            target = (0.0, 1.06, 1.05, 0.94, 1.01, 1.11, 0.0, 0, 0.0)
-        case "sunset":
-            target = (0.03, 1.10, 1.16, 1.14, 1.0, 0.9, 0.0, 0, 0.0)
-        case "fade":
-            target = (0.03, 0.88, 0.86, 1.0, 1.0, 1.0, 0.0, 0, 0.0)
-        case "mono":
-            target = (0.01, 1.04, 0.0, 1.0, 1.0, 1.0, 0.0, 0, 0.0)
-        case "noir":
-            target = (-0.02, 1.22, 0.18, 1.0, 1.0, 1.0, 0.0, 0, 0.0)
-        case "dream":
-            target = (0.04, 0.94, 1.08, 1.06, 1.0, 1.05, 0.0, 0, 0.0)
-        case "vignette":
-            target = (-0.01, 1.12, 1.02, 1.01, 1.0, 0.99, 1.1, 0, 0.0)
-        case "retro2044":
-            target = (0.02, 1.18, 1.28, 1.12, 0.98, 1.14, 0.42, 0, 0.0)
-        case "cinematic":
-            target = (-0.01, 1.16, 0.92, 1.03, 1.0, 0.96, 0.65, 0, 0.0)
-        case "tealorange":
-            target = (0.01, 1.20, 1.08, 1.12, 1.0, 1.12, 0.32, 0, 0.0)
-        case "portraitpop":
-            target = (0.03, 1.12, 1.08, 1.08, 1.02, 0.96, 0.16, 0, 0.0)
-        case "nightneon":
-            target = (-0.02, 1.30, 1.24, 0.98, 1.08, 1.20, 0.40, 0, 0.0)
-        case "productcrisp":
-            target = (0.01, 1.25, 1.12, 1.03, 1.03, 1.03, 0.08, 0, 0.0)
-        case "filmicfade":
-            target = (0.005, 1.06, 0.78, 1.04, 1.0, 0.93, 0.52, 0, 0.0)
-        case "pastelmist":
-            target = (0.045, 0.86, 0.92, 1.04, 1.01, 1.06, 0.22, 0, 0.0)
-        default:
-            target = neutral
+        case "vivid":       target = (0.02,  1.25, 1.50, 1.04, 1.02, 1.02, 0.0,  0.45, 0, 0.0)
+        case "warm":        target = (0.02,  1.10, 1.15, 1.25, 1.05, 0.78, 0.0,  0.25, 0, 0.0)
+        case "cool":        target = (0.0,   1.08, 1.10, 0.80, 1.02, 1.28, 0.0,  0.25, 0, 0.0)
+        case "sunset":      target = (0.03,  1.15, 1.30, 1.28, 1.02, 0.75, 0.0,  0.40, 0, 0.0)
+        case "fade":        target = (0.08,  0.82, 0.68, 1.0,  1.0,  1.0,  0.0,  0.0,  0, 0.0)
+        case "mono":        target = (0.0,   1.10, 0.0,  1.0,  1.0,  1.0,  0.0,  0.40, 0, 0.0)
+        case "noir":        target = (-0.04, 1.45, 0.0,  1.0,  1.0,  1.0,  0.0,  0.65, 0, 0.0)
+        case "dream":       target = (0.07,  0.88, 1.18, 1.10, 1.02, 1.08, 0.0,  0.0,  0, 0.0)
+        case "vignette":    target = (-0.02, 1.15, 1.05, 1.01, 1.0,  0.99, 1.1,  0.25, 0, 0.0)
+        case "retro2044":   target = (0.02,  1.22, 1.42, 1.20, 0.95, 1.18, 0.42, 0.45, 0, 0.0)
+        case "cinematic":   target = (-0.02, 1.30, 0.72, 1.06, 1.01, 0.90, 0.65, 0.65, 0, 0.0)
+        case "tealorange":  target = (0.01,  1.22, 1.18, 1.20, 1.01, 1.18, 0.32, 0.45, 0, 0.0)
+        case "portraitpop": target = (0.03,  1.18, 1.15, 1.14, 1.03, 0.92, 0.16, 0.30, 0, 0.0)
+        case "nightneon":   target = (-0.03, 1.38, 1.38, 0.94, 1.10, 1.28, 0.40, 0.60, 0, 0.0)
+        case "productcrisp":target = (0.01,  1.28, 1.22, 1.04, 1.04, 1.04, 0.08, 0.45, 0, 0.0)
+        case "filmicfade":  target = (0.02,  1.05, 0.72, 1.06, 1.01, 0.90, 0.52, 0.25, 0, 0.0)
+        case "pastelmist":  target = (0.06,  0.88, 0.88, 1.06, 1.02, 1.08, 0.22, 0.0,  0, 0.0)
+        default:            target = neutral
         }
 
         func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double {
@@ -457,13 +458,14 @@ class VideoOverlayProcessor {
 
         return (
             brightness: lerp(neutral.brightness, target.brightness, strength),
-            contrast: lerp(neutral.contrast, target.contrast, strength),
+            contrast:   lerp(neutral.contrast,   target.contrast,   strength),
             saturation: lerp(neutral.saturation, target.saturation, strength),
-            red: lerp(neutral.red, target.red, strength),
-            green: lerp(neutral.green, target.green, strength),
-            blue: lerp(neutral.blue, target.blue, strength),
-            vignette: lerp(neutral.vignette, target.vignette, strength),
-            warpMode: target.warpMode,
+            red:        lerp(neutral.red,        target.red,        strength),
+            green:      lerp(neutral.green,      target.green,      strength),
+            blue:       lerp(neutral.blue,       target.blue,       strength),
+            vignette:   lerp(neutral.vignette,   target.vignette,   strength),
+            sCurve:     lerp(neutral.sCurve,     target.sCurve,     strength),
+            warpMode:   target.warpMode,
             warpAmount: lerp(neutral.warpAmount, target.warpAmount, strength)
         )
     }

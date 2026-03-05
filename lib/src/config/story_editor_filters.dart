@@ -71,48 +71,48 @@ class StoryEditorFilters {
       case 'vivid':
         target = const StoryFilterParams(
           brightness: 0.02,
-          contrast: 1.15,
-          saturation: 1.22,
-          red: 1.02,
+          contrast: 1.25,
+          saturation: 1.50,
+          red: 1.04,
           green: 1.02,
           blue: 1.02,
         );
         break;
       case 'warm':
         target = const StoryFilterParams(
-          brightness: 0.015,
-          contrast: 1.08,
-          saturation: 1.08,
-          red: 1.11,
-          green: 1.02,
-          blue: 0.92,
+          brightness: 0.02,
+          contrast: 1.10,
+          saturation: 1.15,
+          red: 1.25,
+          green: 1.05,
+          blue: 0.78,
         );
         break;
       case 'cool':
         target = const StoryFilterParams(
           brightness: 0.0,
-          contrast: 1.06,
-          saturation: 1.05,
-          red: 0.94,
-          green: 1.01,
-          blue: 1.11,
+          contrast: 1.08,
+          saturation: 1.10,
+          red: 0.80,
+          green: 1.02,
+          blue: 1.28,
         );
         break;
       case 'sunset':
         target = const StoryFilterParams(
           brightness: 0.03,
-          contrast: 1.1,
-          saturation: 1.16,
-          red: 1.14,
-          green: 1.0,
-          blue: 0.9,
+          contrast: 1.15,
+          saturation: 1.30,
+          red: 1.28,
+          green: 1.02,
+          blue: 0.75,
         );
         break;
       case 'fade':
         target = const StoryFilterParams(
-          brightness: 0.03,
-          contrast: 0.88,
-          saturation: 0.86,
+          brightness: 0.08,
+          contrast: 0.82,
+          saturation: 0.68,
           red: 1.0,
           green: 1.0,
           blue: 1.0,
@@ -120,8 +120,8 @@ class StoryEditorFilters {
         break;
       case 'mono':
         target = const StoryFilterParams(
-          brightness: 0.01,
-          contrast: 1.04,
+          brightness: 0.0,
+          contrast: 1.10,
           saturation: 0.0,
           red: 1.0,
           green: 1.0,
@@ -130,9 +130,9 @@ class StoryEditorFilters {
         break;
       case 'noir':
         target = const StoryFilterParams(
-          brightness: -0.02,
-          contrast: 1.22,
-          saturation: 0.18,
+          brightness: -0.04,
+          contrast: 1.45,
+          saturation: 0.0,
           red: 1.0,
           green: 1.0,
           blue: 1.0,
@@ -140,19 +140,19 @@ class StoryEditorFilters {
         break;
       case 'dream':
         target = const StoryFilterParams(
-          brightness: 0.04,
-          contrast: 0.94,
-          saturation: 1.08,
-          red: 1.06,
-          green: 1.0,
-          blue: 1.05,
+          brightness: 0.07,
+          contrast: 0.88,
+          saturation: 1.18,
+          red: 1.10,
+          green: 1.02,
+          blue: 1.08,
         );
         break;
       case 'vignette':
         target = const StoryFilterParams(
-          brightness: -0.01,
-          contrast: 1.12,
-          saturation: 1.02,
+          brightness: -0.02,
+          contrast: 1.15,
+          saturation: 1.05,
           red: 1.01,
           green: 1.0,
           blue: 0.99,
@@ -161,81 +161,81 @@ class StoryEditorFilters {
       case 'retro2044':
         target = const StoryFilterParams(
           brightness: 0.02,
-          contrast: 1.18,
-          saturation: 1.28,
-          red: 1.12,
-          green: 0.98,
-          blue: 1.14,
+          contrast: 1.22,
+          saturation: 1.42,
+          red: 1.20,
+          green: 0.95,
+          blue: 1.18,
         );
         break;
       case 'cinematic':
         target = const StoryFilterParams(
-          brightness: -0.01,
-          contrast: 1.16,
-          saturation: 0.92,
-          red: 1.03,
-          green: 1.0,
-          blue: 0.96,
+          brightness: -0.02,
+          contrast: 1.30,
+          saturation: 0.72,
+          red: 1.06,
+          green: 1.01,
+          blue: 0.90,
         );
         break;
       case 'tealorange':
         target = const StoryFilterParams(
           brightness: 0.01,
-          contrast: 1.2,
-          saturation: 1.08,
-          red: 1.12,
-          green: 1.0,
-          blue: 1.12,
+          contrast: 1.22,
+          saturation: 1.18,
+          red: 1.20,
+          green: 1.01,
+          blue: 1.18,
         );
         break;
       case 'portraitpop':
         target = const StoryFilterParams(
           brightness: 0.03,
-          contrast: 1.12,
-          saturation: 1.08,
-          red: 1.08,
-          green: 1.02,
-          blue: 0.96,
+          contrast: 1.18,
+          saturation: 1.15,
+          red: 1.14,
+          green: 1.03,
+          blue: 0.92,
         );
         break;
       case 'nightneon':
         target = const StoryFilterParams(
-          brightness: -0.02,
-          contrast: 1.3,
-          saturation: 1.24,
-          red: 0.98,
-          green: 1.08,
-          blue: 1.2,
+          brightness: -0.03,
+          contrast: 1.38,
+          saturation: 1.38,
+          red: 0.94,
+          green: 1.10,
+          blue: 1.28,
         );
         break;
       case 'productcrisp':
         target = const StoryFilterParams(
           brightness: 0.01,
-          contrast: 1.25,
-          saturation: 1.12,
-          red: 1.03,
-          green: 1.03,
-          blue: 1.03,
+          contrast: 1.28,
+          saturation: 1.22,
+          red: 1.04,
+          green: 1.04,
+          blue: 1.04,
         );
         break;
       case 'filmicfade':
         target = const StoryFilterParams(
-          brightness: 0.005,
-          contrast: 1.06,
-          saturation: 0.78,
-          red: 1.04,
-          green: 1.0,
-          blue: 0.93,
+          brightness: 0.02,
+          contrast: 1.05,
+          saturation: 0.72,
+          red: 1.06,
+          green: 1.01,
+          blue: 0.90,
         );
         break;
       case 'pastelmist':
         target = const StoryFilterParams(
-          brightness: 0.045,
-          contrast: 0.86,
-          saturation: 0.92,
-          red: 1.04,
-          green: 1.01,
-          blue: 1.06,
+          brightness: 0.06,
+          contrast: 0.88,
+          saturation: 0.88,
+          red: 1.06,
+          green: 1.02,
+          blue: 1.08,
         );
         break;
       case 'none':
@@ -296,6 +296,32 @@ class StoryEditorFilters {
         return 0.0;
     }
     return _lerp(neutral, target, s);
+  }
+
+  /// Returns the S-curve strength (0.0–1.0) for a given preset.
+  /// Passed to the second ColorFiltered pass (contrast approximation) in the
+  /// Flutter preview and to CIToneCurve (iOS) / GLSL smoothstep (Android).
+  static double sCurveStrength(String presetId, double strength) {
+    final s = strength.clamp(0.0, 1.0);
+    double target;
+    switch (presetId) {
+      case 'vivid':       target = 0.45; break;
+      case 'warm':        target = 0.25; break;
+      case 'cool':        target = 0.25; break;
+      case 'sunset':      target = 0.40; break;
+      case 'mono':        target = 0.40; break;
+      case 'noir':        target = 0.65; break;
+      case 'vignette':    target = 0.25; break;
+      case 'retro2044':   target = 0.45; break;
+      case 'cinematic':   target = 0.65; break;
+      case 'tealorange':  target = 0.45; break;
+      case 'portraitpop': target = 0.30; break;
+      case 'nightneon':   target = 0.60; break;
+      case 'productcrisp':target = 0.45; break;
+      case 'filmicfade':  target = 0.25; break;
+      default:            return 0.0; // fade, dream, pastelmist, none
+    }
+    return _lerp(0.0, target, s);
   }
 
   static Color previewColor(String presetId) {

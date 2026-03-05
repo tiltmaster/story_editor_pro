@@ -1,6 +1,6 @@
 name: story_editor_pro
 description: "A powerful story editor with camera, boomerang effects, drawing tools, text overlays, collages, and close friends sharing."
-version: 1.0.14
+version: 1.1.0
 homepage: https://github.com/ahmetbalkan/story_editor_pro
 repository: https://github.com/ahmetbalkan/story_editor_pro
 issue_tracker: https://github.com/ahmetbalkan/story_editor_pro/issues
@@ -48,6 +48,9 @@ flutter:
   # To add assets to your package, add an assets section, like this:
   assets:
     - assets/icons/
+
+  shaders:
+    - shaders/story_filter.frag
   #
   # For details regarding assets in packages, see
   # https://flutter.dev/to/asset-from-package

@@ -102,6 +102,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   bool _isVideoInitialized = false;
   late MediaType _mediaType;
 
+  // GPU filter shader — loaded once, used by BackdropFilter for pixel-accurate preview
+  ui.FragmentProgram? _filterProgram;
+  ui.FragmentShader?  _filterShader;
+
   // Close friends selection
   final Set<CloseFriend> _selectedCloseFriends = {};
 
@@ -137,6 +141,53 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     if (widget.closeFriendsEnabled) {
       _selectedCloseFriends.addAll(widget.closeFriendsList);
     }
+
+    _loadFilterShader();
+  }
+
+  /// Loads the GLSL fragment shader that applies colour matrix + S-curve + vignette.
+  /// Identical math to Android GLSL export shader → pixel-accurate preview.
+  /// Falls back silently to ColorFiltered if the shader cannot be loaded.
+  Future<void> _loadFilterShader() async {
+    try {
+      final program = await ui.FragmentProgram.fromAsset(
+        'packages/story_editor_pro/shaders/story_filter.frag',
+      );
+      if (!mounted) return;
+      setState(() {
+        _filterProgram = program;
+        _filterShader  = program.fragmentShader();
+      });
+    } catch (e) {
+      debugPrint('StoryEditorScreen: shader load failed — $e');
+      // ColorFiltered fallback remains active
+    }
+  }
+
+  /// Uploads uniforms to the shader for the current preset/strength and canvas size.
+  /// Called each build from within LayoutBuilder so the size is always up to date.
+  void _applyShaderUniforms(Size size) {
+    final m    = StoryEditorFilters.matrix(
+        widget.initialFilterPreset, widget.initialFilterStrength);
+    // m[4] is Flutter's bias in 0-255 space; shader operates in 0-1 space
+    final bias = m[4] / 255.0;
+    _filterShader!
+      ..setFloat(0,  size.width)
+      ..setFloat(1,  size.height)
+      ..setFloat(2,  m[0])   // uMatRow0.x = r0
+      ..setFloat(3,  m[1])   // uMatRow0.y = r1
+      ..setFloat(4,  m[2])   // uMatRow0.z = r2
+      ..setFloat(5,  m[5])   // uMatRow1.x = g0
+      ..setFloat(6,  m[6])   // uMatRow1.y = g1
+      ..setFloat(7,  m[7])   // uMatRow1.z = g2
+      ..setFloat(8,  m[10])  // uMatRow2.x = b0
+      ..setFloat(9,  m[11])  // uMatRow2.y = b1
+      ..setFloat(10, m[12])  // uMatRow2.z = b2
+      ..setFloat(11, bias)
+      ..setFloat(12, StoryEditorFilters.sCurveStrength(
+          widget.initialFilterPreset, widget.initialFilterStrength))
+      ..setFloat(13, StoryEditorFilters.vignetteStrength(
+          widget.initialFilterPreset, widget.initialFilterStrength));
   }
 
   /// Add initial text overlay positioned at the exact center of the screen
@@ -426,39 +477,36 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }
 
     if (widget.initialFilterPreset != StoryEditorFilters.none) {
-      mediaWidget = ColorFiltered(
-        colorFilter: StoryEditorFilters.colorFilter(
-          widget.initialFilterPreset,
-          widget.initialFilterStrength,
-        ),
-        child: mediaWidget,
-      );
-
-      final vigStrength = StoryEditorFilters.vignetteStrength(
-        widget.initialFilterPreset,
-        widget.initialFilterStrength,
-      );
-      if (vigStrength > 0.001) {
+      if (_filterShader != null) {
+        // GPU fragment shader: colour matrix + S-curve + vignette in one pass.
+        // Runs the IDENTICAL GLSL as the Android export shader, giving a
+        // pixel-accurate preview for both photos and live video.
+        // BackdropFilter auto-binds the underlying pixels (Texture or Image) to
+        // the shader's sampler2D — no CPU frame capture needed.
         mediaWidget = Stack(
           children: [
             mediaWidget,
             Positioned.fill(
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withValues(alpha: vigStrength.clamp(0.0, 0.9)),
-                      ],
-                      stops: const [0.35, 0.9],
-                      radius: 1.3,
-                    ),
-                  ),
-                ),
+              child: LayoutBuilder(
+                builder: (ctx, constraints) {
+                  _applyShaderUniforms(constraints.biggest);
+                  return BackdropFilter(
+                    filter: ui.ImageFilter.shader(_filterShader!),
+                    child: const SizedBox.expand(),
+                  );
+                },
               ),
             ),
           ],
+        );
+      } else {
+        // Shader not yet loaded (first frame) — fall back to ColorFiltered.
+        mediaWidget = ColorFiltered(
+          colorFilter: StoryEditorFilters.colorFilter(
+            widget.initialFilterPreset,
+            widget.initialFilterStrength,
+          ),
+          child: mediaWidget,
         );
       }
     }

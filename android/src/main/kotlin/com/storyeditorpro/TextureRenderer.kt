@@ -36,6 +36,7 @@ class TextureRenderer {
         // Fragment shader for OES texture (video frames from SurfaceTexture).
         // Uses the same 3×3 colour matrix + bias that Flutter's ColorFilter.matrix()
         // produces, ensuring the exported video matches the editor preview exactly.
+        // uSCurve: smoothstep S-curve matching CIToneCurve (iOS) and Flutter contrast pass.
         private const val FRAGMENT_SHADER_OES = """
             #extension GL_OES_EGL_image_external : require
             precision mediump float;
@@ -44,10 +45,15 @@ class TextureRenderer {
             uniform mat3 uColorMatrix;
             uniform vec3 uColorBias;
             uniform float uVignette;
+            uniform float uSCurve;
             void main() {
                 vec2 uv = vTexCoord;
                 vec4 tex = texture2D(uTexture, uv);
                 vec3 color = uColorMatrix * tex.rgb + uColorBias;
+                if (uSCurve > 0.001) {
+                    vec3 curved = color * color * (3.0 - 2.0 * color);
+                    color = mix(color, curved, uSCurve);
+                }
                 if (uVignette > 0.001) {
                     vec2 center = vec2(0.5, 0.5);
                     float dist = distance(vTexCoord, center);
@@ -111,6 +117,7 @@ class TextureRenderer {
     )
     private var colorBias = floatArrayOf(0f, 0f, 0f)
     private var filterVignette = 0f
+    private var filterSCurve = 0f
 
     init {
         vertexBuffer = createFloatBuffer(QUAD_VERTICES)
@@ -216,6 +223,7 @@ class TextureRenderer {
         vignette: Float = 0f,
         warpMode: Float = 0f,
         warpAmount: Float = 0f,
+        sCurve: Float = 0f,
     ) {
         // Compute the identical 5×4 colour matrix that Flutter's ColorFilter.matrix()
         // produces, so the exported video matches the editor preview pixel-for-pixel.
@@ -248,6 +256,7 @@ class TextureRenderer {
         )
         colorBias = floatArrayOf(bias, bias, bias)
         filterVignette = vignette
+        filterSCurve = sCurve
     }
 
     /**
@@ -331,6 +340,8 @@ class TextureRenderer {
         if (colorBiasLoc >= 0) GLES20.glUniform3fv(colorBiasLoc, 1, colorBias, 0)
         val vignetteLoc = GLES20.glGetUniformLocation(program, "uVignette")
         if (vignetteLoc >= 0) GLES20.glUniform1f(vignetteLoc, filterVignette)
+        val sCurveLoc = GLES20.glGetUniformLocation(program, "uSCurve")
+        if (sCurveLoc >= 0) GLES20.glUniform1f(sCurveLoc, filterSCurve)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 

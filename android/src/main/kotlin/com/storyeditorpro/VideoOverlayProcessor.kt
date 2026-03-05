@@ -156,14 +156,15 @@ class VideoOverlayProcessor {
             val filter = resolveFilterSettings(filterPreset, filterStrength)
             renderer.setColorFilter(
                 brightness = filter.brightness,
-                contrast = filter.contrast,
+                contrast   = filter.contrast,
                 saturation = filter.saturation,
-                red = filter.red,
-                green = filter.green,
-                blue = filter.blue,
-                vignette = filter.vignette,
-                warpMode = filter.warpMode,
+                red        = filter.red,
+                green      = filter.green,
+                blue       = filter.blue,
+                vignette   = filter.vignette,
+                warpMode   = filter.warpMode,
                 warpAmount = filter.warpAmount,
+                sCurve     = filter.sCurve,
             )
             scaledOverlay.recycle()
 
@@ -367,30 +368,32 @@ class VideoOverlayProcessor {
         val vignette: Float,
         val warpMode: Float,
         val warpAmount: Float,
+        val sCurve: Float = 0f,
     )
 
     private fun resolveFilterSettings(preset: String, strengthRaw: Double): FilterSettings {
         val t = strengthRaw.coerceIn(0.0, 1.0).toFloat()
-        val neutral = FilterSettings(0f, 1f, 1f, 1f, 1f, 1f, 0f, 0f, 0f)
+        val neutral = FilterSettings(0f, 1f, 1f, 1f, 1f, 1f, 0f, 0f, 0f, 0f)
 
+        // Field order: brightness, contrast, saturation, red, green, blue, vignette, warpMode, warpAmount, sCurve
         val target = when (preset) {
-            "vivid" -> FilterSettings(0.02f, 1.15f, 1.22f, 1.02f, 1.02f, 1.02f, 0f, 0f, 0f)
-            "warm" -> FilterSettings(0.015f, 1.08f, 1.08f, 1.11f, 1.02f, 0.92f, 0f, 0f, 0f)
-            "cool" -> FilterSettings(0.0f, 1.06f, 1.05f, 0.94f, 1.01f, 1.11f, 0f, 0f, 0f)
-            "sunset" -> FilterSettings(0.03f, 1.1f, 1.16f, 1.14f, 1.0f, 0.9f, 0f, 0f, 0f)
-            "fade" -> FilterSettings(0.03f, 0.88f, 0.86f, 1.0f, 1.0f, 1.0f, 0f, 0f, 0f)
-            "mono" -> FilterSettings(0.01f, 1.04f, 0.0f, 1.0f, 1.0f, 1.0f, 0f, 0f, 0f)
-            "noir" -> FilterSettings(-0.02f, 1.22f, 0.18f, 1.0f, 1.0f, 1.0f, 0f, 0f, 0f)
-            "dream" -> FilterSettings(0.04f, 0.94f, 1.08f, 1.06f, 1.0f, 1.05f, 0f, 0f, 0f)
-            "vignette" -> FilterSettings(-0.01f, 1.12f, 1.02f, 1.01f, 1.0f, 0.99f, 0.62f, 0f, 0f)
-            "retro2044" -> FilterSettings(0.02f, 1.18f, 1.28f, 1.12f, 0.98f, 1.14f, 0.22f, 0f, 0f)
-            "cinematic" -> FilterSettings(-0.01f, 1.16f, 0.92f, 1.03f, 1.0f, 0.96f, 0.35f, 0f, 0f)
-            "tealorange" -> FilterSettings(0.01f, 1.20f, 1.08f, 1.12f, 1.0f, 1.12f, 0.18f, 0f, 0f)
-            "portraitpop" -> FilterSettings(0.03f, 1.12f, 1.08f, 1.08f, 1.02f, 0.96f, 0.16f, 0f, 0f)
-            "nightneon" -> FilterSettings(-0.02f, 1.30f, 1.24f, 0.98f, 1.08f, 1.20f, 0.40f, 0f, 0f)
-            "productcrisp" -> FilterSettings(0.01f, 1.25f, 1.12f, 1.03f, 1.03f, 1.03f, 0.08f, 0f, 0f)
-            "filmicfade" -> FilterSettings(0.005f, 1.06f, 0.78f, 1.04f, 1.0f, 0.93f, 0.52f, 0f, 0f)
-            "pastelmist" -> FilterSettings(0.045f, 0.86f, 0.92f, 1.04f, 1.01f, 1.06f, 0.22f, 0f, 0f)
+            "vivid"       -> FilterSettings(0.02f,  1.25f, 1.50f, 1.04f, 1.02f, 1.02f, 0f,    0f, 0f, 0.45f)
+            "warm"        -> FilterSettings(0.02f,  1.10f, 1.15f, 1.25f, 1.05f, 0.78f, 0f,    0f, 0f, 0.25f)
+            "cool"        -> FilterSettings(0.0f,   1.08f, 1.10f, 0.80f, 1.02f, 1.28f, 0f,    0f, 0f, 0.25f)
+            "sunset"      -> FilterSettings(0.03f,  1.15f, 1.30f, 1.28f, 1.02f, 0.75f, 0f,    0f, 0f, 0.40f)
+            "fade"        -> FilterSettings(0.08f,  0.82f, 0.68f, 1.0f,  1.0f,  1.0f,  0f,    0f, 0f, 0.0f)
+            "mono"        -> FilterSettings(0.0f,   1.10f, 0.0f,  1.0f,  1.0f,  1.0f,  0f,    0f, 0f, 0.40f)
+            "noir"        -> FilterSettings(-0.04f, 1.45f, 0.0f,  1.0f,  1.0f,  1.0f,  0f,    0f, 0f, 0.65f)
+            "dream"       -> FilterSettings(0.07f,  0.88f, 1.18f, 1.10f, 1.02f, 1.08f, 0f,    0f, 0f, 0.0f)
+            "vignette"    -> FilterSettings(-0.02f, 1.15f, 1.05f, 1.01f, 1.0f,  0.99f, 0.62f, 0f, 0f, 0.25f)
+            "retro2044"   -> FilterSettings(0.02f,  1.22f, 1.42f, 1.20f, 0.95f, 1.18f, 0.22f, 0f, 0f, 0.45f)
+            "cinematic"   -> FilterSettings(-0.02f, 1.30f, 0.72f, 1.06f, 1.01f, 0.90f, 0.35f, 0f, 0f, 0.65f)
+            "tealorange"  -> FilterSettings(0.01f,  1.22f, 1.18f, 1.20f, 1.01f, 1.18f, 0.18f, 0f, 0f, 0.45f)
+            "portraitpop" -> FilterSettings(0.03f,  1.18f, 1.15f, 1.14f, 1.03f, 0.92f, 0.16f, 0f, 0f, 0.30f)
+            "nightneon"   -> FilterSettings(-0.03f, 1.38f, 1.38f, 0.94f, 1.10f, 1.28f, 0.40f, 0f, 0f, 0.60f)
+            "productcrisp"-> FilterSettings(0.01f,  1.28f, 1.22f, 1.04f, 1.04f, 1.04f, 0.08f, 0f, 0f, 0.45f)
+            "filmicfade"  -> FilterSettings(0.02f,  1.05f, 0.72f, 1.06f, 1.01f, 0.90f, 0.52f, 0f, 0f, 0.25f)
+            "pastelmist"  -> FilterSettings(0.06f,  0.88f, 0.88f, 1.06f, 1.02f, 1.08f, 0.22f, 0f, 0f, 0.0f)
             else -> neutral
         }
 
@@ -398,14 +401,15 @@ class VideoOverlayProcessor {
 
         return FilterSettings(
             brightness = lerp(neutral.brightness, target.brightness),
-            contrast = lerp(neutral.contrast, target.contrast),
+            contrast   = lerp(neutral.contrast,   target.contrast),
             saturation = lerp(neutral.saturation, target.saturation),
-            red = lerp(neutral.red, target.red),
-            green = lerp(neutral.green, target.green),
-            blue = lerp(neutral.blue, target.blue),
-            vignette = lerp(neutral.vignette, target.vignette),
-            warpMode = target.warpMode,
+            red        = lerp(neutral.red,        target.red),
+            green      = lerp(neutral.green,      target.green),
+            blue       = lerp(neutral.blue,       target.blue),
+            vignette   = lerp(neutral.vignette,   target.vignette),
+            warpMode   = target.warpMode,
             warpAmount = lerp(neutral.warpAmount, target.warpAmount),
+            sCurve     = lerp(neutral.sCurve,     target.sCurve),
         )
     }
 
