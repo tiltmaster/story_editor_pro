@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_E"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_F"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -26,42 +26,30 @@ class VideoOverlayProcessor {
         try? FileManager.default.removeItem(at: outputURL)
 
         DispatchQueue.global(qos: .userInitiated).async {
-            var sourceVideoURL = videoURL
-            var tempFilteredURL: URL?
-
+            // When a filter is requested use a single CI pass: apply filter + composite
+            // overlay in the AVVideoComposition block. This avoids the two-pass approach
+            // whose intermediate file has uncertain orientation metadata (Apple's block-based
+            // CI compositor bakes the rotation into pixels but the output track may still
+            // carry the original preferredTransform, causing a double-rotation → black video).
             if filterPreset != "none" && filterStrength > 0.01 {
-                let tempDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-                let filteredURL = tempDir.appendingPathComponent("filtered_\(Int(Date().timeIntervalSince1970 * 1000)).mp4")
-                let semaphore = DispatchSemaphore(value: 0)
-                var filterError: String?
-
-                self.exportFilteredVideo(
-                    inputURL: videoURL,
-                    outputURL: filteredURL,
-                    preset: filterPreset,
-                    strength: filterStrength
-                ) { success, message in
-                    if success {
-                        sourceVideoURL = filteredURL
-                        tempFilteredURL = filteredURL
-                    } else {
-                        filterError = message ?? "Failed to apply filter"
-                    }
-                    semaphore.signal()
-                }
-
-                semaphore.wait()
-                if let filterError = filterError {
-                    DispatchQueue.main.async { completion(nil, filterError) }
-                    return
-                }
+                self.exportSinglePassFilteredWithOverlay(
+                    videoURL: videoURL,
+                    overlayImagePath: overlayImagePath,
+                    outputURL: outputURL,
+                    outputPath: outputPath,
+                    mirrorHorizontally: mirrorHorizontally,
+                    filterPreset: filterPreset,
+                    filterStrength: filterStrength,
+                    completion: completion
+                )
+                return
             }
 
-            let asset = AVAsset(url: sourceVideoURL)
+            let asset = AVAsset(url: videoURL)
             let inputDuration = CMTimeGetSeconds(asset.duration)
             let inputVideoTracks = asset.tracks(withMediaType: .video).count
             let inputAudioTracks = asset.tracks(withMediaType: .audio).count
-            print("VideoOverlayProcessor: Input duration=\(inputDuration)s, videoTracks=\(inputVideoTracks), audioTracks=\(inputAudioTracks), filtered=\(tempFilteredURL != nil)")
+            print("VideoOverlayProcessor: Input duration=\(inputDuration)s, videoTracks=\(inputVideoTracks), audioTracks=\(inputAudioTracks)")
 
             // 1. Create mutable composition
             let composition = AVMutableComposition()
@@ -202,9 +190,6 @@ class VideoOverlayProcessor {
 
             exporter.exportAsynchronously {
                 DispatchQueue.main.async {
-                    if let tempFilteredURL = tempFilteredURL {
-                        try? FileManager.default.removeItem(at: tempFilteredURL)
-                    }
                     if exporter.status == .completed {
                         do {
                             let attrs = try FileManager.default.attributesOfItem(atPath: outputPath)
@@ -230,6 +215,96 @@ class VideoOverlayProcessor {
                         print("VideoOverlayProcessor: Export failed: \(message)")
                         completion(nil, "AVAssetExportSession failed: \(message)")
                     }
+                }
+            }
+        }
+    }
+
+    /// Single-pass export: CI filter + overlay composited together.
+    /// AVVideoComposition(asset:applyingCIFiltersWithHandler:) always provides a
+    /// pre-oriented sourceImage, so there is no orientation ambiguity.
+    private func exportSinglePassFilteredWithOverlay(
+        videoURL: URL,
+        overlayImagePath: String,
+        outputURL: URL,
+        outputPath: String,
+        mirrorHorizontally: Bool,
+        filterPreset: String,
+        filterStrength: Double,
+        completion: @escaping (String?, String?) -> Void
+    ) {
+        guard let overlayUIImage = UIImage(contentsOfFile: overlayImagePath),
+              let overlayCGImage = overlayUIImage.cgImage else {
+            DispatchQueue.main.async { completion(nil, "Failed to load overlay image from path: \(overlayImagePath)") }
+            return
+        }
+
+        let overlayCI = CIImage(cgImage: overlayCGImage)
+        let asset = AVAsset(url: videoURL)
+
+        let ciComposition = AVVideoComposition(asset: asset) { [weak self] request in
+            guard let self = self else { return }
+            let sourceExtent = request.sourceImage.extent
+
+            // Optionally mirror the video frame before filtering
+            var source: CIImage = request.sourceImage
+            if mirrorHorizontally {
+                source = source
+                    .transformed(by: CGAffineTransform(scaleX: -1, y: 1))
+                    .transformed(by: CGAffineTransform(translationX: sourceExtent.width, y: 0))
+            }
+
+            // Apply CI filter
+            let filtered = self.applyFilter(to: source.clampedToExtent(), preset: filterPreset, strength: filterStrength)
+                .cropped(to: sourceExtent)
+
+            // Scale overlay to cover source extent (aspect fill, centered)
+            let scale = max(sourceExtent.width / overlayCI.extent.width,
+                            sourceExtent.height / overlayCI.extent.height)
+            var scaledOverlay = overlayCI.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let dx = sourceExtent.midX - scaledOverlay.extent.midX
+            let dy = sourceExtent.midY - scaledOverlay.extent.midY
+            scaledOverlay = scaledOverlay.transformed(by: CGAffineTransform(translationX: dx, y: dy))
+
+            // Composite overlay on top of filtered video, crop to frame
+            let composited = scaledOverlay.composited(over: filtered).cropped(to: sourceExtent)
+            request.finish(with: composited, context: nil)
+        }
+
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession for filter+overlay.") }
+            return
+        }
+
+        exporter.videoComposition = ciComposition
+        exporter.outputURL = outputURL
+        exporter.outputFileType = .mp4
+        exporter.shouldOptimizeForNetworkUse = true
+
+        exporter.exportAsynchronously {
+            DispatchQueue.main.async {
+                if exporter.status == .completed {
+                    do {
+                        let attrs = try FileManager.default.attributesOfItem(atPath: outputPath)
+                        let fileSize = (attrs[.size] as? NSNumber)?.intValue ?? 0
+                        let outAsset = AVAsset(url: outputURL)
+                        let outDuration = CMTimeGetSeconds(outAsset.duration)
+                        let outVideoTracks = outAsset.tracks(withMediaType: .video).count
+                        print("VideoOverlayProcessor: SinglePass output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks)")
+                        if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 1024 {
+                            let diag = "Invalid output (size=\(fileSize), duration=\(outDuration), tracks=\(outVideoTracks))"
+                            completion(nil, "Export produced invalid video: \(diag)")
+                            return
+                        }
+                    } catch {
+                        print("VideoOverlayProcessor: Could not inspect output file: \(error)")
+                    }
+                    print("VideoOverlayProcessor: SinglePass export completed successfully")
+                    completion(outputPath, nil)
+                } else {
+                    let msg = exporter.error?.localizedDescription ?? "unknown"
+                    print("VideoOverlayProcessor: SinglePass export failed: \(msg)")
+                    completion(nil, "AVAssetExportSession (filter+overlay) failed: \(msg)")
                 }
             }
         }
