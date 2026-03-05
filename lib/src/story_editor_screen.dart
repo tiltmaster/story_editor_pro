@@ -433,6 +433,34 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         ),
         child: mediaWidget,
       );
+
+      final vigStrength = StoryEditorFilters.vignetteStrength(
+        widget.initialFilterPreset,
+        widget.initialFilterStrength,
+      );
+      if (vigStrength > 0.001) {
+        mediaWidget = Stack(
+          children: [
+            mediaWidget,
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: vigStrength.clamp(0.0, 0.9)),
+                      ],
+                      stops: const [0.35, 0.9],
+                      radius: 1.3,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      }
     }
 
     if (!widget.flipHorizontally) return mediaWidget;

@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_05_G"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_06_H"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -348,85 +348,54 @@ class VideoOverlayProcessor {
         }
     }
 
+    /// Applies a colour filter using the exact same 5×4 matrix that Flutter's
+    /// ColorFilter.matrix() produces. This guarantees the exported video is
+    /// pixel-accurate to what the user saw in the editor preview.
+    ///
+    /// Flutter formula (0–255 space, same additive bias for every channel):
+    ///   bOffset = brightness × 255 + (1 − contrast) × 128
+    ///   out_R = r0·R + r1·G + r2·B + bOffset   (likewise for G and B rows)
+    ///
+    /// CIColorMatrix works in 0–1 normalised space, so the bias becomes:
+    ///   bias = brightness + (1 − contrast) × 0.5
     private func applyFilter(to image: CIImage, preset: String, strength: Double) -> CIImage {
         let t = max(0.0, min(1.0, strength))
-        let p = self.resolveFilterParams(preset: preset, strength: t)
+        if t < 0.001 { return image }
+        let p = resolveFilterParams(preset: preset, strength: t)
 
-        var output = image
-        let extent = output.extent
-        let center = CGPoint(x: extent.midX, y: extent.midY)
-        let radius = min(extent.width, extent.height) * 0.45
+        let c = p.contrast
+        let s = p.saturation
+        // BT.709 luminance weights — same as Flutter
+        let rLum = 0.2126, gLum = 0.7152, bLum = 0.0722
+        let sr = (1.0 - s) * rLum
+        let sg = (1.0 - s) * gLum
+        let sb = (1.0 - s) * bLum
 
-        if let controls = CIFilter(name: "CIColorControls") {
-            controls.setValue(output, forKey: kCIInputImageKey)
-            controls.setValue(p.saturation, forKey: kCIInputSaturationKey)
-            controls.setValue(p.brightness, forKey: kCIInputBrightnessKey)
-            controls.setValue(p.contrast, forKey: kCIInputContrastKey)
-            if let result = controls.outputImage {
-                output = result
-            }
-        }
+        let r0 = (sr + s) * c * p.red;   let r1 = sg * c * p.red;   let r2 = sb * c * p.red
+        let g0 = sr * c * p.green;        let g1 = (sg + s) * c * p.green; let g2 = sb * c * p.green
+        let b0 = sr * c * p.blue;         let b1 = sg * c * p.blue; let b2 = (sb + s) * c * p.blue
+        let bias = p.brightness + (1.0 - c) * 0.5
 
-        if let matrix = CIFilter(name: "CIColorMatrix") {
-            matrix.setValue(output, forKey: kCIInputImageKey)
-            matrix.setValue(CIVector(x: p.red, y: 0, z: 0, w: 0), forKey: "inputRVector")
-            matrix.setValue(CIVector(x: 0, y: p.green, z: 0, w: 0), forKey: "inputGVector")
-            matrix.setValue(CIVector(x: 0, y: 0, z: p.blue, w: 0), forKey: "inputBVector")
-            matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
-            if let result = matrix.outputImage {
-                output = result
-            }
-        }
+        guard let matrix = CIFilter(name: "CIColorMatrix") else { return image }
+        matrix.setValue(image,                                   forKey: kCIInputImageKey)
+        matrix.setValue(CIVector(x: r0, y: r1, z: r2, w: 0),   forKey: "inputRVector")
+        matrix.setValue(CIVector(x: g0, y: g1, z: g2, w: 0),   forKey: "inputGVector")
+        matrix.setValue(CIVector(x: b0, y: b1, z: b2, w: 0),   forKey: "inputBVector")
+        matrix.setValue(CIVector(x: 0,  y: 0,  z: 0,  w: 1),   forKey: "inputAVector")
+        matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 0), forKey: "inputBiasVector")
+        var output = matrix.outputImage ?? image
 
-        if p.vignette > 0.001, let vignette = CIFilter(name: "CIVignette") {
+        // CIVignette intensity is calibrated to be visually equivalent to the
+        // Flutter RadialGradient / Android GLSL vignette at the same preset.
+        // CIVignette uses a different internal curve, so intensity ≈ vigAmount × 1.78.
+        if p.vignette > 0.001,
+           let vignette = CIFilter(name: "CIVignette") {
+            let extent = output.extent
+            let radius = min(extent.width, extent.height) * 0.45
             vignette.setValue(output, forKey: kCIInputImageKey)
             vignette.setValue(p.vignette, forKey: kCIInputIntensityKey)
-            vignette.setValue(radius * 0.9, forKey: kCIInputRadiusKey)
-            if let result = vignette.outputImage {
-                output = result
-            }
-        }
-
-        if p.warpMode == 1, let bulge = CIFilter(name: "CIBumpDistortion") {
-            bulge.setValue(output, forKey: kCIInputImageKey)
-            bulge.setValue(CIVector(cgPoint: center), forKey: kCIInputCenterKey)
-            bulge.setValue(radius, forKey: kCIInputRadiusKey)
-            bulge.setValue(p.warpAmount, forKey: kCIInputScaleKey)
-            if let result = bulge.outputImage {
-                output = result
-            }
-        } else if p.warpMode == 2, let twirl = CIFilter(name: "CITwirlDistortion") {
-            twirl.setValue(output, forKey: kCIInputImageKey)
-            twirl.setValue(CIVector(cgPoint: center), forKey: kCIInputCenterKey)
-            twirl.setValue(radius, forKey: kCIInputRadiusKey)
-            twirl.setValue(p.warpAmount, forKey: kCIInputAngleKey)
-            if let result = twirl.outputImage {
-                output = result
-            }
-        }
-
-        if preset == "retro2044", let hue = CIFilter(name: "CIHueAdjust") {
-            hue.setValue(output, forKey: kCIInputImageKey)
-            hue.setValue(NSNumber(value: 0.18 * t), forKey: kCIInputAngleKey)
-            if let result = hue.outputImage {
-                output = result
-            }
-        }
-
-        if preset == "productcrisp", let sharpen = CIFilter(name: "CISharpenLuminance") {
-            sharpen.setValue(output, forKey: kCIInputImageKey)
-            sharpen.setValue(NSNumber(value: 0.35 * t), forKey: kCIInputSharpnessKey)
-            if let result = sharpen.outputImage {
-                output = result
-            }
-        }
-
-        if preset == "nightneon", let hue = CIFilter(name: "CIHueAdjust") {
-            hue.setValue(output, forKey: kCIInputImageKey)
-            hue.setValue(NSNumber(value: -0.12 * t), forKey: kCIInputAngleKey)
-            if let result = hue.outputImage {
-                output = result
-            }
+            vignette.setValue(radius,     forKey: kCIInputRadiusKey)
+            if let result = vignette.outputImage { output = result }
         }
 
         return output

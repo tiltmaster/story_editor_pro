@@ -257,6 +257,47 @@ class StoryEditorFilters {
     return ColorFilter.matrix(matrix(presetId, strength));
   }
 
+  /// Returns the vignette opacity (0.0–1.0) for the given preset and strength.
+  /// These values match the Android GLSL shader's uVignette uniform exactly,
+  /// so the Flutter preview vignette is visually consistent with the export.
+  static double vignetteStrength(String presetId, double strength) {
+    final s = strength.clamp(0.0, 1.0);
+    const double neutral = 0.0;
+    double target;
+    switch (presetId) {
+      case 'vignette':
+        target = 0.62;
+        break;
+      case 'cinematic':
+        target = 0.35;
+        break;
+      case 'filmicfade':
+        target = 0.52;
+        break;
+      case 'nightneon':
+        target = 0.40;
+        break;
+      case 'retro2044':
+        target = 0.22;
+        break;
+      case 'pastelmist':
+        target = 0.22;
+        break;
+      case 'tealorange':
+        target = 0.18;
+        break;
+      case 'portraitpop':
+        target = 0.16;
+        break;
+      case 'productcrisp':
+        target = 0.08;
+        break;
+      default:
+        return 0.0;
+    }
+    return _lerp(neutral, target, s);
+  }
+
   static Color previewColor(String presetId) {
     switch (presetId) {
       case 'vivid':

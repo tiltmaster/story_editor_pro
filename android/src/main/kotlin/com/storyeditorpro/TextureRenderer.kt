@@ -33,53 +33,28 @@ class TextureRenderer {
             }
         """
 
-        // Fragment shader for OES texture (video frames from SurfaceTexture)
+        // Fragment shader for OES texture (video frames from SurfaceTexture).
+        // Uses the same 3×3 colour matrix + bias that Flutter's ColorFilter.matrix()
+        // produces, ensuring the exported video matches the editor preview exactly.
         private const val FRAGMENT_SHADER_OES = """
             #extension GL_OES_EGL_image_external : require
             precision mediump float;
             varying vec2 vTexCoord;
             uniform samplerExternalOES uTexture;
-            uniform float uBrightness;
-            uniform float uContrast;
-            uniform float uSaturation;
-            uniform vec3 uChannelScale;
+            uniform mat3 uColorMatrix;
+            uniform vec3 uColorBias;
             uniform float uVignette;
-            uniform float uWarpMode;
-            uniform float uWarpAmount;
             void main() {
                 vec2 uv = vTexCoord;
-                vec2 center = vec2(0.5, 0.5);
-                vec2 delta = uv - center;
-                float r = length(delta);
-                if (uWarpMode > 0.5 && uWarpMode < 1.5) {
-                    float amount = uWarpAmount * (1.0 - smoothstep(0.0, 0.65, r));
-                    uv = uv - delta * amount;
-                } else if (uWarpMode >= 1.5) {
-                    float angle = uWarpAmount * (1.0 - smoothstep(0.0, 0.7, r));
-                    float s = sin(angle);
-                    float c = cos(angle);
-                    delta = vec2(delta.x * c - delta.y * s, delta.x * s + delta.y * c);
-                    uv = center + delta;
-                }
-                uv = clamp(uv, 0.0, 1.0);
-
                 vec4 tex = texture2D(uTexture, uv);
-                vec3 color = tex.rgb;
-
-                color = (color - 0.5) * uContrast + 0.5;
-
-                float luma = dot(color, vec3(0.299, 0.587, 0.114));
-                color = mix(vec3(luma), color, uSaturation);
-
-                color = color + vec3(uBrightness);
-                color = color * uChannelScale;
+                vec3 color = uColorMatrix * tex.rgb + uColorBias;
                 if (uVignette > 0.001) {
+                    vec2 center = vec2(0.5, 0.5);
                     float dist = distance(vTexCoord, center);
                     float vig = smoothstep(0.35, 0.82, dist);
                     color *= (1.0 - vig * uVignette);
                 }
                 color = clamp(color, 0.0, 1.0);
-
                 gl_FragColor = vec4(color, tex.a);
             }
         """
@@ -127,15 +102,15 @@ class TextureRenderer {
     private var outputWidth = 0
     private var outputHeight = 0
     private var mirrorVideoHorizontally = false
-    private var filterBrightness = 0f
-    private var filterContrast = 1f
-    private var filterSaturation = 1f
-    private var filterRed = 1f
-    private var filterGreen = 1f
-    private var filterBlue = 1f
+    // Precomputed Flutter-equivalent 3×3 colour matrix (column-major for GLES) + bias.
+    // Initialised to identity (no-op filter).
+    private var colorMatrix = floatArrayOf(
+        1f, 0f, 0f,   // column 0: how input.r contributes to out.rgb
+        0f, 1f, 0f,   // column 1: how input.g contributes to out.rgb
+        0f, 0f, 1f    // column 2: how input.b contributes to out.rgb
+    )
+    private var colorBias = floatArrayOf(0f, 0f, 0f)
     private var filterVignette = 0f
-    private var filterWarpMode = 0f
-    private var filterWarpAmount = 0f
 
     init {
         vertexBuffer = createFloatBuffer(QUAD_VERTICES)
@@ -242,15 +217,37 @@ class TextureRenderer {
         warpMode: Float = 0f,
         warpAmount: Float = 0f,
     ) {
-        filterBrightness = brightness
-        filterContrast = contrast
-        filterSaturation = saturation
-        filterRed = red
-        filterGreen = green
-        filterBlue = blue
+        // Compute the identical 5×4 colour matrix that Flutter's ColorFilter.matrix()
+        // produces, so the exported video matches the editor preview pixel-for-pixel.
+        //
+        // Flutter formula (0–255 space, same additive bias for every channel):
+        //   bOffset = brightness × 255 + (1 − contrast) × 128
+        //   out_R   = r0·R + r1·G + r2·B + bOffset
+        //
+        // GLES works in 0–1 normalised space, so the bias becomes:
+        //   bias = brightness + (1 − contrast) × 0.5
+        val c = contrast
+        val s = saturation
+        // BT.709 luminance weights — same as Flutter
+        val rLum = 0.2126f; val gLum = 0.7152f; val bLum = 0.0722f
+        val sr = (1f - s) * rLum; val sg = (1f - s) * gLum; val sb = (1f - s) * bLum
+
+        val r0 = (sr + s) * c * red;  val r1 = sg * c * red;  val r2 = sb * c * red
+        val g0 = sr * c * green;       val g1 = (sg + s) * c * green; val g2 = sb * c * green
+        val b0 = sr * c * blue;        val b1 = sg * c * blue; val b2 = (sb + s) * c * blue
+        val bias = brightness + (1f - c) * 0.5f
+
+        // GLSL mat3 is column-major: mat3(col0, col1, col2)
+        // col0 = contributions of input.r to output.rgb
+        // col1 = contributions of input.g to output.rgb
+        // col2 = contributions of input.b to output.rgb
+        colorMatrix = floatArrayOf(
+            r0, g0, b0,   // column 0
+            r1, g1, b1,   // column 1
+            r2, g2, b2    // column 2
+        )
+        colorBias = floatArrayOf(bias, bias, bias)
         filterVignette = vignette
-        filterWarpMode = warpMode
-        filterWarpAmount = warpAmount
     }
 
     /**
@@ -328,20 +325,12 @@ class TextureRenderer {
         GLES20.glBindTexture(textureTarget, textureId)
         GLES20.glUniform1i(textureLoc, 0)
 
-        val brightnessLoc = GLES20.glGetUniformLocation(program, "uBrightness")
-        if (brightnessLoc >= 0) GLES20.glUniform1f(brightnessLoc, filterBrightness)
-        val contrastLoc = GLES20.glGetUniformLocation(program, "uContrast")
-        if (contrastLoc >= 0) GLES20.glUniform1f(contrastLoc, filterContrast)
-        val saturationLoc = GLES20.glGetUniformLocation(program, "uSaturation")
-        if (saturationLoc >= 0) GLES20.glUniform1f(saturationLoc, filterSaturation)
-        val channelScaleLoc = GLES20.glGetUniformLocation(program, "uChannelScale")
-        if (channelScaleLoc >= 0) GLES20.glUniform3f(channelScaleLoc, filterRed, filterGreen, filterBlue)
+        val colorMatrixLoc = GLES20.glGetUniformLocation(program, "uColorMatrix")
+        if (colorMatrixLoc >= 0) GLES20.glUniformMatrix3fv(colorMatrixLoc, 1, false, colorMatrix, 0)
+        val colorBiasLoc = GLES20.glGetUniformLocation(program, "uColorBias")
+        if (colorBiasLoc >= 0) GLES20.glUniform3fv(colorBiasLoc, 1, colorBias, 0)
         val vignetteLoc = GLES20.glGetUniformLocation(program, "uVignette")
         if (vignetteLoc >= 0) GLES20.glUniform1f(vignetteLoc, filterVignette)
-        val warpModeLoc = GLES20.glGetUniformLocation(program, "uWarpMode")
-        if (warpModeLoc >= 0) GLES20.glUniform1f(warpModeLoc, filterWarpMode)
-        val warpAmountLoc = GLES20.glGetUniformLocation(program, "uWarpAmount")
-        if (warpAmountLoc >= 0) GLES20.glUniform1f(warpAmountLoc, filterWarpAmount)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
