@@ -2845,7 +2845,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
         if (overlayPng == null) throw Exception('Failed to capture overlay');
 
-        final exportedPath = await VideoOverlayExportService.exportVideoWithOverlay(
+        // Start export in background — returns predetermined output path immediately (~10ms)
+        filePath = await VideoOverlayExportService.startExportInBackground(
           videoPath: widget.mediaPath,
           overlayPngBytes: overlayPng,
           mirrorHorizontally: widget.flipHorizontally,
@@ -2854,14 +2855,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           filterPreset: widget.initialFilterPreset,
           filterStrength: widget.initialFilterStrength,
         );
-        debugPrint('VideoOverlayProcessor: Total export: ${stopwatch.elapsedMilliseconds}ms');
-        if (exportedPath == null) {
-          final details = VideoOverlayExportService.lastExportError ?? 'unknown native error';
-          throw Exception('Video export failed: $details');
-        }
-
-          filePath = exportedPath;
-          resultMediaType = StoryMediaType.video;
+        debugPrint('VideoOverlayProcessor: Background export started in ${stopwatch.elapsedMilliseconds}ms, navigating immediately');
+        resultMediaType = StoryMediaType.video;
         }
       } else {
         // IMAGE: Export on fixed story canvas (e.g. 1080x1920)
@@ -2876,9 +2871,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       }
 
       if (mounted) {
-        final storyResult = await StoryResult.fromFile(
-          filePath,
+        // Build StoryResult directly — file may still be exporting in background
+        final storyResult = StoryResult(
+          filePath: filePath,
+          fileName: filePath.split('/').last,
           mediaType: resultMediaType,
+          fileSize: 0,
+          createdAt: DateTime.now(),
           durationMs: _mediaType == MediaType.video
               ? _videoController?.value.duration.inMilliseconds
               : null,

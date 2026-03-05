@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_04_F"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_05_G"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -242,6 +242,9 @@ class VideoOverlayProcessor {
         let overlayCI = CIImage(cgImage: overlayCGImage)
         let asset = AVAsset(url: videoURL)
 
+        // Persistent GPU-backed context — reused for every frame to avoid per-frame allocation overhead
+        let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
         let ciComposition = AVVideoComposition(asset: asset) { [weak self] request in
             guard let self = self else { return }
             let sourceExtent = request.sourceImage.extent
@@ -268,10 +271,10 @@ class VideoOverlayProcessor {
 
             // Composite overlay on top of filtered video, crop to frame
             let composited = scaledOverlay.composited(over: filtered).cropped(to: sourceExtent)
-            request.finish(with: composited, context: nil)
+            request.finish(with: composited, context: ciContext)
         }
 
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else {
             DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession for filter+overlay.") }
             return
         }
@@ -320,13 +323,14 @@ class VideoOverlayProcessor {
         try? FileManager.default.removeItem(at: outputURL)
 
         let asset = AVAsset(url: inputURL)
+        let ciContext = CIContext(options: [.useSoftwareRenderer: false])
         let composition = AVVideoComposition(asset: asset) { request in
             let source = request.sourceImage.clampedToExtent()
             let filtered = self.applyFilter(to: source, preset: preset, strength: strength)
-            request.finish(with: filtered.cropped(to: request.sourceImage.extent), context: nil)
+            request.finish(with: filtered.cropped(to: request.sourceImage.extent), context: ciContext)
         }
 
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else {
             completion(false, "Failed to create filter export session.")
             return
         }

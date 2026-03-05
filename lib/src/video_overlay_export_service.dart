@@ -11,9 +11,14 @@ import 'package:path_provider/path_provider.dart';
 class VideoOverlayExportService {
   static const MethodChannel _channel = MethodChannel('story_editor_pro');
   static String? _lastExportError;
+  static Future<String?>? _pendingExportFuture;
 
   /// Last export error details (if any).
   static String? get lastExportError => _lastExportError;
+
+  /// Future that resolves when the most recent background export completes.
+  /// Returns the output path on success, or null on failure.
+  static Future<String?>? get pendingExportFuture => _pendingExportFuture;
 
   /// Export video with overlay PNG baked in.
   ///
@@ -89,6 +94,87 @@ class VideoOverlayExportService {
     } catch (e) {
       _lastExportError = e.toString();
       debugPrint('VideoOverlayProcessor: Error: $_lastExportError');
+      return null;
+    }
+  }
+
+  /// Starts a video export in the background and returns the predetermined output path
+  /// immediately (~10ms for temp dir lookup + overlay PNG write).
+  ///
+  /// The native export runs asynchronously. Access [pendingExportFuture] to track completion.
+  /// Callers can navigate away immediately and await [pendingExportFuture] before uploading.
+  static Future<String> startExportInBackground({
+    required String videoPath,
+    required Uint8List overlayPngBytes,
+    bool mirrorHorizontally = false,
+    int? outputWidth,
+    int? outputHeight,
+    String filterPreset = 'none',
+    double filterStrength = 1.0,
+  }) async {
+    _lastExportError = null;
+    final tempDir = await getTemporaryDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final overlayPath = '${tempDir.path}/overlay_$timestamp.png';
+    final outputPath = '${tempDir.path}/story_video_$timestamp.mp4';
+
+    // Write overlay PNG synchronously before firing the native call (~5–15ms)
+    await File(overlayPath).writeAsBytes(overlayPngBytes);
+    debugPrint('VideoOverlayProcessor: Overlay written, firing background export → $outputPath');
+
+    // Start native export and store the future — callers await pendingExportFuture
+    _pendingExportFuture = _runNativeExport(
+      videoPath: videoPath,
+      overlayPath: overlayPath,
+      outputPath: outputPath,
+      mirrorHorizontally: mirrorHorizontally,
+      outputWidth: outputWidth,
+      outputHeight: outputHeight,
+      filterPreset: filterPreset,
+      filterStrength: filterStrength,
+    );
+
+    return outputPath;
+  }
+
+  static Future<String?> _runNativeExport({
+    required String videoPath,
+    required String overlayPath,
+    required String outputPath,
+    required bool mirrorHorizontally,
+    int? outputWidth,
+    int? outputHeight,
+    required String filterPreset,
+    required double filterStrength,
+  }) async {
+    try {
+      final result = await _channel.invokeMethod<String>(
+        'exportVideoWithOverlay',
+        {
+          'videoPath': videoPath,
+          'overlayImagePath': overlayPath,
+          'outputPath': outputPath,
+          'mirrorHorizontally': mirrorHorizontally,
+          'outputWidth': outputWidth,
+          'outputHeight': outputHeight,
+          'filterPreset': filterPreset,
+          'filterStrength': filterStrength,
+        },
+      );
+      try { await File(overlayPath).delete(); } catch (_) {}
+      if (result != null && await File(result).exists()) {
+        debugPrint('VideoOverlayProcessor: Background export done → $result');
+        return result;
+      }
+      _lastExportError = 'Native export returned no output file path.';
+      return null;
+    } on PlatformException catch (e) {
+      _lastExportError = e.message ?? 'PlatformException';
+      debugPrint('VideoOverlayProcessor: Background export failed: $_lastExportError');
+      return null;
+    } catch (e) {
+      _lastExportError = e.toString();
+      debugPrint('VideoOverlayProcessor: Background export error: $_lastExportError');
       return null;
     }
   }
