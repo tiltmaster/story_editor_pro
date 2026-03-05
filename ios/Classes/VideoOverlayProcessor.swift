@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_06_H"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_06_I"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -242,8 +242,15 @@ class VideoOverlayProcessor {
         let overlayCI = CIImage(cgImage: overlayCGImage)
         let asset = AVAsset(url: videoURL)
 
-        // Persistent GPU-backed context — reused for every frame to avoid per-frame allocation overhead
-        let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+        // Use sRGB (gamma-encoded) as the working colour space so that CIColorMatrix
+        // operates on the same gamma-encoded values that Flutter's ColorFilter.matrix
+        // and the Android GLSL shader receive. CoreImage's default is linear light,
+        // which causes the same matrix to produce visually different results.
+        let workingCS = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ciContext = CIContext(options: [
+            .useSoftwareRenderer: false,
+            .workingColorSpace: workingCS,
+        ])
 
         let ciComposition = AVVideoComposition(asset: asset) { [weak self] request in
             guard let self = self else { return }
