@@ -2906,12 +2906,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       StoryMediaType resultMediaType;
 
       if (_mediaType == MediaType.video) {
-        if (!_requiresVideoExport()) {
-          debugPrint('VideoOverlayProcessor: No video edits detected, skipping export and returning original file');
-          filePath = widget.mediaPath;
-          resultMediaType = StoryMediaType.video;
-        } else {
-        // VIDEO: Pause video briefly to capture overlay, then resume
+        {
+        // VIDEO: Always export to ensure proper compression (raw camera footage can be 100+ MB).
+        // For no-edit videos, the transparent overlay is a no-op and the export just recompresses.
         final stopwatch = Stopwatch()..start();
         _videoController?.pause();
 

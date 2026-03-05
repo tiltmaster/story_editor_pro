@@ -176,7 +176,7 @@ class VideoOverlayProcessor {
             // 9. Export
             guard let exporter = AVAssetExportSession(
                 asset: composition,
-                presetName: AVAssetExportPresetHighestQuality
+                presetName: AVAssetExportPreset1920x1080
             ) else {
                 print("VideoOverlayProcessor: Failed to create export session")
                 DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession.") }
