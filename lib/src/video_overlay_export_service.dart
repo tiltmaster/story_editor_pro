@@ -12,6 +12,7 @@ class VideoOverlayExportService {
   static const MethodChannel _channel = MethodChannel('story_editor_pro');
   static String? _lastExportError;
   static Future<String?>? _pendingExportFuture;
+  static String? _pendingExportRawVideoPath;
 
   /// Last export error details (if any).
   static String? get lastExportError => _lastExportError;
@@ -19,6 +20,9 @@ class VideoOverlayExportService {
   /// Future that resolves when the most recent background export completes.
   /// Returns the output path on success, or null on failure.
   static Future<String?>? get pendingExportFuture => _pendingExportFuture;
+
+  /// The original (pre-filter) video path for use as an instant preview placeholder.
+  static String? get pendingExportRawVideoPath => _pendingExportRawVideoPath;
 
   /// Export video with overlay PNG baked in.
   ///
@@ -121,6 +125,8 @@ class VideoOverlayExportService {
     // Write overlay PNG synchronously before firing the native call (~5–15ms)
     await File(overlayPath).writeAsBytes(overlayPngBytes);
     debugPrint('VideoOverlayProcessor: Overlay written, firing background export → $outputPath');
+
+    _pendingExportRawVideoPath = videoPath; // saved for instant preview in detail screens
 
     // Start native export and store the future — callers await pendingExportFuture
     _pendingExportFuture = _runNativeExport(
