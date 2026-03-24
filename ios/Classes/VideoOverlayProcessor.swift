@@ -38,6 +38,8 @@ class VideoOverlayProcessor {
                     outputURL: outputURL,
                     outputPath: outputPath,
                     mirrorHorizontally: mirrorHorizontally,
+                    outputWidth: outputWidth,
+                    outputHeight: outputHeight,
                     filterPreset: filterPreset,
                     filterStrength: filterStrength,
                     completion: completion
@@ -81,7 +83,11 @@ class VideoOverlayProcessor {
                  withMediaType: .audio,
                  preferredTrackID: kCMPersistentTrackID_Invalid
                ) {
-                try? compositionAudioTrack.insertTimeRange(timeRange, of: audioTrack, at: .zero)
+                do {
+                    try compositionAudioTrack.insertTimeRange(timeRange, of: audioTrack, at: .zero)
+                } catch {
+                    print("VideoOverlayProcessor: Failed to insert audio track: \(error)")
+                }
             }
 
             // 4. Calculate render size from the actual source track (filtered or original).
@@ -176,7 +182,7 @@ class VideoOverlayProcessor {
             // 9. Export
             guard let exporter = AVAssetExportSession(
                 asset: composition,
-                presetName: AVAssetExportPreset1920x1080
+                presetName: AVAssetExportPresetHighestQuality
             ) else {
                 print("VideoOverlayProcessor: Failed to create export session")
                 DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession.") }
@@ -197,7 +203,8 @@ class VideoOverlayProcessor {
                             let outAsset = AVAsset(url: outputURL)
                             let outDuration = CMTimeGetSeconds(outAsset.duration)
                             let outVideoTracks = outAsset.tracks(withMediaType: .video).count
-                            print("VideoOverlayProcessor: Output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks)")
+                            let outAudioTracks = outAsset.tracks(withMediaType: .audio).count
+                            print("VideoOverlayProcessor: Output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks), audioTracks=\(outAudioTracks)")
 
                             if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 1024 {
                                 let diag = "Invalid output (size=\(fileSize), duration=\(outDuration), tracks=\(outVideoTracks))"
@@ -229,6 +236,8 @@ class VideoOverlayProcessor {
         outputURL: URL,
         outputPath: String,
         mirrorHorizontally: Bool,
+        outputWidth: Int?,
+        outputHeight: Int?,
         filterPreset: String,
         filterStrength: Double,
         completion: @escaping (String?, String?) -> Void
@@ -280,8 +289,12 @@ class VideoOverlayProcessor {
             let composited = scaledOverlay.composited(over: filtered).cropped(to: sourceExtent)
             request.finish(with: composited, context: ciContext)
         }
+        if let outputWidth = outputWidth, let outputHeight = outputHeight, outputWidth > 0, outputHeight > 0 {
+            ciComposition.renderSize = CGSize(width: outputWidth, height: outputHeight)
+        }
+        ciComposition.frameDuration = CMTime(value: 1, timescale: 30)
 
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else {
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
             DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession for filter+overlay.") }
             return
         }
@@ -300,7 +313,8 @@ class VideoOverlayProcessor {
                         let outAsset = AVAsset(url: outputURL)
                         let outDuration = CMTimeGetSeconds(outAsset.duration)
                         let outVideoTracks = outAsset.tracks(withMediaType: .video).count
-                        print("VideoOverlayProcessor: SinglePass output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks)")
+                        let outAudioTracks = outAsset.tracks(withMediaType: .audio).count
+                        print("VideoOverlayProcessor: SinglePass output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks), audioTracks=\(outAudioTracks)")
                         if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 1024 {
                             let diag = "Invalid output (size=\(fileSize), duration=\(outDuration), tracks=\(outVideoTracks))"
                             completion(nil, "Export produced invalid video: \(diag)")
