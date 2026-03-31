@@ -4,7 +4,7 @@ import UIKit
 import CoreImage
 
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_06_J"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_31_K"
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -26,209 +26,32 @@ class VideoOverlayProcessor {
         try? FileManager.default.removeItem(at: outputURL)
 
         DispatchQueue.global(qos: .userInitiated).async {
-            // When a filter is requested use a single CI pass: apply filter + composite
-            // overlay in the AVVideoComposition block. This avoids the two-pass approach
-            // whose intermediate file has uncertain orientation metadata (Apple's block-based
-            // CI compositor bakes the rotation into pixels but the output track may still
-            // carry the original preferredTransform, causing a double-rotation → black video).
-            if filterPreset != "none" && filterStrength > 0.01 {
-                self.exportSinglePassFilteredWithOverlay(
-                    videoURL: videoURL,
-                    overlayImagePath: overlayImagePath,
-                    outputURL: outputURL,
-                    outputPath: outputPath,
-                    mirrorHorizontally: mirrorHorizontally,
-                    filterPreset: filterPreset,
-                    filterStrength: filterStrength,
-                    completion: completion
-                )
-                return
-            }
-
-            let asset = AVAsset(url: videoURL)
-            let inputDuration = CMTimeGetSeconds(asset.duration)
-            let inputVideoTracks = asset.tracks(withMediaType: .video).count
-            let inputAudioTracks = asset.tracks(withMediaType: .audio).count
-            print("VideoOverlayProcessor: Input duration=\(inputDuration)s, videoTracks=\(inputVideoTracks), audioTracks=\(inputAudioTracks)")
-
-            // 1. Create mutable composition
-            let composition = AVMutableComposition()
-
-            // 2. Add video track
-            guard let videoTrack = asset.tracks(withMediaType: .video).first,
-                  let compositionVideoTrack = composition.addMutableTrack(
-                    withMediaType: .video,
-                    preferredTrackID: kCMPersistentTrackID_Invalid
-                  ) else {
-                print("VideoOverlayProcessor: No video track found")
-                DispatchQueue.main.async { completion(nil, "No video track found in input file.") }
-                return
-            }
-
-            let timeRange = CMTimeRange(start: .zero, duration: asset.duration)
-
-            do {
-                try compositionVideoTrack.insertTimeRange(timeRange, of: videoTrack, at: .zero)
-            } catch {
-                print("VideoOverlayProcessor: Failed to insert video track: \(error)")
-                DispatchQueue.main.async { completion(nil, "Failed to insert video track: \(error.localizedDescription)") }
-                return
-            }
-
-            // 3. Add audio track (if exists)
-            if let audioTrack = asset.tracks(withMediaType: .audio).first,
-               let compositionAudioTrack = composition.addMutableTrack(
-                 withMediaType: .audio,
-                 preferredTrackID: kCMPersistentTrackID_Invalid
-               ) {
-                try? compositionAudioTrack.insertTimeRange(timeRange, of: audioTrack, at: .zero)
-            }
-
-            // 4. Calculate render size from the actual source track (filtered or original).
-            // When a filter is applied, AVVideoComposition(asset:applyingCIFiltersWithHandler:)
-            // bakes the rotation into pixels and outputs a portrait naturalSize with identity
-            // preferredTransform. Using videoTrack here handles both cases correctly:
-            //   - no filter: original track (e.g. 1920x1080, 90° rotation) → makeVideoTransform rotates → portrait ✓
-            //   - filtered:  filtered track (e.g. 1080x1920, identity)      → makeVideoTransform identity → portrait ✓
-            let renderSize: CGSize
-            if let outputWidth = outputWidth, let outputHeight = outputHeight, outputWidth > 0, outputHeight > 0 {
-                renderSize = CGSize(width: outputWidth, height: outputHeight)
-            } else {
-                renderSize = self.calculateRenderSize(track: videoTrack)
-            }
-
-            // 5. Create video composition
-            let videoComposition = AVMutableVideoComposition()
-            videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-            videoComposition.renderSize = renderSize
-
-            // 6. Create layer instruction for proper video orientation
-            let instruction = AVMutableVideoCompositionInstruction()
-            instruction.timeRange = timeRange
-
-            let layerInstruction = AVMutableVideoCompositionLayerInstruction(
-                assetTrack: compositionVideoTrack
+            self.exportSinglePassWithOverlay(
+                videoURL: videoURL,
+                overlayImagePath: overlayImagePath,
+                outputURL: outputURL,
+                outputPath: outputPath,
+                mirrorHorizontally: mirrorHorizontally,
+                outputWidth: outputWidth,
+                outputHeight: outputHeight,
+                filterPreset: filterPreset,
+                filterStrength: filterStrength,
+                completion: completion
             )
-            var transform = self.makeVideoTransform(
-                track: videoTrack,
-                renderSize: renderSize
-            )
-            print("VideoOverlayProcessor: source naturalSize=\(videoTrack.naturalSize), preferredTransform=\(videoTrack.preferredTransform)")
-            print("VideoOverlayProcessor: renderSize=\(renderSize), computedTransform=\(transform)")
-            if mirrorHorizontally {
-                let mirror = CGAffineTransform(translationX: renderSize.width, y: 0).scaledBy(x: -1, y: 1)
-                transform = transform.concatenating(mirror)
-            }
-            layerInstruction.setTransform(transform, at: .zero)
-            instruction.layerInstructions = [layerInstruction]
-            videoComposition.instructions = [instruction]
-
-            // 7. Create overlay layer from PNG
-            guard let overlayImage = UIImage(contentsOfFile: overlayImagePath) else {
-                print("VideoOverlayProcessor: Failed to load overlay image")
-                DispatchQueue.main.async { completion(nil, "Failed to load overlay image from path: \(overlayImagePath)") }
-                return
-            }
-
-            let parentLayer = CALayer()
-            let videoLayer = CALayer()
-            let overlayLayer = CALayer()
-
-            parentLayer.frame = CGRect(origin: .zero, size: renderSize)
-            parentLayer.masksToBounds = true
-            // AVVideoCompositionCoreAnimationTool composites in AVFoundation's y-up coordinate system.
-            // isGeometryFlipped = true on the parent makes the CALayer coordinate system match,
-            // which is required to prevent video frames from being rendered off-canvas (black video).
-            parentLayer.isGeometryFlipped = true
-            videoLayer.frame = CGRect(origin: .zero, size: renderSize)
-            overlayLayer.contents = overlayImage.cgImage
-            // isGeometryFlipped = true on the overlay counteracts the parent flip so that the
-            // UIKit PNG image (y-down / top-left origin) appears in its correct orientation.
-            overlayLayer.isGeometryFlipped = true
-
-            // Scale overlay to cover renderSize while preserving aspect ratio (center crop)
-            let overlayAspect = overlayImage.size.width / overlayImage.size.height
-            let renderAspect = renderSize.width / renderSize.height
-            let overlayFrame: CGRect
-            if overlayAspect > renderAspect {
-                // Overlay is wider: match height, crop width
-                let scaledWidth = renderSize.height * overlayAspect
-                let offsetX = (renderSize.width - scaledWidth) / 2
-                overlayFrame = CGRect(x: offsetX, y: 0, width: scaledWidth, height: renderSize.height)
-            } else {
-                // Overlay is taller: match width, crop height
-                let scaledHeight = renderSize.width / overlayAspect
-                let offsetY = (renderSize.height - scaledHeight) / 2
-                overlayFrame = CGRect(x: 0, y: offsetY, width: renderSize.width, height: scaledHeight)
-            }
-            overlayLayer.frame = overlayFrame
-            overlayLayer.contentsGravity = .resize
-
-            parentLayer.addSublayer(videoLayer)
-            parentLayer.addSublayer(overlayLayer)
-
-            // 8. Apply animation tool
-            videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(
-                postProcessingAsVideoLayer: videoLayer,
-                in: parentLayer
-            )
-
-            // 9. Export
-            guard let exporter = AVAssetExportSession(
-                asset: composition,
-                presetName: AVAssetExportPreset1920x1080
-            ) else {
-                print("VideoOverlayProcessor: Failed to create export session")
-                DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession.") }
-                return
-            }
-
-            exporter.videoComposition = videoComposition
-            exporter.outputURL = outputURL
-            exporter.outputFileType = .mp4
-            exporter.shouldOptimizeForNetworkUse = true
-
-            exporter.exportAsynchronously {
-                DispatchQueue.main.async {
-                    if exporter.status == .completed {
-                        do {
-                            let attrs = try FileManager.default.attributesOfItem(atPath: outputPath)
-                            let fileSize = (attrs[.size] as? NSNumber)?.intValue ?? 0
-                            let outAsset = AVAsset(url: outputURL)
-                            let outDuration = CMTimeGetSeconds(outAsset.duration)
-                            let outVideoTracks = outAsset.tracks(withMediaType: .video).count
-                            print("VideoOverlayProcessor: Output size=\(fileSize) bytes, duration=\(outDuration)s, videoTracks=\(outVideoTracks)")
-
-                            if outVideoTracks == 0 || outDuration <= 0.05 || fileSize < 1024 {
-                                let diag = "Invalid output (size=\(fileSize), duration=\(outDuration), tracks=\(outVideoTracks))"
-                                print("VideoOverlayProcessor: Export validation failed: \(diag)")
-                                completion(nil, "Export produced invalid video: \(diag)")
-                                return
-                            }
-                        } catch {
-                            print("VideoOverlayProcessor: Could not inspect output file: \(error)")
-                        }
-                        print("VideoOverlayProcessor: Export completed successfully")
-                        completion(outputPath, nil)
-                    } else {
-                        let message = exporter.error?.localizedDescription ?? "unknown"
-                        print("VideoOverlayProcessor: Export failed: \(message)")
-                        completion(nil, "AVAssetExportSession failed: \(message)")
-                    }
-                }
-            }
         }
     }
 
-    /// Single-pass export: CI filter + overlay composited together.
-    /// AVVideoComposition(asset:applyingCIFiltersWithHandler:) always provides a
-    /// pre-oriented sourceImage, so there is no orientation ambiguity.
-    private func exportSinglePassFilteredWithOverlay(
+    /// Single-pass export: video crop/scale + optional filter + overlay composited together.
+    /// Keeping both filtered and unfiltered exports on the same path avoids the iOS-only
+    /// black-video regression that showed up in the separate Core Animation exporter.
+    private func exportSinglePassWithOverlay(
         videoURL: URL,
         overlayImagePath: String,
         outputURL: URL,
         outputPath: String,
         mirrorHorizontally: Bool,
+        outputWidth: Int?,
+        outputHeight: Int?,
         filterPreset: String,
         filterStrength: Double,
         completion: @escaping (String?, String?) -> Void
@@ -240,7 +63,24 @@ class VideoOverlayProcessor {
         }
 
         let overlayCI = CIImage(cgImage: overlayCGImage)
-        let asset = AVAsset(url: videoURL)
+        let asset = AVURLAsset(url: videoURL)
+        let inputDuration = CMTimeGetSeconds(asset.duration)
+        let inputVideoTracks = asset.tracks(withMediaType: .video).count
+        let inputAudioTracks = asset.tracks(withMediaType: .audio).count
+        print("VideoOverlayProcessor: Input duration=\(inputDuration)s, videoTracks=\(inputVideoTracks), audioTracks=\(inputAudioTracks)")
+
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            DispatchQueue.main.async { completion(nil, "No video track found in input file.") }
+            return
+        }
+
+        let renderSize: CGSize
+        if let outputWidth = outputWidth, let outputHeight = outputHeight, outputWidth > 0, outputHeight > 0 {
+            renderSize = CGSize(width: outputWidth, height: outputHeight)
+        } else {
+            renderSize = self.calculateRenderSize(track: videoTrack)
+        }
+        let targetExtent = CGRect(origin: .zero, size: renderSize)
 
         // Use sRGB (gamma-encoded) as the working colour space so that CIColorMatrix
         // operates on the same gamma-encoded values that Flutter's ColorFilter.matrix
@@ -252,41 +92,59 @@ class VideoOverlayProcessor {
             .workingColorSpace: workingCS,
         ])
 
+        print("VideoOverlayProcessor: source naturalSize=\(videoTrack.naturalSize), preferredTransform=\(videoTrack.preferredTransform)")
+        print("VideoOverlayProcessor: renderSize=\(renderSize)")
+
         let ciComposition = AVVideoComposition(asset: asset) { [weak self] request in
             guard let self = self else { return }
-            let sourceExtent = request.sourceImage.extent
 
-            // Optionally mirror the video frame before filtering
+            // AVVideoComposition's sourceImage is already orientation-correct, so all that is
+            // left to do is aspect-fill it into the requested story canvas.
             var source: CIImage = request.sourceImage
+            source = self.aspectFill(image: source, into: targetExtent)
+
             if mirrorHorizontally {
                 source = source
                     .transformed(by: CGAffineTransform(scaleX: -1, y: 1))
-                    .transformed(by: CGAffineTransform(translationX: sourceExtent.width, y: 0))
+                    .transformed(by: CGAffineTransform(translationX: targetExtent.width, y: 0))
             }
 
-            // Apply CI filter
-            let filtered = self.applyFilter(to: source.clampedToExtent(), preset: filterPreset, strength: filterStrength)
-                .cropped(to: sourceExtent)
+            let filtered: CIImage
+            if filterPreset != "none" && filterStrength > 0.01 {
+                filtered = self.applyFilter(to: source.clampedToExtent(), preset: filterPreset, strength: filterStrength)
+                    .cropped(to: targetExtent)
+            } else {
+                filtered = source.cropped(to: targetExtent)
+            }
 
-            // Scale overlay to cover source extent (aspect fill, centered)
-            let scale = max(sourceExtent.width / overlayCI.extent.width,
-                            sourceExtent.height / overlayCI.extent.height)
+            // Scale overlay to cover the requested output extent (aspect fill, centered).
+            let scale = max(targetExtent.width / overlayCI.extent.width,
+                            targetExtent.height / overlayCI.extent.height)
             var scaledOverlay = overlayCI.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            let dx = sourceExtent.midX - scaledOverlay.extent.midX
-            let dy = sourceExtent.midY - scaledOverlay.extent.midY
+            let dx = targetExtent.midX - scaledOverlay.extent.midX
+            let dy = targetExtent.midY - scaledOverlay.extent.midY
             scaledOverlay = scaledOverlay.transformed(by: CGAffineTransform(translationX: dx, y: dy))
 
             // Composite overlay on top of filtered video, crop to frame
-            let composited = scaledOverlay.composited(over: filtered).cropped(to: sourceExtent)
+            let composited = scaledOverlay.composited(over: filtered).cropped(to: targetExtent)
             request.finish(with: composited, context: ciContext)
         }
 
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else {
+        let videoComposition: AVVideoComposition
+        if let mutableComposition = ciComposition.mutableCopy() as? AVMutableVideoComposition {
+            mutableComposition.renderSize = renderSize
+            mutableComposition.frameDuration = CMTime(value: 1, timescale: 30)
+            videoComposition = mutableComposition
+        } else {
+            videoComposition = ciComposition
+        }
+
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
             DispatchQueue.main.async { completion(nil, "Failed to create AVAssetExportSession for filter+overlay.") }
             return
         }
 
-        exporter.videoComposition = ciComposition
+        exporter.videoComposition = videoComposition
         exporter.outputURL = outputURL
         exporter.outputFileType = .mp4
         exporter.shouldOptimizeForNetworkUse = true
@@ -470,6 +328,21 @@ class VideoOverlayProcessor {
         )
     }
 
+    private func aspectFill(image: CIImage, into targetExtent: CGRect) -> CIImage {
+        let sourceExtent = image.extent
+        guard sourceExtent.width > 0, sourceExtent.height > 0,
+              targetExtent.width > 0, targetExtent.height > 0 else {
+            return image
+        }
+
+        let scale = max(targetExtent.width / sourceExtent.width,
+                        targetExtent.height / sourceExtent.height)
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let dx = targetExtent.midX - scaled.extent.midX
+        let dy = targetExtent.midY - scaled.extent.midY
+        return scaled.transformed(by: CGAffineTransform(translationX: dx, y: dy))
+    }
+
     /// Calculate proper render size from video track (handles rotation)
     private func calculateRenderSize(track: AVAssetTrack) -> CGSize {
         let transform = track.preferredTransform
@@ -484,49 +357,5 @@ class VideoOverlayProcessor {
             return CGSize(width: size.height, height: size.width)
         }
         return size
-    }
-
-    /// Build a stable transform that:
-    /// 1) applies track orientation,
-    /// 2) normalizes to positive origin,
-    /// 3) scales with aspect-fill into renderSize,
-    /// 4) centers content in output frame.
-    private func makeVideoTransform(track: AVAssetTrack, renderSize: CGSize) -> CGAffineTransform {
-        let naturalRect = CGRect(origin: .zero, size: track.naturalSize)
-        var preferred = track.preferredTransform
-        var orientedRect = naturalRect.applying(preferred)
-
-        // Normalize origin to (0,0) to avoid off-canvas rendering.
-        preferred = preferred.translatedBy(x: -orientedRect.origin.x, y: -orientedRect.origin.y)
-        orientedRect = naturalRect.applying(preferred)
-
-        let orientedSize = CGSize(
-            width: abs(orientedRect.width),
-            height: abs(orientedRect.height)
-        )
-
-        guard orientedSize.width > 0, orientedSize.height > 0 else {
-            return preferred
-        }
-
-        let scale = max(
-            renderSize.width / orientedSize.width,
-            renderSize.height / orientedSize.height
-        )
-        let scaledWidth = orientedSize.width * scale
-        let scaledHeight = orientedSize.height * scale
-        let tx = (renderSize.width - scaledWidth) / 2.0
-        let ty = (renderSize.height - scaledHeight) / 2.0
-        
-        // Avoid scaling translation terms, which can push content fully off-canvas
-        // on some iOS exports and result in black video with audio-only playback.
-        var scaled = preferred
-        scaled.a *= scale
-        scaled.b *= scale
-        scaled.c *= scale
-        scaled.d *= scale
-        scaled.tx += tx
-        scaled.ty += ty
-        return scaled
     }
 }
