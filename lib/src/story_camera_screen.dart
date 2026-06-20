@@ -3459,8 +3459,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildBoomerangButton(),
-                const SizedBox(height: 16),
+                if (context.storyEditorConfig.enableBoomerang) ...[
+                  _buildBoomerangButton(),
+                  const SizedBox(height: 16),
+                ],
                 _buildCreateModeButton(),
                 const SizedBox(height: 16),
                 _buildCollageButton(),
