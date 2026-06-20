@@ -1144,6 +1144,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             _buildControlButton(
@@ -1155,7 +1156,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               ),
               onTap: () => Navigator.pop(context),
             ),
-            Row(
+            // Snapchat-style vertical rail on the right
+            Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 if (_mediaType == MediaType.video) ...[
                   _buildControlButton(
@@ -1168,13 +1171,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     },
                     isActive: _isMuted,
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(height: 12),
                 ],
                 _buildControlButton(
                   icon: Icons.undo,
                   onTap: _undo,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(height: 12),
                 _buildControlButton(
                   icon: _isDrawing ? Icons.edit_off : Icons.edit,
                   onTap: () => setState(() {
@@ -1186,12 +1189,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   }),
                   isActive: _isDrawing,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(height: 12),
                 _buildControlButton(
                   icon: Icons.text_fields,
                   onTap: _addText,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(height: 12),
                 _buildControlButton(
                   icon: Icons.save,
                   onTap: _isSaving ? () {} : () => _saveToGallery(),

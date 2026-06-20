@@ -2409,7 +2409,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisAlignment: MainAxisAlignment.start,
               children: [
                 _buildIconButton(
                   iconWidget: SvgPicture.asset(
@@ -2441,29 +2441,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                       });
                     } else {
                       Navigator.pop(context);
-                    }
-                  },
-                ),
-                _buildIconButton(iconWidget: _flashIcon, onTap: _toggleFlash),
-                _buildIconButton(
-                  iconWidget: SvgPicture.asset(
-                    'packages/story_editor_pro/assets/icons/settings.svg',
-                    width: 24,
-                    height: 24,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
-                    ),
-                  ),
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const CameraSettingsScreen(),
-                      ),
-                    );
-                    if (mounted) {
-                      _loadSettings();
                     }
                   },
                 ),
@@ -3502,6 +3479,26 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 for (final item in [
+                  _buildIconButton(iconWidget: _flashIcon, onTap: _toggleFlash),
+                  _buildIconButton(
+                    iconWidget: SvgPicture.asset(
+                      'packages/story_editor_pro/assets/icons/settings.svg',
+                      width: 24,
+                      height: 24,
+                      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+                    ),
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const CameraSettingsScreen(),
+                        ),
+                      );
+                      if (mounted) {
+                        _loadSettings();
+                      }
+                    },
+                  ),
                   if (config.enableBoomerang) _buildBoomerangButton(),
                   if (config.enableGradientTextEditor) _buildCreateModeButton(),
                   if (config.enableCollage) _buildCollageButton(),
@@ -3578,7 +3575,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Create Mode (Gradient Text Editor) button
   Widget _buildCreateModeButton() {
-    return GestureDetector(
+    return _buildIconButton(
+      icon: Icons.text_fields,
       onTap: () async {
         HapticFeedback.selectionClick();
         // Open Gradient Text Editor
@@ -3618,14 +3616,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           },
         );
       },
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.15),
-        ),
-        child: const Icon(Icons.text_fields, color: Colors.white, size: 24),
-      ),
     );
   }
 
@@ -3644,7 +3634,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             : BorderRadius.circular(100),
         color: _isHandsFreeMode
             ? Colors.white.withValues(alpha: 0.25)
-            : Colors.white.withValues(alpha: 0.15),
+            : Colors.black.withValues(alpha: 0.42),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.22),
+          width: 1.0,
+        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
