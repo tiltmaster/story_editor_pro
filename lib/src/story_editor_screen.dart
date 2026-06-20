@@ -1894,9 +1894,21 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         height: 44,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
+          // Match the camera screen's icon-button contrast.
           color: isActive
-              ? Colors.white.withValues(alpha: 0.3)
-              : Colors.white.withValues(alpha: 0.15),
+              ? Colors.white.withValues(alpha: 0.30)
+              : Colors.black.withValues(alpha: 0.42),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.22),
+            width: 1.0,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black54,
+              blurRadius: 8,
+              spreadRadius: 0.2,
+            ),
+          ],
         ),
         child: Center(
           child: iconWidget ?? Icon(
@@ -2143,6 +2155,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     final existing = existingIndex != null ? _textOverlays[existingIndex] : null;
     final controller = TextEditingController(text: existing?.text ?? '');
+    // Stable key so the field's element + keyboard connection survive the
+    // empty<->text layout swap; without it the first typed char gets dropped.
+    final textFieldKey = GlobalKey();
     Color selectedColor = existing?.color ?? Colors.white;
     Color backgroundColor = existing?.backgroundColor ?? Colors.black;
     double fontSize = existing?.fontSize ?? fontsConfig.defaultFontSize;
@@ -2339,6 +2354,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                               )
                                             : null,
                                         child: TextField(
+                                          key: textFieldKey,
                                           controller: controller,
                                           autofocus: true,
                                           style: getTextStyle(),
@@ -2408,6 +2424,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                         child: Opacity(
                                           opacity: 0,
                                           child: TextField(
+                                            key: textFieldKey,
                                             controller: controller,
                                             autofocus: true,
                                             style: getTextStyle(),

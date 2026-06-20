@@ -5,6 +5,7 @@ export 'src/gradient_text_editor.dart';
 export 'src/camera_settings_screen.dart';
 
 // Camera utilities
+export 'src/camera_prewarm.dart';
 export 'src/boomerang_recorder.dart';
 export 'src/smart_shutter_button.dart';
 export 'src/advanced_boomerang_service.dart';

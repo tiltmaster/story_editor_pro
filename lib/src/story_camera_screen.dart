@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'story_editor_screen.dart';
+import 'camera_prewarm.dart';
 import 'boomerang_recorder.dart';
 import 'gradient_text_editor.dart';
 import 'camera_settings_screen.dart';
@@ -104,6 +105,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   List<CameraDescription> _cameras = [];
   int _currentCameraIndex = 0;
   bool _isInitialized = false;
+  bool _audioEnabled = false; // whether the live controller was created with audio
 
   bool _isLoading = true;
   bool _hasPermission = false;
@@ -208,20 +210,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Requests all required permissions when story editor is opened
   Future<void> _requestPermissionsAndInitialize() async {
-    setState(() => _isLoading = true);
+    // Fast path: if the camera is already authorized, skip the loading flash and
+    // start initializing immediately so it overlaps the screen-open animation.
+    final cameraAlreadyGranted = await Permission.camera.isGranted;
+    if (!cameraAlreadyGranted) {
+      setState(() => _isLoading = true);
+    }
 
-    // Request all permissions at once (permission_handler doesn't support parallel)
+    // Only the capture-critical permissions up front. Photos is requested lazily
+    // when the gallery is opened (see _openGallery), so it never blocks the open.
     final statuses = await [
       Permission.camera,
       Permission.microphone,
-      Permission.photos,
     ].request();
 
-    final cameraStatus = statuses[Permission.camera]!;
-    final galleryStatus = statuses[Permission.photos]!;
-
-    _hasPermission = cameraStatus.isGranted;
-    _hasGalleryPermission = galleryStatus.isGranted;
+    _hasPermission = statuses[Permission.camera]!.isGranted;
 
     if (!_hasPermission) {
       // Inform user if camera permission is denied
@@ -231,6 +234,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
       return;
     }
+
+    // Reflect existing Photos access without prompting (for the gallery thumbnail).
+    _hasGalleryPermission = await Permission.photos.isGranted;
 
     // Permissions granted, initialize camera
     await _initializeCamera();
@@ -340,18 +346,47 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Get cameras
-      _cameras = await availableCameras();
+      // Adopt a controller pre-warmed during navigation, if one is ready — this
+      // skips the on-screen init and shows the preview immediately (no black).
+      final prewarmed = await CameraPrewarm.take();
+      if (prewarmed != null && mounted) {
+        await _cameraController?.dispose();
+        _cameraController = prewarmed;
+        _audioEnabled = false;
+        _cameras = CameraPrewarm.cameras ?? _cameras;
+        _currentCameraIndex = CameraPrewarm.cameraIndex;
+        _isInitialized = true;
+        setState(() => _isLoading = false);
+        unawaited(_applyPostInitCameraSettings());
+        if (_hasGalleryPermission) {
+          unawaited(_loadLastGalleryImage());
+        }
+        unawaited(
+          Future.delayed(const Duration(milliseconds: 400), _rewarmWithAudio),
+        );
+        return;
+      } else if (prewarmed != null) {
+        // Screen was disposed while warming up; release the controller.
+        await prewarmed.dispose();
+        return;
+      }
+
+      // Fetch the camera list and the saved front/back preference in parallel.
+      if (!mounted) return;
+      final config = StoryEditorConfigProvider.read(context);
+      final results = await Future.wait([
+        availableCameras(),
+        config.settings.getFrontCameraDefault(),
+      ]);
+      _cameras = results[0] as List<CameraDescription>;
+      final useFrontCamera = results[1] as bool;
+
       if (_cameras.isEmpty) {
         debugPrint('No cameras available');
         if (mounted) setState(() => _isLoading = false);
         return;
       }
 
-      // Get default camera from config
-      if (!mounted) return;
-      final config = StoryEditorConfigProvider.read(context);
-      final useFrontCamera = await config.settings.getFrontCameraDefault();
       final preferredDirection = useFrontCamera
           ? CameraLensDirection.front
           : CameraLensDirection.back;
@@ -361,13 +396,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
       if (_currentCameraIndex == -1) _currentCameraIndex = 0;
 
-      // Create controller
+      // Open with audio OFF for the fastest possible preview.
       await _setupCameraController(_cameras[_currentCameraIndex]);
 
-      // Load gallery thumbnail
+      // Gallery thumbnail is non-critical — don't block the preview on it.
       if (_hasGalleryPermission && mounted) {
-        await _loadLastGalleryImage();
+        unawaited(_loadLastGalleryImage());
       }
+
+      // Silently upgrade to an audio-enabled controller shortly after, so video
+      // has sound without slowing the open.
+      unawaited(
+        Future.delayed(const Duration(milliseconds: 400), _rewarmWithAudio),
+      );
     } catch (e) {
       debugPrint('Camera initialization error: $e');
     }
@@ -377,13 +418,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  Future<void> _setupCameraController(CameraDescription camera) async {
+  Future<void> _setupCameraController(
+    CameraDescription camera, {
+    bool enableAudio = false,
+  }) async {
     await _cameraController?.dispose();
+    _audioEnabled = enableAudio;
 
     _cameraController = CameraController(
       camera,
       ResolutionPreset.veryHigh,
-      enableAudio: true,
+      enableAudio: enableAudio,
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
 
@@ -393,21 +438,46 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         DeviceOrientation.portraitUp,
       );
 
-      _minZoom = await _cameraController!.getMinZoomLevel();
-      _maxZoom = await _cameraController!.getMaxZoomLevel();
-      _zoomLevel = _minZoom;
-
-      await _cameraController!.setFlashMode(_flashMode);
-
+      // Show the preview as soon as the controller is live. Zoom limits + flash
+      // are extra platform round-trips we don't need before the first frame, so
+      // apply them right after without blocking the camera open.
       _isInitialized = true;
+      if (mounted) setState(() {});
 
       debugPrint('Camera initialized: ${_cameraController!.value.previewSize}');
 
-      if (mounted) setState(() {});
+      unawaited(_applyPostInitCameraSettings());
     } on CameraException catch (e) {
       debugPrint('CameraException: ${e.description}');
       _isInitialized = false;
     }
+  }
+
+  /// Non-critical camera setup applied after the preview is already visible.
+  Future<void> _applyPostInitCameraSettings() async {
+    final controller = _cameraController;
+    if (controller == null || !_isInitialized) return;
+    try {
+      _minZoom = await controller.getMinZoomLevel();
+      _maxZoom = await controller.getMaxZoomLevel();
+      _zoomLevel = _minZoom;
+      await controller.setFlashMode(_flashMode);
+    } catch (e) {
+      debugPrint('Post-init camera settings error: $e');
+    }
+  }
+
+  /// After the fast audio-off preview is live, rebuild the controller with audio
+  /// enabled so videos have sound — without slowing the initial open. Idempotent
+  /// and skipped while capturing so it never interrupts a recording.
+  Future<void> _rewarmWithAudio() async {
+    if (_audioEnabled || !_isInitialized || !mounted) return;
+    if (_isVideoRecording || _isCapturing || _isProcessingVideo) return;
+    if (_cameras.isEmpty) return;
+    await _setupCameraController(
+      _cameras[_currentCameraIndex],
+      enableAudio: true,
+    );
   }
 
   Future<void> _loadLastGalleryImage() async {
@@ -1667,7 +1737,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     HapticFeedback.lightImpact();
 
     _currentCameraIndex = (_currentCameraIndex + 1) % _cameras.length;
-    await _setupCameraController(_cameras[_currentCameraIndex]);
+    await _setupCameraController(
+      _cameras[_currentCameraIndex],
+      enableAudio: _audioEnabled,
+    );
   }
 
   Future<void> _toggleFlash() async {
@@ -3474,12 +3547,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         duration: const Duration(milliseconds: 200),
         child: IgnorePointer(
           ignoring: shouldHide,
-          child: Center(
+          child: Align(
+            alignment: Alignment.topCenter,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Align the rail's first icon with the top-left X button.
+                const SizedBox(height: 16),
                 for (final item in [
-                  _buildIconButton(iconWidget: _flashIcon, onTap: _toggleFlash),
                   _buildIconButton(
                     iconWidget: SvgPicture.asset(
                       'packages/story_editor_pro/assets/icons/settings.svg',
@@ -3499,6 +3574,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                       }
                     },
                   ),
+                  _buildIconButton(iconWidget: _flashIcon, onTap: _toggleFlash),
                   if (config.enableBoomerang) _buildBoomerangButton(),
                   if (config.enableGradientTextEditor) _buildCreateModeButton(),
                   if (config.enableCollage) _buildCollageButton(),
