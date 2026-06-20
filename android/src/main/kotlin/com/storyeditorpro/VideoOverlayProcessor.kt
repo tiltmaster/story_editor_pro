@@ -38,6 +38,7 @@ class VideoOverlayProcessor {
         outputHeight: Int? = null,
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
+        shouldMuteAudio: Boolean = false,
         onProgress: ((Double) -> Unit)? = null
     ): String? {
         lastError = null
@@ -186,7 +187,7 @@ class VideoOverlayProcessor {
             val audioTrackIndex = findTrack(audioExtractor, "audio/")
             var hasAudio = false
             var audioFormat: MediaFormat? = null
-            if (audioTrackIndex >= 0) {
+            if (audioTrackIndex >= 0 && !shouldMuteAudio) {
                 audioExtractor.selectTrack(audioTrackIndex)
                 audioFormat = audioExtractor.getTrackFormat(audioTrackIndex)
                 hasAudio = true

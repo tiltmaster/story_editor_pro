@@ -75,6 +75,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let outputHeight = args["outputHeight"] as? Int
         let filterPreset = args["filterPreset"] as? String ?? "none"
         let filterStrength = args["filterStrength"] as? Double ?? 1.0
+        let shouldMuteAudio = args["shouldMuteAudio"] as? Bool ?? false
 
         if videoOverlayProcessor == nil {
             videoOverlayProcessor = VideoOverlayProcessor()
@@ -88,7 +89,8 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             outputWidth: outputWidth,
             outputHeight: outputHeight,
             filterPreset: filterPreset,
-            filterStrength: filterStrength
+            filterStrength: filterStrength,
+            shouldMuteAudio: shouldMuteAudio
         ) { output, errorMessage in
             if let output = output {
                 result(output)

@@ -100,6 +100,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   // Video player
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
+  bool _isMuted = false;
   late MediaType _mediaType;
 
   // GPU filter shader — loaded once, used by BackdropFilter for pixel-accurate preview
@@ -244,6 +245,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       await _videoController!.initialize();
       _videoController!.setLooping(true);
       _videoController!.play();
+      _videoController!.setVolume(_isMuted ? 0.0 : 1.0);
       if (mounted) {
         setState(() {
           _isVideoInitialized = true;
@@ -1155,6 +1157,19 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             ),
             Row(
               children: [
+                if (_mediaType == MediaType.video) ...[
+                  _buildControlButton(
+                    icon: _isMuted ? Icons.volume_off : Icons.volume_up,
+                    onTap: () {
+                      setState(() {
+                        _isMuted = !_isMuted;
+                        _videoController?.setVolume(_isMuted ? 0.0 : 1.0);
+                      });
+                    },
+                    isActive: _isMuted,
+                  ),
+                  const SizedBox(width: 12),
+                ],
                 _buildControlButton(
                   icon: Icons.undo,
                   onTap: _undo,
@@ -2773,6 +2788,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           outputHeight: context.storyEditorConfig.storyCanvasHeight,
           filterPreset: widget.initialFilterPreset,
           filterStrength: widget.initialFilterStrength,
+          shouldMuteAudio: _isMuted,
         );
         debugPrint('VideoOverlayProcessor: Total export: ${stopwatch.elapsedMilliseconds}ms');
         if (exportedPath == null) {
@@ -2927,6 +2943,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           outputHeight: context.storyEditorConfig.storyCanvasHeight,
           filterPreset: widget.initialFilterPreset,
           filterStrength: widget.initialFilterStrength,
+          shouldMuteAudio: _isMuted,
         );
         debugPrint('VideoOverlayProcessor: Background export started in ${stopwatch.elapsedMilliseconds}ms, navigating immediately');
         resultMediaType = StoryMediaType.video;

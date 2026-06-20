@@ -456,6 +456,7 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         val outputHeight = call.argument<Int>("outputHeight")
         val filterPreset = call.argument<String>("filterPreset") ?: "none"
         val filterStrength = call.argument<Double>("filterStrength") ?: 1.0
+        val shouldMuteAudio = call.argument<Boolean>("shouldMuteAudio") ?: false
 
         if (videoPath == null || overlayImagePath == null || outputPath == null) {
             result.error("INVALID_ARGS",
@@ -475,7 +476,8 @@ class StoryEditorProPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     outputWidth = outputWidth,
                     outputHeight = outputHeight,
                     filterPreset = filterPreset,
-                    filterStrength = filterStrength
+                    filterStrength = filterStrength,
+                    shouldMuteAudio = shouldMuteAudio
                 )
 
                 activity?.runOnUiThread {

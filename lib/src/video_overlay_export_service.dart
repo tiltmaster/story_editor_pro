@@ -37,6 +37,7 @@ class VideoOverlayExportService {
     int? outputHeight,
     String filterPreset = 'none',
     double filterStrength = 1.0,
+    bool shouldMuteAudio = false,
   }) async {
     _lastExportError = null;
     try {
@@ -65,6 +66,7 @@ class VideoOverlayExportService {
           'outputHeight': outputHeight,
           'filterPreset': filterPreset,
           'filterStrength': filterStrength,
+          'shouldMuteAudio': shouldMuteAudio,
         },
       );
 
@@ -115,6 +117,7 @@ class VideoOverlayExportService {
     int? outputHeight,
     String filterPreset = 'none',
     double filterStrength = 1.0,
+    bool shouldMuteAudio = false,
   }) async {
     _lastExportError = null;
     final tempDir = await getTemporaryDirectory();
@@ -138,6 +141,7 @@ class VideoOverlayExportService {
       outputHeight: outputHeight,
       filterPreset: filterPreset,
       filterStrength: filterStrength,
+      shouldMuteAudio: shouldMuteAudio,
     );
 
     return outputPath;
@@ -152,6 +156,7 @@ class VideoOverlayExportService {
     int? outputHeight,
     required String filterPreset,
     required double filterStrength,
+    required bool shouldMuteAudio,
   }) async {
     try {
       final result = await _channel.invokeMethod<String>(
@@ -165,6 +170,7 @@ class VideoOverlayExportService {
           'outputHeight': outputHeight,
           'filterPreset': filterPreset,
           'filterStrength': filterStrength,
+          'shouldMuteAudio': shouldMuteAudio,
         },
       );
       try { await File(overlayPath).delete(); } catch (_) {}

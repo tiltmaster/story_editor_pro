@@ -16,6 +16,7 @@ class VideoOverlayProcessor {
         outputHeight: Int? = nil,
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
+        shouldMuteAudio: Bool = false,
         completion: @escaping (String?, String?) -> Void
     ) {
         print("VideoOverlayProcessor: BuildMarker=\(buildMarker)")
@@ -40,6 +41,7 @@ class VideoOverlayProcessor {
                     mirrorHorizontally: mirrorHorizontally,
                     filterPreset: filterPreset,
                     filterStrength: filterStrength,
+                    shouldMuteAudio: shouldMuteAudio,
                     completion: completion
                 )
                 return
@@ -75,8 +77,9 @@ class VideoOverlayProcessor {
                 return
             }
 
-            // 3. Add audio track (if exists)
-            if let audioTrack = asset.tracks(withMediaType: .audio).first,
+            // 3. Add audio track (if exists and not muted)
+            if !shouldMuteAudio,
+               let audioTrack = asset.tracks(withMediaType: .audio).first,
                let compositionAudioTrack = composition.addMutableTrack(
                  withMediaType: .audio,
                  preferredTrackID: kCMPersistentTrackID_Invalid
@@ -231,6 +234,7 @@ class VideoOverlayProcessor {
         mirrorHorizontally: Bool,
         filterPreset: String,
         filterStrength: Double,
+        shouldMuteAudio: Bool = false,
         completion: @escaping (String?, String?) -> Void
     ) {
         guard let overlayUIImage = UIImage(contentsOfFile: overlayImagePath),
@@ -290,6 +294,15 @@ class VideoOverlayProcessor {
         exporter.outputURL = outputURL
         exporter.outputFileType = .mp4
         exporter.shouldOptimizeForNetworkUse = true
+
+        // Mute: silence the audio track in the exported file.
+        if shouldMuteAudio, let audioTrack = asset.tracks(withMediaType: .audio).first {
+            let audioMix = AVMutableAudioMix()
+            let params = AVMutableAudioMixInputParameters(track: audioTrack)
+            params.setVolume(0.0, at: .zero)
+            audioMix.inputParameters = [params]
+            exporter.audioMix = audioMix
+        }
 
         exporter.exportAsynchronously {
             DispatchQueue.main.async {

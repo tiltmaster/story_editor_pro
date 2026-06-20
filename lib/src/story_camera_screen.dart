@@ -2815,8 +2815,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           }
         },
         onLongPressMoveUpdate: (details) {
-          // Swipe up = zoom in, swipe down = zoom out
-          if (_isVideoRecording && _cameraController != null) {
+          // Swipe up = zoom in, swipe down = zoom out.
+          // Gate on the controller (not _isVideoRecording) so early slides
+          // aren't dropped during the brief async start of recording.
+          if (_cameraController != null && _isInitialized) {
             final deltaY = _longPressStartY - details.globalPosition.dy;
             // Every 100 pixels = 1x zoom change
             final zoomDelta = deltaY / 100.0;
@@ -3030,9 +3032,24 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
 
     return GestureDetector(
-      onLongPressStart: (_) {
+      onLongPressStart: (details) {
         if (!_isVideoRecording && !_isCapturing) {
+          _longPressStartY = details.globalPosition.dy;
+          _longPressZoomStart = _zoomLevel;
           _startBoomerangRecording();
+        }
+      },
+      onLongPressMoveUpdate: (details) {
+        // Swipe up = zoom in, swipe down = zoom out (while recording)
+        if (_cameraController != null && _isInitialized) {
+          final deltaY = _longPressStartY - details.globalPosition.dy;
+          final zoomDelta = deltaY / 100.0;
+          final newZoom =
+              (_longPressZoomStart + zoomDelta).clamp(_minZoom, _maxZoom);
+          if (newZoom != _zoomLevel) {
+            setState(() => _zoomLevel = newZoom);
+            _cameraController!.setZoomLevel(_zoomLevel);
+          }
         }
       },
       onLongPressEnd: (_) {
