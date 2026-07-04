@@ -2,13 +2,17 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:video_player/video_player.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
+
 import 'gradient_text_editor.dart';
+import 'overlays/smart_stickers.dart';
 import 'video_overlay_export_service.dart';
 import 'models/story_result.dart';
 import 'config/story_editor_config.dart';
@@ -51,6 +55,10 @@ class StoryEditorScreen extends StatefulWidget {
   /// Movable image overlay from Create Mode
   final ImageOverlay? initialImageOverlay;
 
+  /// Pre-placed image overlays (e.g. AR face props frozen at capture) —
+  /// added as normal movable/deletable overlays and baked on export.
+  final List<ImageOverlay> initialImageOverlays;
+
   /// List of close friends to show in the share bottomsheet
   /// If not empty, close friends sharing option will be enabled
   /// If empty, the share bottomsheet will be skipped
@@ -78,6 +86,7 @@ class StoryEditorScreen extends StatefulWidget {
     this.isFromGallery = false,
     this.initialTextOverlay,
     this.initialImageOverlay,
+    this.initialImageOverlays = const [],
     this.closeFriendsList = const [],
     this.userProfileImageUrl,
     this.onShare,
@@ -96,6 +105,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   final List<TextOverlay> _textOverlays = [];
   final List<DrawingPath> _drawings = [];
   final List<ImageOverlay> _imageOverlays = [];
+  final List<SmartStickerOverlay> _smartStickers = [];
 
   // Video player
   VideoPlayerController? _videoController;
@@ -137,6 +147,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     if (widget.initialImageOverlay != null) {
       _imageOverlays.add(widget.initialImageOverlay!);
     }
+    // Pre-placed overlays (AR face props frozen at capture)
+    _imageOverlays.addAll(widget.initialImageOverlays);
 
     // Select all close friends by default
     if (widget.closeFriendsEnabled) {
@@ -259,8 +271,16 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   @override
   void dispose() {
     _videoController?.dispose();
+    _overlayTick.dispose();
     super.dispose();
   }
+
+  // Bumped on every drag/pinch frame of a sticker or image overlay. Only the
+  // overlay subtree listens, so pointer moves repaint just the overlays
+  // instead of setState-rebuilding the whole editor (video player, filter
+  // preview, controls) — which made dragging feel laggy.
+  final ValueNotifier<int> _overlayTick = ValueNotifier<int>(0);
+  void _bumpOverlays() => _overlayTick.value++;
 
   bool _isDrawing = false;
   bool _isTextEditing = false;
@@ -283,6 +303,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   double? _bgScaleStart;
   Offset? _bgOffsetStart;
   Offset? _bgFocalPointStart;
+  double? _bgStartDistance;
+  final Map<int, Offset> _bgPointers = {};
 
   bool _isSaving = false;
   bool _isSharing = false;
@@ -301,7 +323,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final statusBarHeight = MediaQuery.of(context).viewPadding.top;
+    // iOS: host apps often hide the status bar around the camera flow, so on
+    // a second editor open viewPadding.top reports 0 and the ✕ close button
+    // would land under the notch. Keep a sane minimum top inset on iOS.
+    final rawTopInset = MediaQuery.of(context).viewPadding.top;
+    final statusBarHeight = (!kIsWeb && Platform.isIOS && rawTopInset < 20)
+        ? 47.0
+        : rawTopInset;
 
     return PopScope(
       canPop: !_isDrawing && !_isTextEditing,
@@ -360,16 +388,42 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
-                                  ..._buildImageOverlays(),
+                                  // Image overlays + smart stickers rebuild via
+                                  // _overlayTick during drags (cheap, scoped) —
+                                  // see _bumpOverlays().
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: _overlayTick,
+                                    builder: (_, __, ___) => Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        ..._buildImageOverlays(),
+                                        // Smart stickers (time/date/location/…)
+                                        // — gesture-enabled single copies inside
+                                        // the boundary so they bake into image
+                                        // AND video exports automatically.
+                                        ..._buildSmartStickers(),
+                                      ],
+                                    ),
+                                  ),
                                   // Text overlays visual copy inside RepaintBoundary for export
                                   if (!_isTextEditing) ..._buildTextOverlaysForExport(),
-                                  // Drawing on top of text/image overlays
-                                  ClipRect(
-                                    child: CustomPaint(
-                                      painter: DrawingPainter(paths: _drawings),
-                                      size: Size.infinite,
-                                      isComplex: true,
-                                      willChange: true,
+                                  // Drawing on top of text/image overlays.
+                                  // IgnorePointer is CRITICAL: a CustomPaint
+                                  // with a painter hit-tests as opaque over its
+                                  // whole area (CustomPainter.hitTest defaults
+                                  // to "hit"), and a Stack stops at the first
+                                  // child that claims a touch — without this,
+                                  // the full-canvas drawing layer swallows every
+                                  // gesture before it reaches the sticker/image
+                                  // overlays below.
+                                  IgnorePointer(
+                                    child: ClipRect(
+                                      child: CustomPaint(
+                                        painter: DrawingPainter(paths: _drawings),
+                                        size: Size.infinite,
+                                        isComplex: true,
+                                        willChange: true,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -523,40 +577,68 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   /// Background image gesture handler - only works with two fingers
+  // Two-finger background zoom/pan. Implemented with a raw Listener instead of
+  // a GestureDetector: this layer sits ABOVE the overlay RepaintBoundary in the
+  // stack, so a full-screen scale recognizer here enters every gesture arena
+  // first and wins all single-finger drags/taps — freezing the smart-sticker /
+  // word-art / image overlays below it. A Listener never competes in the
+  // arena, so those overlays get their gestures while two-finger zoom still
+  // works anywhere on screen.
   Widget _buildBackgroundImageGesture() {
     return Positioned.fill(
-      child: GestureDetector(
+      child: Listener(
         behavior: HitTestBehavior.translucent,
-        onScaleStart: (details) {
-          // Only start with two fingers
-          if (details.pointerCount >= 2) {
+        onPointerDown: (event) {
+          _bgPointers[event.pointer] = event.position;
+          _resetBgGestureSession();
+        },
+        onPointerMove: (event) {
+          if (!_bgPointers.containsKey(event.pointer)) return;
+          _bgPointers[event.pointer] = event.position;
+          // Only act with two fingers, and never while an overlay is being
+          // dragged/pinched (its own recognizer claimed the pointer).
+          if (_bgPointers.length < 2 || _isDraggingOverlay) {
+            _resetBgGestureSession();
+            return;
+          }
+          final points = _bgPointers.values.take(2).toList();
+          final focal = (points[0] + points[1]) / 2;
+          final distance = (points[0] - points[1]).distance;
+          if (_bgFocalPointStart == null ||
+              _bgStartDistance == null ||
+              _bgScaleStart == null ||
+              _bgOffsetStart == null) {
             _bgScaleStart = _bgImageScale;
             _bgOffsetStart = _bgImageOffset;
-            _bgFocalPointStart = details.focalPoint;
+            _bgFocalPointStart = focal;
+            _bgStartDistance = distance < 1 ? 1 : distance;
+            return;
           }
+          final delta = focal - _bgFocalPointStart!;
+          setState(() {
+            _bgImageOffset = _bgOffsetStart! + delta;
+            _bgImageScale = (_bgScaleStart! * (distance / _bgStartDistance!))
+                .clamp(0.3, 10.0);
+          });
         },
-        onScaleUpdate: (details) {
-          // Only update with two fingers
-          if (details.pointerCount >= 2 && _bgScaleStart != null && _bgOffsetStart != null && _bgFocalPointStart != null) {
-            final delta = details.focalPoint - _bgFocalPointStart!;
-            setState(() {
-              _bgImageOffset = Offset(
-                _bgOffsetStart!.dx + delta.dx,
-                _bgOffsetStart!.dy + delta.dy,
-              );
-              // Update scale (limit between 0.3 and 10.0)
-              _bgImageScale = (_bgScaleStart! * details.scale).clamp(0.3, 10.0);
-            });
-          }
+        onPointerUp: (event) {
+          _bgPointers.remove(event.pointer);
+          _resetBgGestureSession();
         },
-        onScaleEnd: (details) {
-          _bgScaleStart = null;
-          _bgOffsetStart = null;
-          _bgFocalPointStart = null;
+        onPointerCancel: (event) {
+          _bgPointers.remove(event.pointer);
+          _resetBgGestureSession();
         },
-        child: Container(color: Colors.transparent),
+        child: const SizedBox.expand(),
       ),
     );
+  }
+
+  void _resetBgGestureSession() {
+    _bgScaleStart = null;
+    _bgOffsetStart = null;
+    _bgFocalPointStart = null;
+    _bgStartDistance = null;
   }
 
   Widget _buildDrawingLayer() {
@@ -590,25 +672,36 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       final index = entry.key;
       final overlay = entry.value;
 
+      // Hidden for one frame while the export snapshot is taken — the sticker
+      // is exported natively as a separate animated layer instead.
+      if (_hiddenAnimatedPaths.contains(overlay.imagePath)) {
+        return const SizedBox.shrink();
+      }
+
       return Positioned(
         left: overlay.offset.dx,
         top: overlay.offset.dy,
         child: GestureDetector(
           onTap: () => _editImageOverlay(index),
-          onPanStart: (details) {
+          // Scale gesture handles BOTH one-finger drag (focal delta) and
+          // two-finger pinch resize, same as the smart stickers.
+          onScaleStart: (details) {
+            final current = _imageOverlays[index];
+            _imageDragStartOffset = current.offset;
+            _imageDragStartFocal = details.focalPoint;
+            _imageScaleStart = current.scale;
             setState(() {
               _isDraggingOverlay = true;
               _draggingOverlayIndex = index;
               _draggingOverlayType = 'image';
             });
           },
-          onPanUpdate: (details) {
-            final newOffset = Offset(
-              overlay.offset.dx + details.delta.dx,
-              overlay.offset.dy + details.delta.dy,
-            );
+          onScaleUpdate: (details) {
+            final startOffset = _imageDragStartOffset;
+            final startFocal = _imageDragStartFocal;
+            if (startOffset == null || startFocal == null) return;
 
-            // Check trash zone (bottom right, left of check button)
+            // Check trash zone (bottom center, above the home indicator)
             final screenHeight = MediaQuery.of(context).size.height;
             final screenWidth = MediaQuery.of(context).size.width;
             final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
@@ -617,14 +710,19 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               width: 80,
               height: 80,
             );
-            final isOver = trashZone.contains(details.globalPosition);
+            final isOver = trashZone.contains(details.focalPoint);
 
-            setState(() {
-              _imageOverlays[index] = overlay.copyWith(offset: newOffset);
-              _isOverTrash = isOver;
-            });
+            _imageOverlays[index] = _imageOverlays[index].copyWith(
+              offset: startOffset + (details.focalPoint - startFocal),
+              scale: (_imageScaleStart * details.scale).clamp(0.1, 3.5),
+            );
+            if (isOver != _isOverTrash) {
+              setState(() => _isOverTrash = isOver);
+            } else {
+              _bumpOverlays();
+            }
           },
-          onPanEnd: (details) {
+          onScaleEnd: (details) {
             // Delete if over trash
             if (_isOverTrash && _draggingOverlayIndex == index) {
               setState(() {
@@ -637,6 +735,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               _draggingOverlayIndex = null;
               _draggingOverlayType = null;
             });
+            _imageDragStartOffset = null;
+            _imageDragStartFocal = null;
           },
           child: AnimatedScale(
             scale: (_isOverTrash && _draggingOverlayIndex == index && _draggingOverlayType == 'image')
@@ -648,26 +748,39 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   ? 0.5
                   : 1.0,
               duration: const Duration(milliseconds: 150),
-              child: Container(
-                width: MediaQuery.of(context).size.width * overlay.scale,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
+              // Card look (rounded corners + drop shadow) only for gradient
+              // text images. Decorative stickers (word art / KLIPY) are
+              // transparent art — a box shadow behind their bounding box
+              // reads as a weird backdrop, so they render bare. GIF files
+              // animate automatically in the preview.
+              child: (overlay.text == null && overlay.gradient == null)
+                  ? SizedBox(
+                      width: MediaQuery.of(context).size.width * overlay.scale,
+                      child: Image.file(
+                        File(overlay.imagePath),
+                        fit: BoxFit.contain,
+                      ),
+                    )
+                  : Container(
+                      width: MediaQuery.of(context).size.width * overlay.scale,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.file(
+                          File(overlay.imagePath),
+                          fit: BoxFit.contain,
+                        ),
+                      ),
                     ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.file(
-                    File(overlay.imagePath),
-                    fit: BoxFit.contain,
-                  ),
-                ),
-              ),
             ),
           ),
         ),
@@ -751,6 +864,80 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         ),
       ),
     );
+  }
+
+  // Paths of animated GIF overlays hidden while the static overlay PNG is
+  // captured for video export (they are exported as separate animated layers).
+  Set<String> _hiddenAnimatedPaths = const {};
+
+  /// Animated GIF stickers can't be baked into the static overlay PNG — they
+  /// go to the native exporter as separate looping layers so they stay
+  /// animated in the exported video. Returns one channel map per multi-frame
+  /// GIF overlay: {path, left, top, width, height}, normalized (0..1) to the
+  /// overlay boundary, top-left origin.
+  Future<List<Map<String, dynamic>>> _collectAnimatedStickers() async {
+    if (_imageOverlays.isEmpty) return const [];
+    final boundary = _overlayRepaintKey.currentContext?.findRenderObject()
+        as RenderRepaintBoundary?;
+    final boundarySize = boundary?.size;
+    if (boundarySize == null ||
+        boundarySize.width <= 0 ||
+        boundarySize.height <= 0) {
+      return const [];
+    }
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    final result = <Map<String, dynamic>>[];
+    for (final overlay in _imageOverlays) {
+      if (!overlay.imagePath.toLowerCase().endsWith('.gif')) continue;
+      try {
+        final bytes = await File(overlay.imagePath).readAsBytes();
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frameCount = codec.frameCount;
+        final frame = await codec.getNextFrame();
+        final imgW = frame.image.width.toDouble();
+        final imgH = frame.image.height.toDouble();
+        frame.image.dispose();
+        codec.dispose();
+        // Single-frame GIFs stay in the static snapshot.
+        if (frameCount <= 1 || imgW <= 0 || imgH <= 0) continue;
+
+        // Same geometry the widget uses: width = screenW * scale, height
+        // follows the image aspect (BoxFit.contain on a width-only box).
+        final renderedW = screenWidth * overlay.scale;
+        final renderedH = renderedW * imgH / imgW;
+        result.add({
+          'path': overlay.imagePath,
+          'left': overlay.offset.dx / boundarySize.width,
+          'top': overlay.offset.dy / boundarySize.height,
+          'width': renderedW / boundarySize.width,
+          'height': renderedH / boundarySize.height,
+        });
+      } catch (_) {
+        // Unreadable file → leave it in the static snapshot.
+      }
+    }
+    return result;
+  }
+
+  /// Captures the static overlay PNG for video export. Animated GIF stickers
+  /// are hidden for the snapshot frame (so they aren't double-drawn) and
+  /// returned separately for native animated compositing.
+  Future<(Uint8List?, List<Map<String, dynamic>>)>
+      _captureVideoExportLayers() async {
+    final animated = await _collectAnimatedStickers();
+    if (animated.isNotEmpty && mounted) {
+      setState(() => _hiddenAnimatedPaths = {
+            for (final a in animated) a['path'] as String,
+          });
+      // Let the hide actually render before snapshotting.
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    final png = await _captureOverlayAsPng();
+    if (animated.isNotEmpty && mounted) {
+      setState(() => _hiddenAnimatedPaths = const {});
+    }
+    return (png, animated);
   }
 
   /// Capture only overlay layers (text, drawing, images) as transparent PNG
@@ -1196,6 +1383,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
                 const SizedBox(height: 12),
                 _buildControlButton(
+                  icon: Icons.auto_awesome,
+                  onTap: _addSmartSticker,
+                ),
+                const SizedBox(height: 12),
+                _buildControlButton(
                   icon: Icons.save,
                   onTap: _isSaving ? () {} : () => _saveToGallery(),
                 ),
@@ -1223,9 +1415,22 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  // Same palette as _buildControlButton so the editor's
+                  // buttons read as one family.
                   color: _isOverTrash
                       ? Colors.red.withValues(alpha: 0.8)
-                      : Colors.white.withValues(alpha: 0.15),
+                      : Colors.black.withValues(alpha: 0.42),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.22),
+                    width: 1.0,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black54,
+                      blurRadius: 8,
+                      spreadRadius: 0.2,
+                    ),
+                  ],
                 ),
                 child: Center(
                   child: SvgPicture.asset(
@@ -1252,7 +1457,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               height: 56,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.15),
+                // Same palette as _buildControlButton so the editor's
+                // buttons read as one family.
+                color: Colors.black.withValues(alpha: 0.42),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  width: 1.0,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black54,
+                    blurRadius: 8,
+                    spreadRadius: 0.2,
+                  ),
+                ],
               ),
               child: Center(
                 child: _isSaving
@@ -2141,6 +2359,145 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     _showTextDialog();
   }
 
+  // ---------------------------------------------------------------------------
+  // Smart stickers (time / date / day / battery / speed / location)
+  // ---------------------------------------------------------------------------
+
+  Future<void> _addSmartSticker() async {
+    final result = await showStickerDrawer(context);
+    if (result == null || !mounted) return;
+
+    // Decorative stickers (bundled word-art OR downloaded KLIPY sticker) →
+    // normal ImageOverlay (drag/pinch/trash like any image)
+    final stickerPath = result.imageFilePath ??
+        (result.imageAssetPath != null
+            ? await materializeStickerAsset(result.imageAssetPath!)
+            : null);
+    if (stickerPath != null) {
+      if (!mounted) return;
+      setState(() {
+        _imageOverlays.add(ImageOverlay(
+          imagePath: stickerPath,
+          offset: Offset(
+            MediaQuery.of(context).size.width * 0.30,
+            MediaQuery.of(context).size.height * 0.34,
+          ),
+          scale: 0.45,
+        ));
+      });
+      return;
+    }
+
+    final sticker = result.sticker;
+    if (sticker == null) return;
+    setState(() {
+      // Spawn centered in the safe middle of the canvas, staggered a touch per
+      // existing sticker so stacking is visible (never over the side rails).
+      final n = _smartStickers.length;
+      sticker.offset = Offset(
+        MediaQuery.of(context).size.width * 0.30 + (n % 3) * 12,
+        MediaQuery.of(context).size.height * 0.36 + (n % 3) * 12,
+      );
+      _smartStickers.add(sticker);
+    });
+  }
+
+  // Per-gesture state must live on the State (closure locals are recreated on
+  // every setState rebuild mid-gesture, which would freeze the drag).
+  Offset? _stickerDragStartOffset;
+  Offset? _stickerDragStartFocal;
+  double _stickerScaleStart = 1.0;
+  Offset? _imageDragStartOffset;
+  Offset? _imageDragStartFocal;
+  double _imageScaleStart = 1.0;
+
+  /// Smart stickers — single gesture-enabled copies INSIDE the overlay
+  /// RepaintBoundary (the exact pattern image overlays use): drag / pinch /
+  /// tap-to-cycle-skin / drag-to-trash, and they bake into image + video
+  /// exports because they live in the boundary. No twin layers.
+  List<Widget> _buildSmartStickers() {
+    return _smartStickers.asMap().entries.map((entry) {
+      final index = entry.key;
+      final s = entry.value;
+      final overTrash = _isOverTrash &&
+          _draggingOverlayIndex == index &&
+          _draggingOverlayType == 'sticker';
+      return Positioned(
+        left: s.offset.dx,
+        top: s.offset.dy,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => s.cycleSkin()),
+          onScaleStart: (details) {
+            _stickerDragStartOffset = s.offset;
+            _stickerDragStartFocal = details.focalPoint;
+            _stickerScaleStart = s.scale;
+            setState(() {
+              _isDraggingOverlay = true;
+              _draggingOverlayIndex = index;
+              _draggingOverlayType = 'sticker';
+            });
+          },
+          onScaleUpdate: (details) {
+            // Same trash zone as text/image overlays (drag to bin to delete)
+            final screenHeight = MediaQuery.of(context).size.height;
+            final screenWidth = MediaQuery.of(context).size.width;
+            final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
+            final trashZone = Rect.fromCenter(
+              center:
+                  Offset(screenWidth / 2, screenHeight - bottomPadding - 24 - 28),
+              width: 80,
+              height: 80,
+            );
+            if (_stickerDragStartOffset != null &&
+                _stickerDragStartFocal != null) {
+              s.offset = _stickerDragStartOffset! +
+                  (details.focalPoint - _stickerDragStartFocal!);
+            }
+            s.scale = (_stickerScaleStart * details.scale).clamp(0.4, 3.5);
+            final overTrashNow = trashZone.contains(details.focalPoint);
+            if (overTrashNow != _isOverTrash) {
+              // Trash bin + shrink animation live outside the overlay
+              // subtree — full rebuild, but only on the rare state flip.
+              setState(() => _isOverTrash = overTrashNow);
+            } else {
+              _bumpOverlays();
+            }
+          },
+          onScaleEnd: (_) {
+            if (_isOverTrash &&
+                _draggingOverlayIndex == index &&
+                _draggingOverlayType == 'sticker') {
+              HapticFeedback.mediumImpact();
+              setState(() => _smartStickers.removeAt(index));
+            }
+            setState(() {
+              _isDraggingOverlay = false;
+              _isOverTrash = false;
+              _draggingOverlayIndex = null;
+              _draggingOverlayType = null;
+            });
+            _stickerDragStartOffset = null;
+            _stickerDragStartFocal = null;
+          },
+          child: AnimatedScale(
+            scale: overTrash ? 0.5 : 1.0,
+            duration: const Duration(milliseconds: 150),
+            child: AnimatedOpacity(
+              opacity: overTrash ? 0.5 : 1.0,
+              duration: const Duration(milliseconds: 150),
+              child: Transform.scale(
+                scale: s.scale,
+                alignment: Alignment.topLeft,
+                child: buildSmartStickerContent(s),
+              ),
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
   void _editText(int index) {
     _showTextDialog(existingIndex: index);
   }
@@ -2793,7 +3150,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         // VIDEO: Briefly pause to capture overlay, then resume playback
         final stopwatch = Stopwatch()..start();
         _videoController?.pause();
-        final overlayPng = await _captureOverlayAsPng();
+        final (overlayPng, animatedStickers) = await _captureVideoExportLayers();
         debugPrint('VideoOverlayProcessor: Overlay capture: ${stopwatch.elapsedMilliseconds}ms');
         _videoController?.play(); // Resume immediately after capture
 
@@ -2803,6 +3160,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         final exportedPath = await VideoOverlayExportService.exportVideoWithOverlay(
           videoPath: widget.mediaPath,
           overlayPngBytes: overlayPng,
+          animatedStickers: animatedStickers,
           mirrorHorizontally: widget.flipHorizontally,
           outputWidth: context.storyEditorConfig.storyCanvasWidth,
           outputHeight: context.storyEditorConfig.storyCanvasHeight,
@@ -2948,7 +3306,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         final stopwatch = Stopwatch()..start();
         _videoController?.pause();
 
-        final overlayPng = await _captureOverlayAsPng();
+        final (overlayPng, animatedStickers) = await _captureVideoExportLayers();
         debugPrint('VideoOverlayProcessor: Overlay capture: ${stopwatch.elapsedMilliseconds}ms');
         _videoController?.play(); // Resume immediately after capture
 
@@ -2958,6 +3316,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         filePath = await VideoOverlayExportService.startExportInBackground(
           videoPath: widget.mediaPath,
           overlayPngBytes: overlayPng,
+          animatedStickers: animatedStickers,
           mirrorHorizontally: widget.flipHorizontally,
           outputWidth: context.storyEditorConfig.storyCanvasWidth,
           outputHeight: context.storyEditorConfig.storyCanvasHeight,

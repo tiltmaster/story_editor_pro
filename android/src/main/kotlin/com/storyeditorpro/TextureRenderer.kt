@@ -105,6 +105,17 @@ class TextureRenderer {
     private var vertexBuffer: FloatBuffer
     private var texCoordBuffer: FloatBuffer
 
+    // Animated sticker layers: one 2D texture + one quad each, drawn above the
+    // static overlay. Frames are streamed in per video frame via
+    // updateAnimatedStickerFrame (glTexSubImage2D — cheap for small bitmaps).
+    private class StickerQuad(
+        val textureId: Int,
+        val vertexBuffer: FloatBuffer,
+        val widthPx: Int,
+        val heightPx: Int,
+    )
+    private val stickerQuads = mutableListOf<StickerQuad>()
+
     private var outputWidth = 0
     private var outputHeight = 0
     private var mirrorVideoHorizontally = false
@@ -213,6 +224,54 @@ class TextureRenderer {
         mirrorVideoHorizontally = enabled
     }
 
+    /**
+     * Register an animated sticker layer. [left]/[top]/[width]/[height] are
+     * normalized (0..1) in output space, top-left origin. [widthPx]/[heightPx]
+     * is the streaming texture resolution. Returns the sticker index for
+     * [updateAnimatedStickerFrame]. Must be called with the EGL context
+     * current (i.e. after [init], on the export thread).
+     */
+    fun addAnimatedSticker(
+        left: Float, top: Float, width: Float, height: Float,
+        widthPx: Int, heightPx: Int,
+    ): Int {
+        val tex = IntArray(1)
+        GLES20.glGenTextures(1, tex, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        // Allocate storage once; frames stream in via texSubImage2D.
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, widthPx, heightPx, 0,
+            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null
+        )
+
+        // Quad in NDC: x = n*2-1; y is flipped (top-left origin → GL bottom-up).
+        val x0 = left * 2f - 1f
+        val x1 = (left + width) * 2f - 1f
+        val yTop = 1f - 2f * top
+        val yBot = 1f - 2f * (top + height)
+        val quad = createFloatBuffer(floatArrayOf(
+            x0, yBot,
+            x1, yBot,
+            x0, yTop,
+            x1, yTop
+        ))
+
+        stickerQuads.add(StickerQuad(tex[0], quad, widthPx, heightPx))
+        Log.d(TAG, "Animated sticker #${stickerQuads.size - 1}: rect=($left,$top,$width,$height) tex=${widthPx}x$heightPx")
+        return stickerQuads.size - 1
+    }
+
+    /** Stream the current GIF frame into the sticker's texture. */
+    fun updateAnimatedStickerFrame(index: Int, bitmap: Bitmap) {
+        val quad = stickerQuads.getOrNull(index) ?: return
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, quad.textureId)
+        GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap)
+    }
+
     fun setColorFilter(
         brightness: Float,
         contrast: Float,
@@ -302,6 +361,12 @@ class TextureRenderer {
         android.opengl.Matrix.scaleM(overlayMatrix, 0, 1f, -1f, 1f)
         drawTexture(program2D, overlayTextureId, GLES20.GL_TEXTURE_2D, overlayMatrix)
 
+        // Animated sticker layers on top (same flipped tex matrix — bitmaps
+        // are top-left origin like the overlay)
+        for (quad in stickerQuads) {
+            drawTexture(program2D, quad.textureId, GLES20.GL_TEXTURE_2D, overlayMatrix, quad.vertexBuffer)
+        }
+
         GLES20.glDisable(GLES20.GL_BLEND)
 
         // Set presentation timestamp and swap
@@ -312,7 +377,10 @@ class TextureRenderer {
     /**
      * Draw a textured quad
      */
-    private fun drawTexture(program: Int, textureId: Int, textureTarget: Int, texMatrix: FloatArray) {
+    private fun drawTexture(
+        program: Int, textureId: Int, textureTarget: Int, texMatrix: FloatArray,
+        vertices: FloatBuffer = vertexBuffer,
+    ) {
         GLES20.glUseProgram(program)
 
         val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
@@ -321,8 +389,8 @@ class TextureRenderer {
         val textureLoc = GLES20.glGetUniformLocation(program, "uTexture")
 
         GLES20.glEnableVertexAttribArray(posLoc)
-        vertexBuffer.position(0)
-        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+        vertices.position(0)
+        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 0, vertices)
 
         GLES20.glEnableVertexAttribArray(texLoc)
         texCoordBuffer.position(0)
@@ -358,6 +426,12 @@ class TextureRenderer {
 
         val textures = intArrayOf(videoTextureId, overlayTextureId)
         GLES20.glDeleteTextures(2, textures, 0)
+
+        if (stickerQuads.isNotEmpty()) {
+            val stickerTextures = stickerQuads.map { it.textureId }.toIntArray()
+            GLES20.glDeleteTextures(stickerTextures.size, stickerTextures, 0)
+            stickerQuads.clear()
+        }
 
         if (eglSurface != EGL14.EGL_NO_SURFACE) {
             EGL14.eglDestroySurface(eglDisplay, eglSurface)

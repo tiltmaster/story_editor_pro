@@ -180,7 +180,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     return _cameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
   }
 
-  StoryFilterPreset get _activeFilterPreset => StoryEditorFilters.presets[_activeFilterIndex];
+  int get _combinedFilterCount => StoryEditorFilters.presets.length;
+
+  StoryFilterPreset get _activeFilterPreset =>
+      StoryEditorFilters.presets[_activeFilterIndex];
   String get _activeFilterId => _activeFilterPreset.id;
   bool get _hasActiveFilter => _activeFilterId != StoryEditorFilters.none;
 
@@ -310,7 +313,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (!_filterPageController.hasClients) return;
     final page = _filterPageController.page;
     if (page == null) return;
-    final nextIndex = page.round().clamp(0, StoryEditorFilters.presets.length - 1);
+    final nextIndex = page.round().clamp(0, _combinedFilterCount - 1);
     if (nextIndex != _activeFilterIndex && mounted) {
       setState(() => _activeFilterIndex = nextIndex);
     }
@@ -2362,7 +2365,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         if (velocity.abs() < 120) return;
         int next = _activeFilterIndex;
         setState(() {
-          if (velocity < 0 && _activeFilterIndex < StoryEditorFilters.presets.length - 1) {
+          if (velocity < 0 && _activeFilterIndex < _combinedFilterCount - 1) {
             _activeFilterIndex++;
           } else if (velocity > 0 && _activeFilterIndex > 0) {
             _activeFilterIndex--;
@@ -2481,20 +2484,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ignoring: shouldHide,
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                _buildIconButton(
-                  iconWidget: SvgPicture.asset(
-                    'packages/story_editor_pro/assets/icons/xmark.svg',
-                    width: 24,
-                    height: 24,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
-                    ),
+            // Pin the X to the PHYSICAL side opposite the tools rail
+            // (which uses _toolsOnLeft, physical). `Alignment` is physical —
+            // unlike Row's MainAxisAlignment.start, it does NOT flip under an
+            // Arabic/RTL Directionality, so the X can never slide under the
+            // settings rail.
+            child: Align(
+              alignment:
+                  _toolsOnLeft ? Alignment.centerRight : Alignment.centerLeft,
+              child: _buildIconButton(
+                iconWidget: SvgPicture.asset(
+                  'packages/story_editor_pro/assets/icons/xmark.svg',
+                  width: 24,
+                  height: 24,
+                  colorFilter: const ColorFilter.mode(
+                    Colors.white,
+                    BlendMode.srcIn,
                   ),
-                  onTap: () {
+                ),
+                onTap: () {
                     // If in special modes only close the mode, otherwise close the screen
                     if (_isLayoutMode) {
                       setState(() {
@@ -2517,12 +2525,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     }
                   },
                 ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 
   /// Capture button area - positioned at bottom in Stack

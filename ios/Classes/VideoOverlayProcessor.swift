@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import UIKit
 import CoreImage
+import ImageIO
 
 class VideoOverlayProcessor {
     private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_31_K"
@@ -11,6 +12,7 @@ class VideoOverlayProcessor {
         videoPath: String,
         overlayImagePath: String,
         outputPath: String,
+        animatedStickers: [[String: Any]] = [],
         mirrorHorizontally: Bool = false,
         outputWidth: Int? = nil,
         outputHeight: Int? = nil,
@@ -32,6 +34,7 @@ class VideoOverlayProcessor {
                 overlayImagePath: overlayImagePath,
                 outputURL: outputURL,
                 outputPath: outputPath,
+                animatedStickers: animatedStickers,
                 mirrorHorizontally: mirrorHorizontally,
                 outputWidth: outputWidth,
                 outputHeight: outputHeight,
@@ -43,6 +46,92 @@ class VideoOverlayProcessor {
         }
     }
 
+    /// One animated GIF sticker layer: pre-decoded frames plus its rect in
+    /// output pixels (bottom-left origin, Core Image space).
+    private struct AnimatedStickerLayer {
+        let frames: [CIImage]
+        let frameStarts: [Double]
+        let duration: Double
+        let rect: CGRect
+    }
+
+    /// Decode animated sticker GIFs and map their rects (normalized to the
+    /// overlay PNG, top-left origin) into output space using the exact same
+    /// cover-fill transform the static overlay gets.
+    private func loadAnimatedStickers(
+        _ descriptors: [[String: Any]],
+        overlayExtent: CGRect,
+        targetExtent: CGRect
+    ) -> [AnimatedStickerLayer] {
+        guard !descriptors.isEmpty else { return [] }
+        var layers: [AnimatedStickerLayer] = []
+        let ovW = overlayExtent.width
+        let ovH = overlayExtent.height
+        guard ovW > 0, ovH > 0 else { return [] }
+        let scale = max(targetExtent.width / ovW, targetExtent.height / ovH)
+        let dx0 = (targetExtent.width - ovW * scale) / 2
+        let dy0 = (targetExtent.height - ovH * scale) / 2
+
+        for d in descriptors {
+            guard let path = d["path"] as? String,
+                  let l = (d["left"] as? NSNumber)?.doubleValue,
+                  let t = (d["top"] as? NSNumber)?.doubleValue,
+                  let w = (d["width"] as? NSNumber)?.doubleValue,
+                  let h = (d["height"] as? NSNumber)?.doubleValue,
+                  w > 0, h > 0 else { continue }
+            let url = URL(fileURLWithPath: path)
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { continue }
+            let count = min(CGImageSourceGetCount(source), 240)
+            guard count > 0 else { continue }
+
+            var frames: [CIImage] = []
+            var starts: [Double] = []
+            var total: Double = 0
+            for i in 0..<count {
+                guard let cg = CGImageSourceCreateImageAtIndex(source, i, nil) else { continue }
+                frames.append(CIImage(cgImage: cg))
+                starts.append(total)
+                total += VideoOverlayProcessor.gifFrameDelay(source: source, index: i)
+            }
+            guard !frames.isEmpty else { continue }
+
+            let wOut = CGFloat(w) * ovW * scale
+            let hOut = CGFloat(h) * ovH * scale
+            let x = CGFloat(l) * ovW * scale + dx0
+            let yFromTop = CGFloat(t) * ovH * scale + dy0
+            let y = targetExtent.height - yFromTop - hOut
+
+            layers.append(AnimatedStickerLayer(
+                frames: frames,
+                frameStarts: starts,
+                duration: max(total, 0.01),
+                rect: CGRect(x: x, y: y, width: wOut, height: hOut)
+            ))
+            print("VideoOverlayProcessor: Animated sticker ready (\(frames.count) frames, \(total)s loop)")
+        }
+        return layers
+    }
+
+    private static func gifFrameDelay(source: CGImageSource, index: Int) -> Double {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+              let gif = props[kCGImagePropertyGIFDictionary] as? [CFString: Any] else { return 0.1 }
+        let unclamped = (gif[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue ?? 0
+        let clamped = (gif[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue ?? 0
+        let delay = unclamped > 0 ? unclamped : clamped
+        return delay > 0.011 ? delay : 0.1
+    }
+
+    /// Pick the GIF frame for a video timestamp (loops).
+    private func stickerFrame(_ layer: AnimatedStickerLayer, at time: Double) -> CIImage {
+        if layer.frames.count == 1 { return layer.frames[0] }
+        let t = time.truncatingRemainder(dividingBy: layer.duration)
+        var index = 0
+        for (i, start) in layer.frameStarts.enumerated() {
+            if start <= t { index = i } else { break }
+        }
+        return layer.frames[index]
+    }
+
     /// Single-pass export: video crop/scale + optional filter + overlay composited together.
     /// Keeping both filtered and unfiltered exports on the same path avoids the iOS-only
     /// black-video regression that showed up in the separate Core Animation exporter.
@@ -51,6 +140,7 @@ class VideoOverlayProcessor {
         overlayImagePath: String,
         outputURL: URL,
         outputPath: String,
+        animatedStickers: [[String: Any]] = [],
         mirrorHorizontally: Bool,
         outputWidth: Int?,
         outputHeight: Int?,
@@ -98,6 +188,14 @@ class VideoOverlayProcessor {
         print("VideoOverlayProcessor: source naturalSize=\(videoTrack.naturalSize), preferredTransform=\(videoTrack.preferredTransform)")
         print("VideoOverlayProcessor: renderSize=\(renderSize)")
 
+        // Animated GIF stickers — decoded once, composited per frame below so
+        // they stay animated in the exported video.
+        let animatedLayers = loadAnimatedStickers(
+            animatedStickers,
+            overlayExtent: overlayCI.extent,
+            targetExtent: targetExtent
+        )
+
         let ciComposition = AVVideoComposition(asset: asset) { [weak self] request in
             guard let self = self else { return }
 
@@ -129,7 +227,24 @@ class VideoOverlayProcessor {
             scaledOverlay = scaledOverlay.transformed(by: CGAffineTransform(translationX: dx, y: dy))
 
             // Composite overlay on top of filtered video, crop to frame
-            let composited = scaledOverlay.composited(over: filtered).cropped(to: targetExtent)
+            var composited = scaledOverlay.composited(over: filtered).cropped(to: targetExtent)
+
+            // Animated GIF stickers on top, advanced to this frame's timestamp
+            if !animatedLayers.isEmpty {
+                let seconds = request.compositionTime.seconds
+                for layer in animatedLayers {
+                    let frame = self.stickerFrame(layer, at: seconds)
+                    let extent = frame.extent
+                    guard extent.width > 0, extent.height > 0 else { continue }
+                    let transform = CGAffineTransform(translationX: layer.rect.minX, y: layer.rect.minY)
+                        .scaledBy(x: layer.rect.width / extent.width,
+                                  y: layer.rect.height / extent.height)
+                    composited = frame.transformed(by: transform)
+                        .composited(over: composited)
+                        .cropped(to: targetExtent)
+                }
+            }
+
             request.finish(with: composited, context: ciContext)
         }
 

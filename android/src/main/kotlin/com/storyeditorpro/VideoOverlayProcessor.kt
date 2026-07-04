@@ -33,6 +33,7 @@ class VideoOverlayProcessor {
         videoPath: String,
         overlayImagePath: String,
         outputPath: String,
+        animatedStickers: List<Map<String, Any?>> = emptyList(),
         mirrorHorizontally: Boolean = false,
         outputWidth: Int? = null,
         outputHeight: Int? = null,
@@ -77,6 +78,7 @@ class VideoOverlayProcessor {
         var muxerStarted = false
         var videoMuxTrackIndex = -1
         var audioMuxTrackIndex = -1
+        var animatedLayers: List<AnimatedOverlayLayer> = emptyList()
 
         try {
             val startTime = System.currentTimeMillis()
@@ -128,6 +130,8 @@ class VideoOverlayProcessor {
             Log.d(TAG, "Output: ${resolvedOutputWidth}x${resolvedOutputHeight}, fps=$frameRate, duration=${durationUs/1000}ms")
 
             // Scale overlay with aspect ratio preserved (cover + center crop)
+            val overlaySrcWidth = overlayBitmap.width
+            val overlaySrcHeight = overlayBitmap.height
             val scaledOverlay = scaleOverlayCoverCrop(overlayBitmap, resolvedOutputWidth, resolvedOutputHeight)
             overlayBitmap.recycle()
 
@@ -168,6 +172,15 @@ class VideoOverlayProcessor {
                 sCurve     = filter.sCurve,
             )
             scaledOverlay.recycle()
+
+            // 3b. Animated GIF sticker layers (composited per frame on top of
+            // the static overlay). Must run after renderer.init — GL calls
+            // need the EGL context current on this thread.
+            animatedLayers = setupAnimatedStickers(
+                renderer, animatedStickers,
+                overlaySrcWidth, overlaySrcHeight,
+                resolvedOutputWidth, resolvedOutputHeight
+            )
 
             // 4. Setup decoder (output to SurfaceTexture → OES texture on GPU)
             decoderSurfaceTexture = SurfaceTexture(renderer.getVideoTextureId())
@@ -276,6 +289,20 @@ class VideoOverlayProcessor {
                                 frameAvailable = false
                             }
 
+                            // Advance animated GIF stickers to this video timestamp
+                            if (animatedLayers.isNotEmpty()) {
+                                val videoMs = decoderBufferInfo.presentationTimeUs / 1000L
+                                for (layer in animatedLayers) {
+                                    val movie = layer.movie ?: continue
+                                    @Suppress("DEPRECATION")
+                                    movie.setTime((videoMs % layer.durationMs).toInt())
+                                    layer.bitmap.eraseColor(0)
+                                    @Suppress("DEPRECATION")
+                                    movie.draw(layer.canvas, 0f, 0f)
+                                    renderer.updateAnimatedStickerFrame(layer.rendererIndex, layer.bitmap)
+                                }
+                            }
+
                             // GPU render: video texture + overlay texture → encoder surface
                             val presentationTimeNs = decoderBufferInfo.presentationTimeUs * 1000L
                             renderer.drawFrame(decoderSurfaceTexture, presentationTimeNs)
@@ -328,6 +355,8 @@ class VideoOverlayProcessor {
             }
 
             // Cleanup
+            for (layer in animatedLayers) layer.bitmap.recycle()
+            animatedLayers = emptyList()
             renderer.release(); renderer = null
             decoderSurfaceTexture.release(); decoderSurfaceTexture = null
             decoderSurface?.release(); decoderSurface = null
@@ -348,6 +377,7 @@ class VideoOverlayProcessor {
             lastError = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
             return null
         } finally {
+            try { for (layer in animatedLayers) layer.bitmap.recycle() } catch (_: Exception) {}
             try { renderer?.release() } catch (_: Exception) {}
             try { decoderSurfaceTexture?.release() } catch (_: Exception) {}
             try { decoderSurface?.release() } catch (_: Exception) {}
@@ -357,6 +387,102 @@ class VideoOverlayProcessor {
             try { videoExtractor?.release() } catch (_: Exception) {}
             try { audioExtractor?.release() } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * One animated GIF sticker layer. [movie] is null when the file couldn't be
+     * decoded as an animation — the layer then shows its static first frame,
+     * which was uploaded once during setup.
+     */
+    private class AnimatedOverlayLayer(
+        @Suppress("DEPRECATION") val movie: android.graphics.Movie?,
+        val bitmap: Bitmap,
+        val canvas: Canvas,
+        val rendererIndex: Int,
+        val durationMs: Int,
+    )
+
+    /**
+     * Decode the animated stickers and register a streaming quad for each with
+     * the renderer. Sticker rects arrive normalized to the overlay PNG space
+     * (top-left origin); the static overlay is scaled cover + center-cropped
+     * into the output, so the identical mapping is applied here to keep the
+     * stickers exactly where they sat on the editor canvas.
+     */
+    @Suppress("DEPRECATION")
+    private fun setupAnimatedStickers(
+        renderer: TextureRenderer,
+        stickers: List<Map<String, Any?>>,
+        overlayWidth: Int,
+        overlayHeight: Int,
+        outputWidth: Int,
+        outputHeight: Int,
+    ): List<AnimatedOverlayLayer> {
+        if (stickers.isEmpty()) return emptyList()
+        val layers = mutableListOf<AnimatedOverlayLayer>()
+
+        val ovW = overlayWidth.toFloat()
+        val ovH = overlayHeight.toFloat()
+        val cover = maxOf(outputWidth / ovW, outputHeight / ovH)
+        val cropX = (ovW * cover - outputWidth) / 2f
+        val cropY = (ovH * cover - outputHeight) / 2f
+
+        for (s in stickers) {
+            try {
+                val path = s["path"] as? String ?: continue
+                val nl = (s["left"] as? Number)?.toFloat() ?: continue
+                val nt = (s["top"] as? Number)?.toFloat() ?: continue
+                val nw = (s["width"] as? Number)?.toFloat() ?: continue
+                val nh = (s["height"] as? Number)?.toFloat() ?: continue
+                if (nw <= 0f || nh <= 0f || !File(path).exists()) continue
+
+                val left = (nl * ovW * cover - cropX) / outputWidth
+                val top = (nt * ovH * cover - cropY) / outputHeight
+                val width = nw * ovW * cover / outputWidth
+                val height = nh * ovH * cover / outputHeight
+
+                val movie = android.graphics.Movie.decodeFile(path)
+                val animated = movie != null && movie.duration() > 0 &&
+                    movie.width() > 0 && movie.height() > 0
+
+                // Streaming texture at on-screen pixel size, capped so the
+                // per-frame Canvas draw + glTexSubImage2D stay cheap.
+                val pxW = (width * outputWidth).toInt().coerceIn(8, 512)
+                val aspect = if (animated) {
+                    movie!!.height().toFloat() / movie.width()
+                } else {
+                    (nh * ovH) / (nw * ovW)
+                }
+                val pxH = (pxW * aspect).toInt().coerceIn(8, 1024)
+
+                val bitmap = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bitmap)
+                if (animated) {
+                    canvas.scale(pxW.toFloat() / movie!!.width(), pxH.toFloat() / movie.height())
+                    movie.setTime(0)
+                    movie.draw(canvas, 0f, 0f)
+                } else {
+                    // Static fallback: Movie couldn't decode it as an animation.
+                    val still = BitmapFactory.decodeFile(path) ?: continue
+                    canvas.drawBitmap(still, null, RectF(0f, 0f, pxW.toFloat(), pxH.toFloat()), null)
+                    still.recycle()
+                }
+
+                val index = renderer.addAnimatedSticker(left, top, width, height, pxW, pxH)
+                renderer.updateAnimatedStickerFrame(index, bitmap)
+                layers.add(AnimatedOverlayLayer(
+                    movie = if (animated) movie else null,
+                    bitmap = bitmap,
+                    canvas = canvas,
+                    rendererIndex = index,
+                    durationMs = if (animated) movie!!.duration() else 0,
+                ))
+                Log.d(TAG, "Animated sticker ready: $path animated=$animated tex=${pxW}x$pxH")
+            } catch (e: Exception) {
+                Log.w(TAG, "Animated sticker setup failed: ${e.message}")
+            }
+        }
+        return layers
     }
 
     private data class FilterSettings(

@@ -61,6 +61,14 @@ class StoryEditorFilters {
     StoryFilterPreset(id: 'productcrisp', name: 'Product Crisp'),
     StoryFilterPreset(id: 'filmicfade', name: 'Filmic Fade'),
     StoryFilterPreset(id: 'pastelmist', name: 'Pastel Mist'),
+    StoryFilterPreset(id: 'goldenhour', name: 'Golden Hour'),
+    StoryFilterPreset(id: 'arctic', name: 'Arctic'),
+    StoryFilterPreset(id: 'sepia', name: 'Sepia'),
+    StoryFilterPreset(id: 'emerald', name: 'Emerald'),
+    StoryFilterPreset(id: 'rosegold', name: 'Rose Gold'),
+    StoryFilterPreset(id: 'moody', name: 'Moody'),
+    StoryFilterPreset(id: 'bleach', name: 'Bleach'),
+    StoryFilterPreset(id: 'velvet', name: 'Velvet'),
   ];
 
   static StoryFilterParams resolve(String presetId, double strength) {
@@ -238,6 +246,86 @@ class StoryEditorFilters {
           blue: 1.08,
         );
         break;
+      case 'goldenhour':
+        target = const StoryFilterParams(
+          brightness: 0.05,
+          contrast: 1.08,
+          saturation: 1.22,
+          red: 1.22,
+          green: 1.08,
+          blue: 0.72,
+        );
+        break;
+      case 'arctic':
+        target = const StoryFilterParams(
+          brightness: 0.06,
+          contrast: 1.12,
+          saturation: 0.85,
+          red: 0.86,
+          green: 1.00,
+          blue: 1.30,
+        );
+        break;
+      case 'sepia':
+        target = const StoryFilterParams(
+          brightness: 0.03,
+          contrast: 1.05,
+          saturation: 0.35,
+          red: 1.22,
+          green: 1.05,
+          blue: 0.78,
+        );
+        break;
+      case 'emerald':
+        target = const StoryFilterParams(
+          brightness: 0.0,
+          contrast: 1.12,
+          saturation: 1.12,
+          red: 0.85,
+          green: 1.20,
+          blue: 0.95,
+        );
+        break;
+      case 'rosegold':
+        target = const StoryFilterParams(
+          brightness: 0.05,
+          contrast: 1.02,
+          saturation: 1.10,
+          red: 1.20,
+          green: 0.98,
+          blue: 1.02,
+        );
+        break;
+      case 'moody':
+        target = const StoryFilterParams(
+          brightness: -0.06,
+          contrast: 1.28,
+          saturation: 0.82,
+          red: 0.98,
+          green: 0.98,
+          blue: 1.06,
+        );
+        break;
+      case 'bleach':
+        target = const StoryFilterParams(
+          brightness: 0.08,
+          contrast: 1.35,
+          saturation: 0.55,
+          red: 1.02,
+          green: 1.02,
+          blue: 1.00,
+        );
+        break;
+      case 'velvet':
+        target = const StoryFilterParams(
+          brightness: -0.02,
+          contrast: 1.15,
+          saturation: 1.30,
+          red: 1.10,
+          green: 0.88,
+          blue: 1.14,
+        );
+        break;
       case 'none':
       default:
         target = StoryFilterParams.neutral;
@@ -292,6 +380,21 @@ class StoryEditorFilters {
       case 'productcrisp':
         target = 0.08;
         break;
+      case 'goldenhour':
+        target = 0.14;
+        break;
+      case 'sepia':
+        target = 0.12;
+        break;
+      case 'moody':
+        target = 0.20;
+        break;
+      case 'bleach':
+        target = 0.24;
+        break;
+      case 'velvet':
+        target = 0.16;
+        break;
       default:
         return 0.0;
     }
@@ -319,7 +422,12 @@ class StoryEditorFilters {
       case 'nightneon':   target = 0.60; break;
       case 'productcrisp':target = 0.45; break;
       case 'filmicfade':  target = 0.25; break;
-      default:            return 0.0; // fade, dream, pastelmist, none
+      case 'goldenhour':  target = 0.20; break;
+      case 'sepia':       target = 0.35; break;
+      case 'emerald':     target = 0.25; break;
+      case 'moody':       target = 0.55; break;
+      case 'velvet':      target = 0.40; break;
+      default:            return 0.0; // fade, dream, pastelmist, arctic, rosegold, bleach, none
     }
     return _lerp(0.0, target, s);
   }
@@ -360,6 +468,22 @@ class StoryEditorFilters {
         return const Color(0xFFD8B79B);
       case 'pastelmist':
         return const Color(0xFFBFC7FF);
+      case 'goldenhour':
+        return const Color(0xFFFFC46B);
+      case 'arctic':
+        return const Color(0xFF9AD8FF);
+      case 'sepia':
+        return const Color(0xFFC9A227);
+      case 'emerald':
+        return const Color(0xFF3ECF8E);
+      case 'rosegold':
+        return const Color(0xFFF4A9A0);
+      case 'moody':
+        return const Color(0xFF8C9BB5);
+      case 'bleach':
+        return const Color(0xFFE8E8E8);
+      case 'velvet':
+        return const Color(0xFFC77DFF);
       case 'none':
       default:
         return const Color(0xFFFFFFFF);

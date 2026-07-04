@@ -76,6 +76,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let filterPreset = args["filterPreset"] as? String ?? "none"
         let filterStrength = args["filterStrength"] as? Double ?? 1.0
         let shouldMuteAudio = args["shouldMuteAudio"] as? Bool ?? false
+        let animatedStickers = args["animatedStickers"] as? [[String: Any]] ?? []
 
         if videoOverlayProcessor == nil {
             videoOverlayProcessor = VideoOverlayProcessor()
@@ -85,6 +86,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             videoPath: videoPath,
             overlayImagePath: overlayImagePath,
             outputPath: outputPath,
+            animatedStickers: animatedStickers,
             mirrorHorizontally: mirrorHorizontally,
             outputWidth: outputWidth,
             outputHeight: outputHeight,

@@ -18,6 +18,7 @@ export 'src/video_overlay_export_service.dart';
 export 'src/config/story_editor_config.dart';
 export 'src/config/story_editor_strings.dart';
 export 'src/config/story_editor_theme.dart';
+export 'src/overlays/smart_stickers.dart';
 export 'src/config/story_editor_icons.dart';
 export 'src/config/story_editor_gradients.dart';
 export 'src/config/story_editor_fonts.dart';

@@ -28,10 +28,14 @@ class VideoOverlayExportService {
   ///
   /// [videoPath]: Original video file path
   /// [overlayPngBytes]: PNG image bytes (transparent background, only overlays)
+  /// [animatedStickers]: Animated GIF layers composited natively per frame so
+  /// they stay animated in the output. Each map: {path, left, top, width,
+  /// height} — rect normalized (0..1) to the overlay PNG, top-left origin.
   /// Returns: Path to the exported MP4 file, or null on failure
   static Future<String?> exportVideoWithOverlay({
     required String videoPath,
     required Uint8List overlayPngBytes,
+    List<Map<String, dynamic>> animatedStickers = const [],
     bool mirrorHorizontally = false,
     int? outputWidth,
     int? outputHeight,
@@ -61,6 +65,7 @@ class VideoOverlayExportService {
           'videoPath': videoPath,
           'overlayImagePath': overlayPath,
           'outputPath': outputPath,
+          'animatedStickers': animatedStickers,
           'mirrorHorizontally': mirrorHorizontally,
           'outputWidth': outputWidth,
           'outputHeight': outputHeight,
@@ -112,6 +117,7 @@ class VideoOverlayExportService {
   static Future<String> startExportInBackground({
     required String videoPath,
     required Uint8List overlayPngBytes,
+    List<Map<String, dynamic>> animatedStickers = const [],
     bool mirrorHorizontally = false,
     int? outputWidth,
     int? outputHeight,
@@ -136,6 +142,7 @@ class VideoOverlayExportService {
       videoPath: videoPath,
       overlayPath: overlayPath,
       outputPath: outputPath,
+      animatedStickers: animatedStickers,
       mirrorHorizontally: mirrorHorizontally,
       outputWidth: outputWidth,
       outputHeight: outputHeight,
@@ -151,6 +158,7 @@ class VideoOverlayExportService {
     required String videoPath,
     required String overlayPath,
     required String outputPath,
+    List<Map<String, dynamic>> animatedStickers = const [],
     required bool mirrorHorizontally,
     int? outputWidth,
     int? outputHeight,
@@ -165,6 +173,7 @@ class VideoOverlayExportService {
           'videoPath': videoPath,
           'overlayImagePath': overlayPath,
           'outputPath': outputPath,
+          'animatedStickers': animatedStickers,
           'mirrorHorizontally': mirrorHorizontally,
           'outputWidth': outputWidth,
           'outputHeight': outputHeight,
