@@ -47,6 +47,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Story oluşturmak için kamera erişimine ihtiyacımız var.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Videolara ses kaydetmek için mikrofon erişimine ihtiyacımız var.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Fotoğraflarınızı story'de kullanabilmek için erişim gerekiyor.</string>
 </dict>

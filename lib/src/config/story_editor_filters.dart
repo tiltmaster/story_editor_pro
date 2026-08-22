@@ -6,10 +6,7 @@ class StoryFilterPreset {
   final String id;
   final String name;
 
-  const StoryFilterPreset({
-    required this.id,
-    required this.name,
-  });
+  const StoryFilterPreset({required this.id, required this.name});
 }
 
 class StoryFilterParams {
@@ -41,6 +38,7 @@ class StoryFilterParams {
 
 class StoryEditorFilters {
   static const String none = 'none';
+  static const String glassesLensId = 'glasses_classic';
 
   static const List<StoryFilterPreset> presets = [
     StoryFilterPreset(id: 'none', name: 'Normal'),
@@ -70,6 +68,26 @@ class StoryEditorFilters {
     StoryFilterPreset(id: 'bleach', name: 'Bleach'),
     StoryFilterPreset(id: 'velvet', name: 'Velvet'),
   ];
+
+  /// The original color presets plus the single native glasses lens.
+  ///
+  /// The native lens is appended so every existing preset keeps its index and
+  /// the camera's slider geometry and snapping behavior remain unchanged.
+  static const StoryFilterPreset classicGlassesLens = StoryFilterPreset(
+    id: glassesLensId,
+    name: 'Classic Glasses',
+  );
+
+  static const List<StoryFilterPreset> cameraPresets = <StoryFilterPreset>[
+    ...presets,
+    classicGlassesLens,
+  ];
+
+  static List<StoryFilterPreset> cameraPresetsFor({
+    required bool supportsClassicGlasses,
+  }) => supportsClassicGlasses ? cameraPresets : presets;
+
+  static bool isNativeLens(String presetId) => presetId == glassesLensId;
 
   static StoryFilterParams resolve(String presetId, double strength) {
     final s = strength.clamp(0.0, 1.0);
@@ -332,9 +350,17 @@ class StoryEditorFilters {
     }
 
     return StoryFilterParams(
-      brightness: _lerp(StoryFilterParams.neutral.brightness, target.brightness, s),
+      brightness: _lerp(
+        StoryFilterParams.neutral.brightness,
+        target.brightness,
+        s,
+      ),
       contrast: _lerp(StoryFilterParams.neutral.contrast, target.contrast, s),
-      saturation: _lerp(StoryFilterParams.neutral.saturation, target.saturation, s),
+      saturation: _lerp(
+        StoryFilterParams.neutral.saturation,
+        target.saturation,
+        s,
+      ),
       red: _lerp(StoryFilterParams.neutral.red, target.red, s),
       green: _lerp(StoryFilterParams.neutral.green, target.green, s),
       blue: _lerp(StoryFilterParams.neutral.blue, target.blue, s),
@@ -408,26 +434,65 @@ class StoryEditorFilters {
     final s = strength.clamp(0.0, 1.0);
     double target;
     switch (presetId) {
-      case 'vivid':       target = 0.45; break;
-      case 'warm':        target = 0.25; break;
-      case 'cool':        target = 0.25; break;
-      case 'sunset':      target = 0.40; break;
-      case 'mono':        target = 0.40; break;
-      case 'noir':        target = 0.65; break;
-      case 'vignette':    target = 0.25; break;
-      case 'retro2044':   target = 0.45; break;
-      case 'cinematic':   target = 0.65; break;
-      case 'tealorange':  target = 0.45; break;
-      case 'portraitpop': target = 0.30; break;
-      case 'nightneon':   target = 0.60; break;
-      case 'productcrisp':target = 0.45; break;
-      case 'filmicfade':  target = 0.25; break;
-      case 'goldenhour':  target = 0.20; break;
-      case 'sepia':       target = 0.35; break;
-      case 'emerald':     target = 0.25; break;
-      case 'moody':       target = 0.55; break;
-      case 'velvet':      target = 0.40; break;
-      default:            return 0.0; // fade, dream, pastelmist, arctic, rosegold, bleach, none
+      case 'vivid':
+        target = 0.45;
+        break;
+      case 'warm':
+        target = 0.25;
+        break;
+      case 'cool':
+        target = 0.25;
+        break;
+      case 'sunset':
+        target = 0.40;
+        break;
+      case 'mono':
+        target = 0.40;
+        break;
+      case 'noir':
+        target = 0.65;
+        break;
+      case 'vignette':
+        target = 0.25;
+        break;
+      case 'retro2044':
+        target = 0.45;
+        break;
+      case 'cinematic':
+        target = 0.65;
+        break;
+      case 'tealorange':
+        target = 0.45;
+        break;
+      case 'portraitpop':
+        target = 0.30;
+        break;
+      case 'nightneon':
+        target = 0.60;
+        break;
+      case 'productcrisp':
+        target = 0.45;
+        break;
+      case 'filmicfade':
+        target = 0.25;
+        break;
+      case 'goldenhour':
+        target = 0.20;
+        break;
+      case 'sepia':
+        target = 0.35;
+        break;
+      case 'emerald':
+        target = 0.25;
+        break;
+      case 'moody':
+        target = 0.55;
+        break;
+      case 'velvet':
+        target = 0.40;
+        break;
+      default:
+        return 0.0; // fade, dream, pastelmist, arctic, rosegold, bleach, none
     }
     return _lerp(0.0, target, s);
   }
@@ -526,10 +591,26 @@ class StoryEditorFilters {
     bl2 = _finite(bl2);
 
     return [
-      r0, r1, r2, 0, bOffset,
-      g0, g1, g2, 0, bOffset,
-      bl0, bl1, bl2, 0, bOffset,
-      0, 0, 0, 1, 0,
+      r0,
+      r1,
+      r2,
+      0,
+      bOffset,
+      g0,
+      g1,
+      g2,
+      0,
+      bOffset,
+      bl0,
+      bl1,
+      bl2,
+      0,
+      bOffset,
+      0,
+      0,
+      0,
+      1,
+      0,
     ];
   }
 

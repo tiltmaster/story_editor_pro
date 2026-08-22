@@ -1,27 +1,34 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+import 'native_story_camera_controller.dart';
 
 /// Warms up the camera *before* the camera screen is shown so the live preview is
 /// ready on arrival, instead of the user staring at a ~0.7s black/spinner while
 /// the controller initializes on-screen.
 ///
 /// Call [prewarm] right before navigating to [StoryCameraScreen]; the screen then
-/// adopts the ready controller via [take]. If nothing was warmed (e.g. permission
-/// not yet granted), [take] returns null and the screen initializes normally.
+/// adopts the ready native controller via [takeNativePrepared]. If nothing was
+/// warmed (e.g. permission not yet granted), the screen initializes normally.
 class CameraPrewarm {
   CameraPrewarm._();
 
-  static CameraController? _controller;
-  static List<CameraDescription>? _cameras;
-  static int _cameraIndex = 0;
-  static Future<void>? _warming;
+  static NativeStoryCameraController? _nativeController;
+  static NativeStoryCameraSession? _nativeSession;
+  static NativeStoryCameraFacing? _nativeFacing;
+  static const List<CameraDescription>? _cameras = null;
+  static const int _cameraIndex = 0;
+  static Future<void> _operationTail = Future<void>.value();
+  static bool _claiming = false;
+  static NativeStoryCameraController? _leasedController;
+  static final Set<int> _routeLeaseIds = <int>{};
+  static int _nextRouteLeaseId = 0;
   static Timer? _discardTimer;
-  static Stopwatch? _warmupStopwatch;
   static Duration? _lastWarmupDuration;
-  static int _generation = 0;
+  static bool _lastNativeInitializationFailed = false;
 
   static List<CameraDescription>? get cameras => _cameras;
   static int get cameraIndex => _cameraIndex;
@@ -29,118 +36,201 @@ class CameraPrewarm {
   /// Begin initializing a controller in the background. No-op if already
   /// warm/warming, or if camera permission isn't granted yet (so it never
   /// triggers an early permission prompt before the camera screen).
-  static Future<void> prewarm({bool front = false}) {
-    if (_controller != null) return Future<void>.value();
-    final warming = _warming;
-    if (warming != null) return warming;
-
-    final generation = ++_generation;
-    _warmupStopwatch = Stopwatch()..start();
-    final future = _doWarm(front, generation);
-    _warming = future.whenComplete(() {
-      _warmupStopwatch?.stop();
-      _lastWarmupDuration = _warmupStopwatch?.elapsed;
-      _warmupStopwatch = null;
-      _warming = null;
-    });
-    return _warming!;
+  static Future<void> prewarm({
+    bool front = false,
+    @visibleForTesting bool? cameraPermissionGranted,
+  }) {
+    if (_claiming || _leasedController != null || _routeLeaseIds.isNotEmpty) {
+      return Future<void>.value();
+    }
+    final requestedFacing = front
+        ? NativeStoryCameraFacing.front
+        : NativeStoryCameraFacing.back;
+    return _enqueue<void>(
+      () => _warm(
+        requestedFacing,
+        cameraPermissionGranted: cameraPermissionGranted,
+      ),
+    );
   }
 
-  static Future<void> _doWarm(bool front, int generation) async {
-    CameraController? pendingController;
+  static Future<void> _warm(
+    NativeStoryCameraFacing facing, {
+    required bool? cameraPermissionGranted,
+  }) async {
+    if (_nativeController != null && _nativeFacing == facing) return;
+    final previousController = _detachNativeController();
+    NativeStoryCameraController? pendingController;
+    final stopwatch = Stopwatch()..start();
+    _lastNativeInitializationFailed = false;
     try {
-      if (!await Permission.camera.isGranted) return;
-      if (generation != _generation) return;
-      // Camera enumeration is stable for the process lifetime on mobile and is
-      // a measurable platform-channel cost. Reuse the last successful list.
-      final cachedCameras = _cameras;
-      final cams = cachedCameras != null && cachedCameras.isNotEmpty
-          ? cachedCameras
-          : await availableCameras();
-      if (cams.isEmpty || generation != _generation) return;
-      final dir = front ? CameraLensDirection.front : CameraLensDirection.back;
-      var idx = cams.indexWhere((c) => c.lensDirection == dir);
-      if (idx == -1) idx = 0;
-
-      final controller = CameraController(
-        cams[idx],
-        ResolutionPreset.veryHigh,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+      await previousController?.dispose();
+      final permissionGranted =
+          cameraPermissionGranted ?? await Permission.camera.isGranted;
+      if (!permissionGranted) return;
+      late final NativeStoryCameraController controller;
+      controller = NativeStoryCameraController(
+        onDisposed: () {
+          if (identical(_leasedController, controller)) {
+            _leasedController = null;
+          }
+        },
       );
       pendingController = controller;
-      await controller.initialize();
-      if (generation != _generation) {
-        await controller.dispose();
-        return;
-      }
+      final session = await controller.initialize(facing);
 
-      _cameras = cams;
-      _cameraIndex = idx;
-      _controller = controller;
+      _nativeController = controller;
+      _nativeSession = session;
+      _nativeFacing = facing;
+      _lastNativeInitializationFailed = false;
       pendingController = null;
-
-      // Orientation locking is a secondary platform round-trip. The preview is
-      // already usable after initialize(), so do not hold first-frame readiness
-      // behind it. The screen repeats this best-effort configuration after it
-      // adopts the controller.
-      unawaited(
-        controller
-            .lockCaptureOrientation(DeviceOrientation.portraitUp)
-            .catchError((_) {}),
-      );
 
       // Safety: if the screen never claims it, don't hold the camera forever.
       _discardTimer?.cancel();
       _discardTimer = Timer(const Duration(seconds: 12), discard);
     } catch (_) {
       await pendingController?.dispose();
-      _controller = null;
+      _nativeController = null;
+      _nativeSession = null;
+      _nativeFacing = null;
+      _lastNativeInitializationFailed = true;
+    } finally {
+      stopwatch.stop();
+      _lastWarmupDuration = stopwatch.elapsed;
     }
   }
 
-  /// Hand the ready controller to the caller (which now owns and disposes it).
-  /// Awaits an in-flight warm-up. Returns null if none is available.
-  static Future<CameraController?> take() async {
-    final prepared = await takePrepared();
-    return prepared?.controller;
-  }
-
-  /// Hands a warmed controller and its startup timing to the camera screen.
-  ///
-  /// This is separate from [take] to preserve compatibility for existing hosts.
-  static Future<PrewarmedCamera?> takePrepared() async {
-    final waitStopwatch = Stopwatch()..start();
-    final warming = _warming;
-    if (warming != null) {
+  static Future<T> _enqueue<T>(Future<T> Function() operation) {
+    final completer = Completer<T>();
+    final previous = _operationTail;
+    _operationTail = previous.then((_) async {
       try {
-        await warming;
-      } catch (_) {}
-    }
-    waitStopwatch.stop();
+        completer.complete(await operation());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  static NativeStoryCameraController? _detachNativeController() {
     _discardTimer?.cancel();
     _discardTimer = null;
-    final controller = _controller;
-    _controller = null;
-    if (controller == null) return null;
-    return PrewarmedCamera(
-      controller: controller,
-      cameras: List<CameraDescription>.unmodifiable(_cameras ?? const []),
-      cameraIndex: _cameraIndex,
-      warmupDuration: _lastWarmupDuration ?? Duration.zero,
-      screenWaitDuration: waitStopwatch.elapsed,
-    );
+    final controller = _nativeController;
+    _nativeController = null;
+    _nativeSession = null;
+    _nativeFacing = null;
+    return controller;
+  }
+
+  /// Blocks background prewarming while a visible camera route owns hardware.
+  static CameraPrewarmRouteLease acquireRouteLease() {
+    final id = ++_nextRouteLeaseId;
+    _routeLeaseIds.add(id);
+    return CameraPrewarmRouteLease._(id);
+  }
+
+  static void _releaseRouteLease(int id) {
+    _routeLeaseIds.remove(id);
+  }
+
+  /// Legacy package-camera adoption is no longer used by the native-primary
+  /// camera screen. The signature remains for source compatibility.
+  @Deprecated('Use takeNativePrepared for the native-primary camera pipeline.')
+  static Future<CameraController?> take() async {
+    final prepared = await takeNativePrepared();
+    await prepared?.controller.dispose();
+    return null;
+  }
+
+  /// Legacy package-camera adoption retained for source compatibility.
+  @Deprecated('Use takeNativePrepared for the native-primary camera pipeline.')
+  static Future<PrewarmedCamera?> takePrepared() async {
+    final prepared = await takeNativePrepared();
+    await prepared?.controller.dispose();
+    return null;
+  }
+
+  /// Transfers the already-open native camera session to the camera route.
+  static Future<NativePrewarmedCamera?> takeNativePrepared() {
+    if (_claiming || _leasedController != null) {
+      return Future<NativePrewarmedCamera?>.value();
+    }
+    _claiming = true;
+    final waitStopwatch = Stopwatch()..start();
+    return _enqueue<NativePrewarmedCamera?>(() async {
+      waitStopwatch.stop();
+      _discardTimer?.cancel();
+      _discardTimer = null;
+      final controller = _nativeController;
+      final session = _nativeSession;
+      final facing = _nativeFacing;
+      _nativeController = null;
+      _nativeSession = null;
+      _nativeFacing = null;
+      if (controller == null || session == null || facing == null) return null;
+      _leasedController = controller;
+      return NativePrewarmedCamera(
+        controller: controller,
+        session: session,
+        facing: facing,
+        warmupDuration: _lastWarmupDuration ?? Duration.zero,
+        screenWaitDuration: waitStopwatch.elapsed,
+      );
+    }).whenComplete(() {
+      _claiming = false;
+    });
+  }
+
+  /// Returns and clears a failed native warmup signal. The visible route uses
+  /// this to avoid retrying the same failed native initialization immediately.
+  static bool takeNativeInitializationFailure() {
+    final failed = _lastNativeInitializationFailed;
+    _lastNativeInitializationFailed = false;
+    return failed;
   }
 
   /// Dispose an unclaimed warm controller.
-  static Future<void> discard() async {
-    _generation++;
-    _discardTimer?.cancel();
-    _discardTimer = null;
-    final controller = _controller;
-    _controller = null;
-    await controller?.dispose();
+  static Future<void> discard() {
+    return _enqueue<void>(() async {
+      _lastNativeInitializationFailed = false;
+      _discardTimer?.cancel();
+      _discardTimer = null;
+      final controller = _detachNativeController();
+      await controller?.dispose();
+    });
   }
+}
+
+/// A route-lifetime camera ownership token.
+class CameraPrewarmRouteLease {
+  CameraPrewarmRouteLease._(this._id);
+
+  final int _id;
+  bool _released = false;
+
+  void release() {
+    if (_released) return;
+    _released = true;
+    CameraPrewarm._releaseRouteLease(_id);
+  }
+}
+
+/// A native session prepared before the camera route became visible.
+class NativePrewarmedCamera {
+  const NativePrewarmedCamera({
+    required this.controller,
+    required this.session,
+    required this.facing,
+    required this.warmupDuration,
+    required this.screenWaitDuration,
+  });
+
+  final NativeStoryCameraController controller;
+  final NativeStoryCameraSession session;
+  final NativeStoryCameraFacing facing;
+  final Duration warmupDuration;
+  final Duration screenWaitDuration;
 }
 
 /// A camera prepared before the capture route became visible.

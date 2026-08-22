@@ -1422,13 +1422,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     color: Colors.white.withValues(alpha: 0.22),
                     width: 1.0,
                   ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black54,
-                      blurRadius: 8,
-                      spreadRadius: 0.2,
-                    ),
-                  ],
                 ),
                 child: Center(
                   child: SvgPicture.asset(
@@ -1462,13 +1455,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   color: Colors.white.withValues(alpha: 0.22),
                   width: 1.0,
                 ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black54,
-                    blurRadius: 8,
-                    spreadRadius: 0.2,
-                  ),
-                ],
               ),
               child: Center(
                 child: _isSaving
@@ -2118,13 +2104,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             color: Colors.white.withValues(alpha: 0.22),
             width: 1.0,
           ),
-          boxShadow: const [
-            BoxShadow(
-              color: Colors.black54,
-              blurRadius: 8,
-              spreadRadius: 0.2,
-            ),
-          ],
         ),
         child: Center(
           child: iconWidget ?? Icon(

@@ -6,6 +6,9 @@ export 'src/camera_settings_screen.dart';
 
 // Camera utilities
 export 'src/camera_prewarm.dart';
+export 'src/camera_filter_slider_contract.dart';
+export 'src/native_ar_controller.dart';
+export 'src/native_story_camera_controller.dart';
 export 'src/boomerang_recorder.dart';
 export 'src/smart_shutter_button.dart';
 export 'src/advanced_boomerang_service.dart';

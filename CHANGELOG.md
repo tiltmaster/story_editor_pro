@@ -1,3 +1,25 @@
+## 1.4.0
+
+### Added
+- Native Android and iOS camera pipeline for preview, photo, video, audio, and AR compositing
+- On-device face-tracked Classic Glasses lens using MediaPipe and a project-owned Blender asset
+- English and Arabic label support for the AR lens
+
+### Fixed
+- Filter slider geometry and snapping are locked to the existing interaction contract
+- Timer status no longer changes the shutter circle anchor
+- Native camera lifecycle resume falls back safely if reopening fails
+- Interactive camera and editor controls no longer add unintended halo shadows
+
+### Changed
+- Native camera prewarming is adopted by the capture route without reopening the camera
+- Startup telemetry exposes the 700ms warm-start target without collecting media data
+- Location, time, date, battery, and speed smart tags have stronger visual hierarchy
+- Camera and editor labels have improved English and Arabic coverage and RTL behavior
+- Legacy package-camera prewarm getters are deprecated in favor of `takeNativePrepared`
+
+---
+
 ## 1.0.3
 
 ### Added

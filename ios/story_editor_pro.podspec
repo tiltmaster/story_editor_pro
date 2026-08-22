@@ -11,6 +11,18 @@ A Flutter story editor plugin with native camera support for iOS and Android.
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
+  # Apache-2.0 MediaPipe Tasks; the face-landmarker model is shipped as a
+  # Flutter asset and resolved at runtime by StoryEditorProPlugin.
+  s.dependency 'MediaPipeTasksVision', '0.10.35'
+  s.frameworks = 'AVFoundation', 'AudioToolbox', 'CoreImage', 'Metal', 'Vision'
+  s.resource_bundles = {
+    'story_editor_pro_privacy' => ['Resources/PrivacyInfo.xcprivacy']
+  }
   s.platform = :ios, '12.0'
   s.swift_version = '5.0'
+
+  s.test_spec 'Tests' do |tests|
+    tests.source_files = 'Tests/**/*'
+    tests.frameworks = 'XCTest'
+  end
 end

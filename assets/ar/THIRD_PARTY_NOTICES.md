@@ -1,0 +1,25 @@
+# AR third-party notices
+
+## MediaPipe Face Landmarker
+
+`models/face_landmarker.task` is the official MediaPipe Face Landmarker model
+bundle downloaded from:
+
+https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+
+SHA-256: `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF`
+
+MediaPipe source and official samples are distributed under the Apache License
+2.0. The model is redistributed as the unmodified model bundle explicitly
+linked by Google's Face Landmarker documentation. Review Google's applicable
+terms before redistributing a modified model.
+
+MediaPipe Tasks processes camera input on-device and does not send those input
+frames to Google. Google's current MediaPipe privacy notice states that Tasks
+APIs send performance and utilization metrics. Any shipping host app must
+disclose that metrics processing and obtain informed consent where applicable:
+
+https://github.com/google-ai-edge/mediapipe#privacy
+
+The glasses geometry in `glasses_classic/` was generated for this project and
+does not include external model or texture assets.

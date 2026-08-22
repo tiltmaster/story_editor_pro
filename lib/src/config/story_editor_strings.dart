@@ -67,6 +67,8 @@ class StoryEditorStrings {
   final String cameraFilterProductCrisp;
   final String cameraFilterFilmicFade;
   final String cameraFilterPastelMist;
+  final String cameraLensClassicGlasses;
+  final String cameraLensClassicGlassesArabic;
 
   // ============ Gradient Text Editor ============
   final String gradientBalance;
@@ -190,6 +192,8 @@ class StoryEditorStrings {
     this.cameraFilterProductCrisp = 'Product Crisp',
     this.cameraFilterFilmicFade = 'Filmic Fade',
     this.cameraFilterPastelMist = 'Pastel Mist',
+    this.cameraLensClassicGlasses = 'Classic Glasses',
+    this.cameraLensClassicGlassesArabic = 'نظارات كلاسيكية',
 
     // ─────────────────────────────────────────────────────────────
     // Gradient Text Editor
@@ -270,8 +274,12 @@ class StoryEditorStrings {
   String formatError(String baseError, String details) =>
       '$baseError: $details';
 
-  String filterNameForPreset(String presetId) {
+  String filterNameForPreset(String presetId, {String languageCode = 'en'}) {
     switch (presetId) {
+      case 'glasses_classic':
+        return languageCode.toLowerCase().startsWith('ar')
+            ? cameraLensClassicGlassesArabic
+            : cameraLensClassicGlasses;
       case 'vivid':
         return cameraFilterVivid;
       case 'warm':
