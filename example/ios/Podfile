@@ -40,7 +40,7 @@ target 'Runner' do
   target 'RunnerTests' do
     # Compile the native XCTest suite as a hostless simulator logic-test
     # bundle, so MediaPipe's static registries are loaded exactly once.
-    inherit! :search_paths
+    inherit! :complete
   end
 end
 
