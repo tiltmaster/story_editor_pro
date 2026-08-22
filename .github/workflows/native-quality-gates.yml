@@ -60,15 +60,29 @@ jobs:
       - name: Run iOS simulator tests
         working-directory: example/ios
         run: |
-          set +e
+          set -e
           result_bundle="$RUNNER_TEMP/RunnerTests.xcresult"
           diagnostic_log="$RUNNER_TEMP/RunnerTests-diagnostics.log"
+          simulator_id=$(xcrun simctl list devices available -j | ruby -rjson -e '
+            devices = JSON.parse(STDIN.read).fetch("devices")
+            latest = devices
+              .select { |runtime, _| runtime.include?("SimRuntime.iOS") }
+              .max_by { |runtime, _| runtime.scan(/\d+/).map(&:to_i) }
+            device = latest&.last&.find { |entry| entry["name"] == "iPhone 17" }
+            abort "No available iPhone 17 simulator found" unless device
+            puts device.fetch("udid")
+          ')
 
+          echo "Using pre-booted iPhone 17 simulator $simulator_id"
+          xcrun simctl boot "$simulator_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$simulator_id" -b
+
+          set +e
           xcodebuild \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
             -resultBundlePath "$result_bundle" \
             CODE_SIGNING_ALLOWED=NO \
             test
@@ -82,14 +96,15 @@ jobs:
               echo "=== Booted simulator devices ==="
               xcrun simctl list devices booted 2>&1 || true
               echo "=== Runner and XCTest simulator log ==="
-              xcrun simctl spawn booted log show \
-                --last 15m \
+              xcrun simctl spawn "$simulator_id" log show \
+                --last 10m \
                 --style compact \
-                --predicate 'process == "Runner" OR process == "RunnerTests" OR eventMessage CONTAINS[c] "Runner" OR eventMessage CONTAINS[c] "XCTest"' \
+                --predicate 'process == "Runner" OR process == "xctest" OR subsystem == "com.apple.dt.xctest" OR eventMessage CONTAINS[c] "Runner"' \
                 2>&1 || true
             } | tee "$diagnostic_log"
           fi
 
+          xcrun simctl shutdown "$simulator_id" 2>/dev/null || true
           exit "$test_status"
       - name: Upload iOS test diagnostics
         if: failure()
