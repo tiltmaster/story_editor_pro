@@ -38,8 +38,8 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
   target 'RunnerTests' do
-    # Compile the plugin's native XCTest suite against the Runner-hosted pod
-    # modules without linking a second copy of MediaPipe's static framework.
+    # Compile the native XCTest suite as a hostless simulator logic-test
+    # bundle, so MediaPipe's static registries are loaded exactly once.
     inherit! :search_paths
   end
 end
