@@ -31,7 +31,9 @@ jobs:
         working-directory: example
 
   ios:
-    runs-on: macos-15
+    # MediaPipeTasksVision 0.10.35 is built with the iOS 26 SDK and
+    # auto-links CoreAudioTypes, which is unavailable in Xcode 16's SDK.
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
