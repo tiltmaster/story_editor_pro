@@ -1,9 +1,9 @@
 name: story_editor_pro
 description: "A powerful story editor with camera, boomerang effects, drawing tools, text overlays, collages, and close friends sharing."
 version: 1.4.0
-homepage: https://github.com/ahmetbalkan/story_editor_pro
-repository: https://github.com/ahmetbalkan/story_editor_pro
-issue_tracker: https://github.com/ahmetbalkan/story_editor_pro/issues
+homepage: https://github.com/tiltmaster/story_editor_pro
+repository: https://github.com/tiltmaster/story_editor_pro
+issue_tracker: https://github.com/tiltmaster/story_editor_pro/issues
 
 topics:
   - camera

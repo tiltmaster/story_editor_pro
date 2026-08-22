@@ -51,6 +51,7 @@ jobs:
           pod lib lint story_editor_pro.podspec
           --allow-warnings
           --skip-import-validation
+          --use-static-frameworks
           --test-specs=Tests
       - run: flutter build ios --simulator --debug --no-codesign
         working-directory: example
