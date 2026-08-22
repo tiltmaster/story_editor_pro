@@ -18,7 +18,8 @@ A Flutter story editor plugin with native camera support for iOS and Android.
   s.resource_bundles = {
     'story_editor_pro_privacy' => ['Resources/PrivacyInfo.xcprivacy']
   }
-  s.platform = :ios, '12.0'
+  # MediaPipeTasksVision 0.10.35 requires iOS 15.0.
+  s.platform = :ios, '15.0'
   s.swift_version = '5.0'
 
   s.test_spec 'Tests' do |tests|
