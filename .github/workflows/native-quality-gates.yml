@@ -65,10 +65,14 @@ jobs:
           diagnostic_log="$RUNNER_TEMP/RunnerTests-diagnostics.log"
           simulator_id=$(xcrun simctl list devices available -j | ruby -rjson -e '
             devices = JSON.parse(STDIN.read).fetch("devices")
-            latest = devices
-              .select { |runtime, _| runtime.include?("SimRuntime.iOS") }
-              .max_by { |runtime, _| runtime.scan(/\d+/).map(&:to_i) }
-            device = latest&.last&.find { |entry| entry["name"] == "iPhone 17" }
+            candidates = devices.flat_map do |runtime, entries|
+              next [] unless runtime.include?("SimRuntime.iOS")
+              version = runtime.scan(/\d+/).map(&:to_i)
+              entries
+                .select { |entry| entry["name"] == "iPhone 17" }
+                .map { |entry| [version, entry] }
+            end
+            device = candidates.max_by(&:first)&.last
             abort "No available iPhone 17 simulator found" unless device
             puts device.fetch("udid")
           ')
@@ -83,6 +87,7 @@ jobs:
             -scheme Runner \
             -configuration Debug \
             -destination "platform=iOS Simulator,id=$simulator_id" \
+            -parallel-testing-enabled NO \
             -resultBundlePath "$result_bundle" \
             CODE_SIGNING_ALLOWED=NO \
             test
