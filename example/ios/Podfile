@@ -38,9 +38,9 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
   target 'RunnerTests' do
-    # MediaPipe's iOS setup requires nested test targets not to inherit its
-    # binary framework search paths.
-    inherit! :none
+    # Compile the plugin's native XCTest suite against the Runner-hosted pod
+    # modules without linking a second copy of MediaPipe's static framework.
+    inherit! :search_paths
   end
 end
 

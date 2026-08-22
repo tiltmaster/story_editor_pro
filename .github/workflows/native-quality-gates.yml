@@ -47,14 +47,14 @@ jobs:
       - run: flutter test --no-pub
       - run: flutter pub get
         working-directory: example
-      - name: Compile the iOS pod and native XCTest specification
+      - name: Compile the iOS pod
         working-directory: ios
         run: >-
           pod lib lint story_editor_pro.podspec
           --allow-warnings
           --skip-import-validation
+          --skip-tests
           --use-static-frameworks
-          --test-specs=Tests
       - run: flutter build ios --simulator --debug --no-codesign
         working-directory: example
       - name: Run iOS simulator tests
