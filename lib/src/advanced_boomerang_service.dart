@@ -48,9 +48,9 @@ class AdvancedBoomerangService {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final outputPath = '${tempDir.path}/boomerang_native_$timestamp.mp4';
 
-      debugPrint('AdvancedBoomerangService: Starting native boomerang creation');
-      debugPrint('Input: ${inputVideo.path}');
-      debugPrint('Output: $outputPath');
+      debugPrint(
+        'AdvancedBoomerangService: Starting native boomerang creation',
+      );
 
       onProgress?.call(0.1);
 
@@ -67,7 +67,9 @@ class AdvancedBoomerangService {
         final outputFile = File(result);
         if (await outputFile.exists()) {
           final fileSize = await outputFile.length();
-          debugPrint('AdvancedBoomerangService: Success! Output size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB');
+          debugPrint(
+            'AdvancedBoomerangService: Success! Output size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB',
+          );
           return outputFile;
         }
       }
@@ -106,7 +108,7 @@ class AdvancedBoomerangService {
       for (final file in files) {
         if (file is File && file.path.contains('boomerang_')) {
           await file.delete();
-          debugPrint('Deleted: ${file.path}');
+          debugPrint('AdvancedBoomerangService: Deleted temp file');
         }
       }
     } catch (e) {

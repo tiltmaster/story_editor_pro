@@ -42,6 +42,18 @@ class StoryFilterParams {
 class StoryEditorFilters {
   static const String none = 'none';
 
+  /// Screen-space AR effects rendered by [ArCameraFilterSurface]. Kept
+  /// separate from [presets] so existing editor/export behavior is stable.
+  static const List<StoryFilterPreset> arPresets = [
+    StoryFilterPreset(id: 'ar_golden', name: 'Golden'),
+    StoryFilterPreset(id: 'ar_frost', name: 'Frost'),
+    StoryFilterPreset(id: 'ar_neon', name: 'Neon'),
+    StoryFilterPreset(id: 'ar_noir', name: 'Noir'),
+    StoryFilterPreset(id: 'ar_prism', name: 'Prism'),
+    StoryFilterPreset(id: 'ar_retro', name: 'Retro'),
+    StoryFilterPreset(id: 'ar_stargaze', name: 'Stargaze'),
+  ];
+
   static const List<StoryFilterPreset> presets = [
     StoryFilterPreset(id: 'none', name: 'Normal'),
     StoryFilterPreset(id: 'vivid', name: 'Vivid'),

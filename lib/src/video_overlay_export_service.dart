@@ -44,6 +44,7 @@ class VideoOverlayExportService {
     bool shouldMuteAudio = false,
   }) async {
     _lastExportError = null;
+    File? overlayFile;
     try {
       final sw = Stopwatch()..start();
       final tempDir = await getTemporaryDirectory();
@@ -51,41 +52,36 @@ class VideoOverlayExportService {
       final overlayPath = '${tempDir.path}/overlay_$timestamp.png';
       final outputPath = '${tempDir.path}/story_video_$timestamp.mp4';
 
-      final overlayFile = File(overlayPath);
+      overlayFile = File(overlayPath);
       await overlayFile.writeAsBytes(overlayPngBytes);
-      debugPrint('VideoOverlayProcessor: Overlay PNG written in ${sw.elapsedMilliseconds}ms (${(overlayPngBytes.length / 1024).toStringAsFixed(0)}KB)');
-
-      debugPrint('VideoOverlayProcessor: Starting native export...');
-      debugPrint('  Video: $videoPath');
-      debugPrint('  Output: $outputPath');
-
-      final result = await _channel.invokeMethod<String>(
-        'exportVideoWithOverlay',
-        {
-          'videoPath': videoPath,
-          'overlayImagePath': overlayPath,
-          'outputPath': outputPath,
-          'animatedStickers': animatedStickers,
-          'mirrorHorizontally': mirrorHorizontally,
-          'outputWidth': outputWidth,
-          'outputHeight': outputHeight,
-          'filterPreset': filterPreset,
-          'filterStrength': filterStrength,
-          'shouldMuteAudio': shouldMuteAudio,
-        },
+      debugPrint(
+        'VideoOverlayProcessor: Overlay PNG written in ${sw.elapsedMilliseconds}ms (${(overlayPngBytes.length / 1024).toStringAsFixed(0)}KB)',
       );
 
-      // Clean up overlay temp file
-      try {
-        await overlayFile.delete();
-      } catch (_) {}
+      debugPrint('VideoOverlayProcessor: Starting native export...');
+
+      final result = await _channel
+          .invokeMethod<String>('exportVideoWithOverlay', {
+            'videoPath': videoPath,
+            'overlayImagePath': overlayPath,
+            'outputPath': outputPath,
+            'animatedStickers': animatedStickers,
+            'mirrorHorizontally': mirrorHorizontally,
+            'outputWidth': outputWidth,
+            'outputHeight': outputHeight,
+            'filterPreset': filterPreset,
+            'filterStrength': filterStrength,
+            'shouldMuteAudio': shouldMuteAudio,
+          });
 
       if (result != null) {
         final outputFile = File(result);
         if (await outputFile.exists()) {
           final fileSize = await outputFile.length();
-          debugPrint('VideoOverlayProcessor: Success! '
-              'Size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB');
+          debugPrint(
+            'VideoOverlayProcessor: Success! '
+            'Size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB',
+          );
           return result;
         }
       }
@@ -99,13 +95,17 @@ class VideoOverlayExportService {
         if (e.message != null && e.message!.isNotEmpty) 'message=${e.message}',
         if (e.details != null) 'details=${e.details}',
       ].join(', ');
-      _lastExportError = details.isEmpty ? 'PlatformException with no details.' : details;
+      _lastExportError = details.isEmpty
+          ? 'PlatformException with no details.'
+          : details;
       debugPrint('VideoOverlayProcessor: Platform error: $_lastExportError');
       return null;
     } catch (e) {
       _lastExportError = e.toString();
       debugPrint('VideoOverlayProcessor: Error: $_lastExportError');
       return null;
+    } finally {
+      await _deleteTempFile(overlayFile);
     }
   }
 
@@ -133,9 +133,12 @@ class VideoOverlayExportService {
 
     // Write overlay PNG synchronously before firing the native call (~5–15ms)
     await File(overlayPath).writeAsBytes(overlayPngBytes);
-    debugPrint('VideoOverlayProcessor: Overlay written, firing background export → $outputPath');
+    debugPrint(
+      'VideoOverlayProcessor: Overlay written; firing background export',
+    );
 
-    _pendingExportRawVideoPath = videoPath; // saved for instant preview in detail screens
+    _pendingExportRawVideoPath =
+        videoPath; // saved for instant preview in detail screens
 
     // Start native export and store the future — callers await pendingExportFuture
     _pendingExportFuture = _runNativeExport(
@@ -167,36 +170,49 @@ class VideoOverlayExportService {
     required bool shouldMuteAudio,
   }) async {
     try {
-      final result = await _channel.invokeMethod<String>(
-        'exportVideoWithOverlay',
-        {
-          'videoPath': videoPath,
-          'overlayImagePath': overlayPath,
-          'outputPath': outputPath,
-          'animatedStickers': animatedStickers,
-          'mirrorHorizontally': mirrorHorizontally,
-          'outputWidth': outputWidth,
-          'outputHeight': outputHeight,
-          'filterPreset': filterPreset,
-          'filterStrength': filterStrength,
-          'shouldMuteAudio': shouldMuteAudio,
-        },
-      );
-      try { await File(overlayPath).delete(); } catch (_) {}
+      final result = await _channel
+          .invokeMethod<String>('exportVideoWithOverlay', {
+            'videoPath': videoPath,
+            'overlayImagePath': overlayPath,
+            'outputPath': outputPath,
+            'animatedStickers': animatedStickers,
+            'mirrorHorizontally': mirrorHorizontally,
+            'outputWidth': outputWidth,
+            'outputHeight': outputHeight,
+            'filterPreset': filterPreset,
+            'filterStrength': filterStrength,
+            'shouldMuteAudio': shouldMuteAudio,
+          });
       if (result != null && await File(result).exists()) {
-        debugPrint('VideoOverlayProcessor: Background export done → $result');
+        debugPrint('VideoOverlayProcessor: Background export completed');
         return result;
       }
       _lastExportError = 'Native export returned no output file path.';
       return null;
     } on PlatformException catch (e) {
       _lastExportError = e.message ?? 'PlatformException';
-      debugPrint('VideoOverlayProcessor: Background export failed: $_lastExportError');
+      debugPrint(
+        'VideoOverlayProcessor: Background export failed: $_lastExportError',
+      );
       return null;
     } catch (e) {
       _lastExportError = e.toString();
-      debugPrint('VideoOverlayProcessor: Background export error: $_lastExportError');
+      debugPrint(
+        'VideoOverlayProcessor: Background export error: $_lastExportError',
+      );
       return null;
+    } finally {
+      await _deleteTempFile(File(overlayPath));
+    }
+  }
+
+  static Future<void> _deleteTempFile(File? file) async {
+    if (file == null) return;
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // The platform temp directory is OS-managed; a later cache sweep can
+      // remove a file that was locked by the native exporter.
     }
   }
 }

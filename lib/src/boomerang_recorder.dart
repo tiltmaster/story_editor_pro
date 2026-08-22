@@ -62,7 +62,9 @@ class BoomerangRecorder {
         final XFile photo = await _cameraController.takePicture();
         if (_isCapturing) {
           _capturedFrames.add(photo.path);
-          debugPrint('BoomerangRecorder: Frame ${_capturedFrames.length} captured');
+          debugPrint(
+            'BoomerangRecorder: Frame ${_capturedFrames.length} captured',
+          );
         }
       } catch (e) {
         debugPrint('BoomerangRecorder: Frame capture error: $e');
@@ -127,13 +129,14 @@ class BoomerangRecorder {
     final frameDir = Directory('$tempDir/boomerang_frames_$timestamp');
     await frameDir.create(recursive: true);
 
-    debugPrint('Frame dir: ${frameDir.path}');
+    debugPrint('BoomerangRecorder: Frame directory ready');
 
     int copiedCount = 0;
     for (int i = 0; i < boomerangFrames.length; i++) {
       final srcFile = File(boomerangFrames[i]);
       if (await srcFile.exists()) {
-        final destPath = '${frameDir.path}/frame_${i.toString().padLeft(4, '0')}.jpg';
+        final destPath =
+            '${frameDir.path}/frame_${i.toString().padLeft(4, '0')}.jpg';
         await srcFile.copy(destPath);
         copiedCount++;
       }
@@ -152,12 +155,13 @@ class BoomerangRecorder {
 
     try {
       // Create video from frames with native method
-      final result = await _channel.invokeMethod<String>('createBoomerangFromFrames', {
-        'frameDir': frameDir.path,
-        'outputPath': outputPath,
-        'fps': _targetFps,
-        'loopCount': 3,
-      });
+      final result = await _channel
+          .invokeMethod<String>('createBoomerangFromFrames', {
+            'frameDir': frameDir.path,
+            'outputPath': outputPath,
+            'fps': _targetFps,
+            'loopCount': 3,
+          });
 
       await _cleanupFrameDir(frameDir);
       await _cleanup();
@@ -166,7 +170,7 @@ class BoomerangRecorder {
         final outputFile = File(result);
         if (await outputFile.exists()) {
           final size = await outputFile.length();
-          debugPrint('Boomerang created: $result ($size bytes)');
+          debugPrint('Boomerang created ($size bytes)');
           return result;
         }
       }
@@ -175,7 +179,9 @@ class BoomerangRecorder {
       debugPrint('Native frame method not available, using simple approach');
       return await _createSimpleBoomerang(frameDir, outputPath);
     } on MissingPluginException {
-      debugPrint('createBoomerangFromFrames not implemented, using simple approach');
+      debugPrint(
+        'createBoomerangFromFrames not implemented, using simple approach',
+      );
       final simpleResult = await _createSimpleBoomerang(frameDir, outputPath);
       await _cleanupFrameDir(frameDir);
       await _cleanup();
@@ -189,7 +195,10 @@ class BoomerangRecorder {
   }
 
   /// Simple boomerang creation (return frames without creating video)
-  Future<String?> _createSimpleBoomerang(Directory frameDir, String outputPath) async {
+  Future<String?> _createSimpleBoomerang(
+    Directory frameDir,
+    String outputPath,
+  ) async {
     // In this case, return first frame (video could not be created)
     final frames = frameDir.listSync().whereType<File>().toList();
     if (frames.isNotEmpty) {

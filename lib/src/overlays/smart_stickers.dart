@@ -3,14 +3,15 @@ import 'dart:io';
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:flutter/foundation.dart'
-    show consolidateHttpClientResponseBytes;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
+
+import '../config/story_editor_strings.dart';
+import 'remote_sticker_security.dart';
 
 /// ---------------------------------------------------------------------------
 /// Smart stickers + the Snapchat-style sticker drawer.
@@ -20,7 +21,16 @@ import 'package:path_provider/path_provider.dart';
 /// RepaintBoundary — stickers bake into photos AND videos with no native work.
 /// ---------------------------------------------------------------------------
 
-enum SmartStickerType { time, date, day, battery, speed, location, emoji, greeting }
+enum SmartStickerType {
+  time,
+  date,
+  day,
+  battery,
+  speed,
+  location,
+  emoji,
+  greeting,
+}
 
 class SmartStickerOverlay {
   final SmartStickerType type;
@@ -76,14 +86,14 @@ class StickerDrawerResult {
   final String? imageFilePath;
 
   const StickerDrawerResult.sticker(SmartStickerOverlay this.sticker)
-      : imageAssetPath = null,
-        imageFilePath = null;
+    : imageAssetPath = null,
+      imageFilePath = null;
   const StickerDrawerResult.asset(String this.imageAssetPath)
-      : sticker = null,
-        imageFilePath = null;
+    : sticker = null,
+      imageFilePath = null;
   const StickerDrawerResult.file(String this.imageFilePath)
-      : sticker = null,
-        imageAssetPath = null;
+    : sticker = null,
+      imageAssetPath = null;
 }
 
 /// A remote sticker (thumb for the grid, url to download on pick).
@@ -93,26 +103,70 @@ class RemoteSticker {
   const RemoteSticker({required this.thumbUrl, required this.url});
 }
 
+class _HardenedRemoteStickerThumbnail extends StatefulWidget {
+  const _HardenedRemoteStickerThumbnail({required this.url});
+
+  final String url;
+
+  @override
+  State<_HardenedRemoteStickerThumbnail> createState() =>
+      _HardenedRemoteStickerThumbnailState();
+}
+
+class _HardenedRemoteStickerThumbnailState
+    extends State<_HardenedRemoteStickerThumbnail> {
+  late Future<Uint8List> _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _bytes = _load();
+  }
+
+  @override
+  void didUpdateWidget(_HardenedRemoteStickerThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) _bytes = _load();
+  }
+
+  Future<Uint8List> _load() async {
+    final payload = await fetchRemoteStickerPayload(
+      widget.url,
+      maxBytes: RemoteStickerSecurityPolicy.maxThumbnailBytes,
+    );
+    return payload.bytes;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List>(
+      future: _bytes,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null) return const SizedBox.shrink();
+        return Image.memory(
+          bytes,
+          fit: BoxFit.contain,
+          cacheWidth: 152,
+          cacheHeight: 152,
+          filterQuality: FilterQuality.low,
+          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+        );
+      },
+    );
+  }
+}
+
 /// Download a remote sticker to a temp file for use as an ImageOverlay.
 Future<String> downloadStickerToTemp(String url) async {
-  final client = HttpClient();
-  try {
-    final request = await client.getUrl(Uri.parse(url));
-    final response = await request.close().timeout(const Duration(seconds: 15));
-    if (response.statusCode != 200) {
-      throw Exception('sticker download failed (${response.statusCode})');
-    }
-    final bytes = await consolidateHttpClientResponseBytes(response);
-    final dir = await getTemporaryDirectory();
-    final ext = url.split('?').first.split('.').last;
-    final safeExt = ['gif', 'png', 'webp', 'jpg'].contains(ext) ? ext : 'png';
-    final f = File(
-        '${dir.path}/klipy_${DateTime.now().millisecondsSinceEpoch}.$safeExt');
-    await f.writeAsBytes(bytes, flush: true);
-    return f.path;
-  } finally {
-    client.close(force: true);
-  }
+  final payload = await fetchRemoteStickerPayload(url);
+  final dir = await getTemporaryDirectory();
+  final f = File(
+    '${dir.path}/klipy_${DateTime.now().microsecondsSinceEpoch}'
+    '.${payload.format.extension}',
+  );
+  await f.writeAsBytes(payload.bytes, flush: true);
+  return f.path;
 }
 
 /// Bundled decorative word-art stickers (Higgsfield-generated, transparent).
@@ -153,12 +207,12 @@ class SmartStickerProviders {
 
   /// Free-text place search (e.g. Google Places / own DB). Optional.
   Future<List<String>> Function(String query, double? lat, double? lng)?
-      searchPlaces;
+  searchPlaces;
 
   /// Remote sticker packs (e.g. KLIPY via the host's secure proxy).
   /// query == null/empty → trending. Optional.
   Future<List<RemoteSticker>> Function({String? query, int page})?
-      remoteStickers;
+  remoteStickers;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,10 +246,14 @@ const _shadow = [
 
 Widget _pill({required Widget child, Color color = Colors.black54}) {
   return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 10),
     decoration: BoxDecoration(
       color: color,
       borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      boxShadow: const [
+        BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
+      ],
     ),
     child: child,
   );
@@ -206,20 +264,26 @@ Widget _timeSticker(SmartStickerOverlay o) {
   switch (o.skin) {
     case 1:
       return _pill(
-        child: Text(time,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 30,
-                fontWeight: FontWeight.w700)),
+        child: Text(
+          time,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 30,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       );
     case 2:
-      return Text(o.data['time12'] ?? time,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 44,
-              fontWeight: FontWeight.w200,
-              letterSpacing: 2,
-              shadows: _shadow));
+      return Text(
+        o.data['time12'] ?? time,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 44,
+          fontWeight: FontWeight.w200,
+          letterSpacing: 2,
+          shadows: _shadow,
+        ),
+      );
     default:
       final ampm = o.data['ampm'] ?? '';
       // Arabic reads the AM/PM marker inline with the time; stacking it looks
@@ -233,22 +297,28 @@ Widget _timeSticker(SmartStickerOverlay o) {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             if (ampm.isNotEmpty) ...[
-              Text(ampm,
-                  style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w700,
-                      shadows: _shadow)),
+              Text(
+                ampm,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w700,
+                  shadows: _shadow,
+                ),
+              ),
               const SizedBox(width: 8),
             ],
-            Text(time,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 64,
-                    fontWeight: FontWeight.w800,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                    height: 0.95,
-                    shadows: _shadow)),
+            Text(
+              time,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 64,
+                fontWeight: FontWeight.w800,
+                fontFeatures: [FontFeature.tabularFigures()],
+                height: 0.95,
+                shadows: _shadow,
+              ),
+            ),
           ],
         );
       }
@@ -257,21 +327,27 @@ Widget _timeSticker(SmartStickerOverlay o) {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Text(time,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 64,
-                  fontWeight: FontWeight.w800,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                  height: 0.95,
-                  shadows: _shadow)),
-          Text(ampm,
-              style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 3,
-                  shadows: _shadow)),
+          Text(
+            time,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 64,
+              fontWeight: FontWeight.w800,
+              fontFeatures: [FontFeature.tabularFigures()],
+              height: 0.95,
+              shadows: _shadow,
+            ),
+          ),
+          Text(
+            ampm,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 3,
+              shadows: _shadow,
+            ),
+          ),
         ],
       );
   }
@@ -282,11 +358,14 @@ Widget _dateSticker(SmartStickerOverlay o) {
     case 1:
       return _pill(
         color: Colors.white,
-        child: Text(o.data['dateLong'] ?? '',
-            style: const TextStyle(
-                color: Colors.black,
-                fontSize: 20,
-                fontWeight: FontWeight.w700)),
+        child: Text(
+          o.data['dateLong'] ?? '',
+          style: const TextStyle(
+            color: Colors.black,
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       );
     case 2:
       // Calendar-page skin
@@ -297,7 +376,11 @@ Widget _dateSticker(SmartStickerOverlay o) {
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
           boxShadow: const [
-            BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+            BoxShadow(
+              color: Colors.black38,
+              blurRadius: 10,
+              offset: Offset(0, 3),
+            ),
           ],
         ),
         child: Column(
@@ -307,32 +390,41 @@ Widget _dateSticker(SmartStickerOverlay o) {
               width: double.infinity,
               color: Colors.redAccent,
               padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Text(o.data['month'] ?? '',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800)),
+              child: Text(
+                o.data['month'] ?? '',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Text(o.data['dayNum'] ?? '',
-                  style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 44,
-                      fontWeight: FontWeight.w800,
-                      height: 1.0)),
+              child: Text(
+                o.data['dayNum'] ?? '',
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontSize: 44,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0,
+                ),
+              ),
             ),
           ],
         ),
       );
     default:
-      return Text(o.data['dateLong'] ?? '',
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-              shadows: _shadow));
+      return Text(
+        o.data['dateLong'] ?? '',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 28,
+          fontWeight: FontWeight.w800,
+          shadows: _shadow,
+        ),
+      );
   }
 }
 
@@ -340,21 +432,27 @@ Widget _daySticker(SmartStickerOverlay o) {
   final day = o.data['weekday'] ?? '';
   if (o.skin == 1) {
     return _pill(
-      child: Text(day.toUpperCase(),
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 4)),
+      child: Text(
+        day.toUpperCase(),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 24,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 4,
+        ),
+      ),
     );
   }
-  return Text(day,
-      style: const TextStyle(
-          color: Colors.white,
-          fontSize: 40,
-          fontStyle: FontStyle.italic,
-          fontWeight: FontWeight.w700,
-          shadows: _shadow));
+  return Text(
+    day,
+    style: const TextStyle(
+      color: Colors.white,
+      fontSize: 40,
+      fontStyle: FontStyle.italic,
+      fontWeight: FontWeight.w700,
+      shadows: _shadow,
+    ),
+  );
 }
 
 Widget _batterySticker(SmartStickerOverlay o) {
@@ -362,34 +460,41 @@ Widget _batterySticker(SmartStickerOverlay o) {
   final color = pct <= 20
       ? Colors.redAccent
       : pct <= 50
-          ? Colors.amber
-          : Colors.greenAccent;
+      ? Colors.amber
+      : Colors.greenAccent;
   if (o.skin == 1) {
-    return Text('$pct%',
-        style: TextStyle(
-            color: color,
-            fontSize: 40,
-            fontWeight: FontWeight.w800,
-            shadows: _shadow));
+    return Text(
+      '$pct%',
+      style: TextStyle(
+        color: color,
+        fontSize: 40,
+        fontWeight: FontWeight.w800,
+        shadows: _shadow,
+      ),
+    );
   }
   return _pill(
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
-            pct <= 20
-                ? Icons.battery_2_bar
-                : pct <= 60
-                    ? Icons.battery_4_bar
-                    : Icons.battery_full,
-            color: color,
-            size: 24),
+          pct <= 20
+              ? Icons.battery_2_bar
+              : pct <= 60
+              ? Icons.battery_4_bar
+              : Icons.battery_full,
+          color: color,
+          size: 24,
+        ),
         const SizedBox(width: 6),
-        Text('$pct%',
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.w700)),
+        Text(
+          '$pct%',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ],
     ),
   );
@@ -399,29 +504,38 @@ Widget _speedSticker(SmartStickerOverlay o) {
   final kmh = o.data['kmh'] ?? '0';
   if (o.skin == 1) {
     return _pill(
-      child: Text('$kmh km/h',
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w700)),
+      child: Text(
+        '$kmh km/h',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 24,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
   return Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Text(kmh,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 54,
-              fontWeight: FontWeight.w800,
-              height: 1.0,
-              shadows: _shadow)),
-      const Text('km/h',
-          style: TextStyle(
-              color: Colors.white70,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              shadows: _shadow)),
+      Text(
+        kmh,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 54,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+          shadows: _shadow,
+        ),
+      ),
+      const Text(
+        'km/h',
+        style: TextStyle(
+          color: Colors.white70,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          shadows: _shadow,
+        ),
+      ),
     ],
   );
 }
@@ -431,24 +545,30 @@ Widget _greetingSticker(SmartStickerOverlay o) {
   final emoji = o.data['emoji'] ?? '';
   if (o.skin == 1) {
     return _pill(
-      child: Text('$text${emoji.isEmpty ? '' : ' $emoji'}',
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w700)),
+      child: Text(
+        '$text${emoji.isEmpty ? '' : ' $emoji'}',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 24,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
   return Column(
     mainAxisSize: MainAxisSize.min,
     children: [
       if (emoji.isNotEmpty) Text(emoji, style: const TextStyle(fontSize: 34)),
-      Text(text,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 34,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.4,
-              shadows: _shadow)),
+      Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 34,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.4,
+          shadows: _shadow,
+        ),
+      ),
     ],
   );
 }
@@ -464,22 +584,28 @@ Widget _locationSticker(SmartStickerOverlay o) {
           children: [
             const Icon(Icons.place, color: Colors.redAccent, size: 22),
             const SizedBox(width: 4),
-            Text(name,
-                style: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700)),
+            Text(
+              name,
+              style: const TextStyle(
+                color: Colors.black,
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ],
         ),
       );
     case 2:
-      return Text(name,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 34,
-              fontStyle: FontStyle.italic,
-              fontWeight: FontWeight.w600,
-              shadows: _shadow));
+      return Text(
+        name,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 34,
+          fontStyle: FontStyle.italic,
+          fontWeight: FontWeight.w600,
+          shadows: _shadow,
+        ),
+      );
     default:
       // Snapchat-style banner: icon + name with accent underline
       return Column(
@@ -490,12 +616,15 @@ Widget _locationSticker(SmartStickerOverlay o) {
             children: [
               const Icon(Icons.place, color: Colors.white, size: 26),
               const SizedBox(width: 4),
-              Text(name,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      shadows: _shadow)),
+              Text(
+                name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  shadows: _shadow,
+                ),
+              ),
             ],
           ),
           Container(
@@ -535,7 +664,9 @@ Widget _emojiSticker(SmartStickerOverlay o) {
 // ---------------------------------------------------------------------------
 
 Future<Map<String, String>> captureStickerData(
-    SmartStickerType type, String locale) async {
+  SmartStickerType type,
+  String locale,
+) async {
   final now = DateTime.now();
   switch (type) {
     case SmartStickerType.time:
@@ -567,8 +698,9 @@ Future<Map<String, String>> captureStickerData(
       double kmh = 0;
       try {
         final pos = await Geolocator.getCurrentPosition(
-          locationSettings:
-              const LocationSettings(accuracy: LocationAccuracy.medium),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium,
+          ),
         ).timeout(const Duration(seconds: 5));
         kmh = (pos.speed * 3.6).clamp(0, 400);
       } catch (_) {}
@@ -596,19 +728,23 @@ Future<Map<String, String>> captureStickerData(
 // THE STICKER DRAWER (Snapchat-style full panel)
 // ---------------------------------------------------------------------------
 
-Future<StickerDrawerResult?> showStickerDrawer(BuildContext context) {
+Future<StickerDrawerResult?> showStickerDrawer(
+  BuildContext context, {
+  StoryEditorStrings strings = const StoryEditorStrings(),
+}) {
   final locale = Localizations.maybeLocaleOf(context)?.toString() ?? 'en';
   return showModalBottomSheet<StickerDrawerResult>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _StickerDrawer(locale: locale),
+    builder: (_) => _StickerDrawer(locale: locale, strings: strings),
   );
 }
 
 class _StickerDrawer extends StatefulWidget {
   final String locale;
-  const _StickerDrawer({required this.locale});
+  final StoryEditorStrings strings;
+  const _StickerDrawer({required this.locale, required this.strings});
 
   @override
   State<_StickerDrawer> createState() => _StickerDrawerState();
@@ -623,7 +759,7 @@ class _StickerDrawerState extends State<_StickerDrawer> {
 
   // Location auto-detect
   String? _detectedArea;
-  bool _locating = true;
+  bool _locating = false;
   Map<String, String> _greeting = const {};
 
   // Remote stickers (KLIPY via host proxy)
@@ -640,7 +776,6 @@ class _StickerDrawerState extends State<_StickerDrawer> {
   void initState() {
     super.initState();
     _loadPreviewData();
-    _detectLocation();
     if (SmartStickerProviders.instance.remoteStickers != null) {
       _loadRemoteStickers(reset: true);
     }
@@ -707,10 +842,14 @@ class _StickerDrawerState extends State<_StickerDrawer> {
     final time = await captureStickerData(SmartStickerType.time, widget.locale);
     final date = await captureStickerData(SmartStickerType.date, widget.locale);
     final day = await captureStickerData(SmartStickerType.day, widget.locale);
-    final battery =
-        await captureStickerData(SmartStickerType.battery, widget.locale);
-    final greeting =
-        await captureStickerData(SmartStickerType.greeting, widget.locale);
+    final battery = await captureStickerData(
+      SmartStickerType.battery,
+      widget.locale,
+    );
+    final greeting = await captureStickerData(
+      SmartStickerType.greeting,
+      widget.locale,
+    );
     if (!mounted) return;
     setState(() {
       _time = time;
@@ -721,7 +860,9 @@ class _StickerDrawerState extends State<_StickerDrawer> {
     });
   }
 
-  Future<void> _detectLocation() async {
+  Future<String?> _detectLocation() async {
+    if (_locating) return null;
+    setState(() => _locating = true);
     try {
       var perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) {
@@ -729,12 +870,13 @@ class _StickerDrawerState extends State<_StickerDrawer> {
       }
       if (perm != LocationPermission.always &&
           perm != LocationPermission.whileInUse) {
-        setState(() => _locating = false);
-        return;
+        if (mounted) setState(() => _locating = false);
+        return null;
       }
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.medium),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+        ),
       ).timeout(const Duration(seconds: 6));
       final providers = SmartStickerProviders.instance;
       String? area;
@@ -752,21 +894,75 @@ class _StickerDrawerState extends State<_StickerDrawer> {
               .timeout(const Duration(seconds: 5));
           if (placemarks.isNotEmpty) {
             final p = placemarks.first;
-            area = [p.subLocality, p.locality]
-                .whereType<String>()
-                .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
+            area = [p.subLocality, p.locality].whereType<String>().firstWhere(
+              (s) => s.trim().isNotEmpty,
+              orElse: () => '',
+            );
             if (area.trim().isEmpty) area = p.administrativeArea;
           }
         } catch (_) {}
       }
-      if (!mounted) return;
+      if (!mounted) return null;
+      final detected = area?.trim().isNotEmpty == true ? area!.trim() : null;
       setState(() {
-        _detectedArea = area?.trim().isNotEmpty == true ? area!.trim() : null;
+        _detectedArea = detected;
         _locating = false;
       });
+      return detected;
     } catch (_) {
       if (mounted) setState(() => _locating = false);
+      return null;
     }
+  }
+
+  Future<void> _chooseLocation() async {
+    var area = _detectedArea;
+    area ??= await _detectLocation();
+    if (!mounted) return;
+
+    // Manual entry is a privacy-friendly fallback when permission is denied,
+    // location services are disabled, or reverse geocoding is unavailable.
+    if (area == null || area.isEmpty) {
+      final controller = TextEditingController();
+      area = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(widget.strings.editorLocation),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 60,
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              hintText: widget.strings.editorEnterLocation,
+              prefixIcon: const Icon(Icons.location_on_outlined),
+            ),
+            onSubmitted: (value) {
+              final trimmed = value.trim();
+              if (trimmed.isNotEmpty) {
+                Navigator.of(dialogContext).pop(trimmed);
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(widget.strings.editorCancel),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.isNotEmpty) Navigator.of(dialogContext).pop(value);
+              },
+              child: Text(widget.strings.editorAdd),
+            ),
+          ],
+        ),
+      );
+      controller.dispose();
+    }
+    if (!mounted || area == null || area.trim().isEmpty) return;
+    _returnSticker(SmartStickerType.location, {'name': area.trim()});
   }
 
   void _returnSticker(SmartStickerType type, Map<String, String> data) {
@@ -806,10 +1002,10 @@ class _StickerDrawerState extends State<_StickerDrawer> {
               Expanded(
                 child: ListView(
                   controller: scrollController,
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                  padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 16, 24),
                   children: [
                     // ---- Live previews (tap = add) — 3×2 grid ----
-                    _sectionTitle('Smart'),
+                    _sectionTitle(widget.strings.editorSmartSection),
                     GridView.count(
                       crossAxisCount: 3,
                       shrinkWrap: true,
@@ -819,53 +1015,87 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                       childAspectRatio: 1.8,
                       children: [
                         _smartTile(
-                          onTap: _detectedArea == null
-                              ? null
-                              : () => _returnSticker(SmartStickerType.location,
-                                  {'name': _detectedArea!}),
+                          label: widget.strings.editorLocation,
+                          onTap: _locating ? null : _chooseLocation,
                           child: _detectedArea == null
-                              ? _tilePlaceholder(Icons.place,
-                                  _locating ? 'Locating…' : 'Location')
-                              : buildSmartStickerContent(SmartStickerOverlay(
-                                  type: SmartStickerType.location,
-                                  data: {'name': _detectedArea!})),
+                              ? _tilePlaceholder(
+                                  Icons.place,
+                                  _locating
+                                      ? widget.strings.editorLocating
+                                      : widget.strings.editorLocation,
+                                )
+                              : buildSmartStickerContent(
+                                  SmartStickerOverlay(
+                                    type: SmartStickerType.location,
+                                    data: {'name': _detectedArea!},
+                                  ),
+                                ),
                         ),
                         _smartTile(
+                          label: widget.strings.editorTime,
                           onTap: () =>
                               _returnSticker(SmartStickerType.time, _time),
-                          child: buildSmartStickerContent(SmartStickerOverlay(
-                              type: SmartStickerType.time, data: _time)),
+                          child: buildSmartStickerContent(
+                            SmartStickerOverlay(
+                              type: SmartStickerType.time,
+                              data: _time,
+                            ),
+                          ),
                         ),
                         _smartTile(
+                          label: widget.strings.editorDate,
                           onTap: () =>
                               _returnSticker(SmartStickerType.date, _date),
-                          child: buildSmartStickerContent(SmartStickerOverlay(
+                          child: buildSmartStickerContent(
+                            SmartStickerOverlay(
                               type: SmartStickerType.date,
                               skin: 2,
-                              data: _date)),
+                              data: _date,
+                            ),
+                          ),
                         ),
                         _smartTile(
+                          label: widget.strings.editorDay,
                           onTap: () =>
                               _returnSticker(SmartStickerType.day, _day),
-                          child: buildSmartStickerContent(SmartStickerOverlay(
-                              type: SmartStickerType.day, data: _day)),
+                          child: buildSmartStickerContent(
+                            SmartStickerOverlay(
+                              type: SmartStickerType.day,
+                              data: _day,
+                            ),
+                          ),
                         ),
                         _smartTile(
+                          label: widget.strings.editorBattery,
                           onTap: () => _returnSticker(
-                              SmartStickerType.battery, _battery),
-                          child: buildSmartStickerContent(SmartStickerOverlay(
-                              type: SmartStickerType.battery, data: _battery)),
+                            SmartStickerType.battery,
+                            _battery,
+                          ),
+                          child: buildSmartStickerContent(
+                            SmartStickerOverlay(
+                              type: SmartStickerType.battery,
+                              data: _battery,
+                            ),
+                          ),
                         ),
                         _smartTile(
+                          label: widget.strings.editorGreeting,
                           onTap: () => _returnSticker(
-                              SmartStickerType.greeting, _greeting),
+                            SmartStickerType.greeting,
+                            _greeting,
+                          ),
                           child: _greeting.isEmpty
                               ? _tilePlaceholder(
-                                  Icons.waving_hand_outlined, 'Greeting')
-                              : buildSmartStickerContent(SmartStickerOverlay(
-                                  type: SmartStickerType.greeting,
-                                  skin: 1,
-                                  data: _greeting)),
+                                  Icons.waving_hand_outlined,
+                                  widget.strings.editorGreeting,
+                                )
+                              : buildSmartStickerContent(
+                                  SmartStickerOverlay(
+                                    type: SmartStickerType.greeting,
+                                    skin: 1,
+                                    data: _greeting,
+                                  ),
+                                ),
                         ),
                       ],
                     ),
@@ -874,7 +1104,7 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                     // ---- Remote stickers (KLIPY via host proxy) ----
                     if (SmartStickerProviders.instance.remoteStickers !=
                         null) ...[
-                      _sectionTitle('Stickers'),
+                      _sectionTitle(widget.strings.editorStickersSection),
                       TextField(
                         controller: _stickerSearch,
                         onChanged: (q) {
@@ -890,19 +1120,29 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                           _loadRemoteStickers(reset: true);
                         },
                         style: const TextStyle(
-                            color: Colors.white, fontSize: 15),
+                          color: Colors.white,
+                          fontSize: 15,
+                        ),
                         cursorColor: Colors.amberAccent,
                         decoration: InputDecoration(
-                          hintText: 'Search stickers…',
+                          hintText: widget.strings.editorSearchStickers,
                           hintStyle: const TextStyle(
-                              color: Colors.white38, fontSize: 15),
-                          prefixIcon: const Icon(Icons.search,
-                              color: Colors.white54, size: 20),
+                            color: Colors.white38,
+                            fontSize: 15,
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.search,
+                            color: Colors.white54,
+                            size: 20,
+                          ),
                           suffixIcon: _stickerSearch.text.isEmpty
                               ? null
                               : IconButton(
-                                  icon: const Icon(Icons.cancel,
-                                      color: Colors.white38, size: 18),
+                                  icon: const Icon(
+                                    Icons.cancel,
+                                    color: Colors.white38,
+                                    size: 18,
+                                  ),
                                   onPressed: () {
                                     _stickerDebounce?.cancel();
                                     _stickerSearch.clear();
@@ -914,16 +1154,21 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                           filled: true,
                           fillColor: Colors.white.withValues(alpha: 0.08),
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 18, vertical: 12),
+                            horizontal: 18,
+                            vertical: 12,
+                          ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(26),
                             borderSide: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.10)),
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(26),
                             borderSide: const BorderSide(
-                                color: Colors.white38, width: 1.2),
+                              color: Colors.white38,
+                              width: 1.2,
+                            ),
                           ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(26),
@@ -937,32 +1182,34 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                         runSpacing: 10,
                         children: [
                           for (final s in _remoteStickers)
-                            InkWell(
-                              onTap: () => _pickRemoteSticker(s),
-                              borderRadius: BorderRadius.circular(12),
-                              child: SizedBox(
-                                width: 76,
-                                height: 76,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    Image.network(
-                                      s.thumbUrl,
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (_, __, ___) =>
-                                          const SizedBox.shrink(),
-                                    ),
-                                    if (_downloadingUrl == s.url)
-                                      const Center(
-                                        child: SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white),
-                                        ),
+                            Semantics(
+                              button: true,
+                              label: widget.strings.editorStickersSection,
+                              child: InkWell(
+                                onTap: () => _pickRemoteSticker(s),
+                                borderRadius: BorderRadius.circular(12),
+                                child: SizedBox(
+                                  width: 76,
+                                  height: 76,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      _HardenedRemoteStickerThumbnail(
+                                        url: s.thumbUrl,
                                       ),
-                                  ],
+                                      if (_downloadingUrl == s.url)
+                                        const Center(
+                                          child: SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -985,11 +1232,14 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                                           width: 20,
                                           height: 20,
                                           child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white54),
+                                            strokeWidth: 2,
+                                            color: Colors.white54,
+                                          ),
                                         )
-                                      : const Icon(Icons.expand_more,
-                                          color: Colors.white54),
+                                      : const Icon(
+                                          Icons.expand_more,
+                                          color: Colors.white54,
+                                        ),
                                 ),
                               ),
                             ),
@@ -1003,33 +1253,49 @@ class _StickerDrawerState extends State<_StickerDrawer> {
                     // returns with better art packs).
 
                     // ---- Emoji (quick row + full picker) ----
-                    _sectionTitle('Emoji'),
+                    _sectionTitle(widget.strings.editorEmojiSection),
                     Wrap(
                       spacing: 4,
                       runSpacing: 4,
                       children: [
                         ...const [
-                          '😂', '❤️', '🔥', '😍', '😎', '🥳', '✨', '🙏',
+                          '😂',
+                          '❤️',
+                          '🔥',
+                          '😍',
+                          '😎',
+                          '🥳',
+                          '✨',
+                          '🙏',
                         ].map(_emojiTile),
                         InkWell(
                           onTap: _openFullEmojiPicker,
                           borderRadius: BorderRadius.circular(12),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.white10,
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.apps,
-                                    color: Colors.white70, size: 20),
-                                SizedBox(width: 6),
-                                Text('All',
-                                    style: TextStyle(
-                                        color: Colors.white70, fontSize: 14)),
+                                const Icon(
+                                  Icons.apps,
+                                  color: Colors.white70,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  widget.strings.editorAllEmoji,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -1047,37 +1313,61 @@ class _StickerDrawerState extends State<_StickerDrawer> {
   }
 
   Widget _emojiTile(String e) {
-    return InkWell(
-      onTap: () => _returnSticker(SmartStickerType.emoji, {'emoji': e}),
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Text(e, style: const TextStyle(fontSize: 30)),
+    return Semantics(
+      button: true,
+      label: '${widget.strings.editorEmojiSection} $e',
+      child: InkWell(
+        onTap: () => _returnSticker(SmartStickerType.emoji, {'emoji': e}),
+        borderRadius: BorderRadius.circular(12),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          child: Center(child: Text(e, style: const TextStyle(fontSize: 30))),
+        ),
       ),
     );
   }
 
   Widget _sectionTitle(String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 10, top: 4),
-        child: Text(t,
-            style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.2)),
-      );
+    padding: const EdgeInsets.only(bottom: 10, top: 4),
+    child: Text(
+      t,
+      style: const TextStyle(
+        color: Colors.white54,
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.2,
+      ),
+    ),
+  );
 
-  Widget _smartTile({VoidCallback? onTap, required Widget child}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(14),
+  Widget _smartTile({
+    required String label,
+    VoidCallback? onTap,
+    required Widget child,
+  }) {
+    return Semantics(
+      button: true,
+      enabled: onTap != null,
+      label: label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart,
+              end: AlignmentDirectional.bottomEnd,
+              colors: [
+                Colors.white.withValues(alpha: 0.12),
+                Colors.white.withValues(alpha: 0.055),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          child: FittedBox(fit: BoxFit.scaleDown, child: child),
         ),
-        child: FittedBox(fit: BoxFit.scaleDown, child: child),
       ),
     );
   }
@@ -1088,8 +1378,10 @@ class _StickerDrawerState extends State<_StickerDrawer> {
       children: [
         Icon(icon, color: Colors.white70, size: 20),
         const SizedBox(width: 6),
-        Text(label,
-            style: const TextStyle(color: Colors.white70, fontSize: 14)),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+        ),
       ],
     );
   }

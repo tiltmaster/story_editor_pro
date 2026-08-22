@@ -157,7 +157,7 @@ class FlutterCameraController {
       // Mirror correction may be needed for front camera
       // (Flutter camera package does this automatically)
 
-      debugPrint('FlutterCameraController: Photo captured: ${file.path}');
+      debugPrint('FlutterCameraController: Photo captured');
       return file.path;
     } catch (e) {
       debugPrint('FlutterCameraController: Take picture error: $e');
@@ -191,7 +191,7 @@ class FlutterCameraController {
     try {
       final XFile file = await _controller!.stopVideoRecording();
       _isRecording = false;
-      debugPrint('FlutterCameraController: Video saved: ${file.path}');
+      debugPrint('FlutterCameraController: Video saved');
       return file.path;
     } catch (e) {
       debugPrint('FlutterCameraController: Stop recording error: $e');

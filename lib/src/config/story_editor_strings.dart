@@ -67,6 +67,13 @@ class StoryEditorStrings {
   final String cameraFilterProductCrisp;
   final String cameraFilterFilmicFade;
   final String cameraFilterPastelMist;
+  final String cameraFilterArGolden;
+  final String cameraFilterArFrost;
+  final String cameraFilterArNeon;
+  final String cameraFilterArNoir;
+  final String cameraFilterArPrism;
+  final String cameraFilterArRetro;
+  final String cameraFilterArStargaze;
 
   // ============ Gradient Text Editor ============
   final String gradientBalance;
@@ -86,6 +93,34 @@ class StoryEditorStrings {
   final String editorSaved;
   final String editorSaving;
   final String editorSharing;
+  final String editorClose;
+  final String editorMuteAudio;
+  final String editorUnmuteAudio;
+  final String editorUndo;
+  final String editorDraw;
+  final String editorAddText;
+  final String editorSmartTags;
+  final String editorSave;
+  final String editorPublish;
+  final String editorDeleteLayer;
+  final String editorDone;
+  final String editorCancel;
+
+  // ============ Story Editor - Smart Tags ============
+  final String editorSmartSection;
+  final String editorStickersSection;
+  final String editorEmojiSection;
+  final String editorSearchStickers;
+  final String editorAllEmoji;
+  final String editorLocation;
+  final String editorLocating;
+  final String editorEnterLocation;
+  final String editorAdd;
+  final String editorGreeting;
+  final String editorTime;
+  final String editorDate;
+  final String editorDay;
+  final String editorBattery;
 
   // ============ Story Editor - Brush Types ============
   final String editorBrushNormal;
@@ -105,7 +140,8 @@ class StoryEditorStrings {
     this.settingsFrontCameraSubtitle = 'Start with front camera when app opens',
     this.settingsToolsSection = 'Camera Tools',
     this.settingsToolbarPositionTitle = 'Toolbar Position',
-    this.settingsToolbarPositionSubtitle = 'Choose which side of the screen boomerang, text editor, and frame tools appear.',
+    this.settingsToolbarPositionSubtitle =
+        'Choose which side of the screen boomerang, text editor, and frame tools appear.',
     this.settingsLeftSide = 'Left Side',
     this.settingsRightSide = 'Right Side',
 
@@ -118,7 +154,8 @@ class StoryEditorStrings {
     this.cameraDelete = 'Delete',
     this.cameraSettings = 'Settings',
     this.cameraPermissionRequired = 'Camera Permission Required',
-    this.cameraPermissionDescription = 'We need camera access to create stories.',
+    this.cameraPermissionDescription =
+        'We need camera access to create stories.',
     this.cameraGrantPermission = 'Grant Permission',
     this.cameraGalleryAccessDenied = 'Gallery access denied',
     this.cameraNoMediaInGallery = 'No media found in gallery',
@@ -160,6 +197,13 @@ class StoryEditorStrings {
     this.cameraFilterProductCrisp = 'Product Crisp',
     this.cameraFilterFilmicFade = 'Filmic Fade',
     this.cameraFilterPastelMist = 'Pastel Mist',
+    this.cameraFilterArGolden = 'Golden',
+    this.cameraFilterArFrost = 'Frost',
+    this.cameraFilterArNeon = 'Neon',
+    this.cameraFilterArNoir = 'Noir',
+    this.cameraFilterArPrism = 'Prism',
+    this.cameraFilterArRetro = 'Retro',
+    this.cameraFilterArStargaze = 'Stargaze',
 
     // ─────────────────────────────────────────────────────────────
     // Gradient Text Editor
@@ -183,6 +227,36 @@ class StoryEditorStrings {
     this.editorSaved = 'Saved',
     this.editorSaving = 'Saving...',
     this.editorSharing = 'Sharing...',
+    this.editorClose = 'Close editor',
+    this.editorMuteAudio = 'Mute audio',
+    this.editorUnmuteAudio = 'Unmute audio',
+    this.editorUndo = 'Undo',
+    this.editorDraw = 'Draw',
+    this.editorAddText = 'Add text',
+    this.editorSmartTags = 'Smart tags',
+    this.editorSave = 'Save',
+    this.editorPublish = 'Continue',
+    this.editorDeleteLayer = 'Delete layer',
+    this.editorDone = 'Done',
+    this.editorCancel = 'Cancel',
+
+    // ─────────────────────────────────────────────────────────────
+    // Story Editor - Smart Tags
+    // ─────────────────────────────────────────────────────────────
+    this.editorSmartSection = 'Smart tags',
+    this.editorStickersSection = 'Stickers',
+    this.editorEmojiSection = 'Emoji',
+    this.editorSearchStickers = 'Search stickers...',
+    this.editorAllEmoji = 'All',
+    this.editorLocation = 'Location',
+    this.editorLocating = 'Finding area...',
+    this.editorEnterLocation = 'Enter an area or place',
+    this.editorAdd = 'Add',
+    this.editorGreeting = 'Greeting',
+    this.editorTime = 'Time',
+    this.editorDate = 'Date',
+    this.editorDay = 'Day',
+    this.editorBattery = 'Battery',
 
     // ─────────────────────────────────────────────────────────────
     // Story Editor - Brush Types
@@ -196,16 +270,19 @@ class StoryEditorStrings {
   });
 
   /// Format capture text: "Capture: 1/4"
-  String formatCaptureText(int current, int total) => '$cameraCapture: $current/$total';
+  String formatCaptureText(int current, int total) =>
+      '$cameraCapture: $current/$total';
 
   /// Format start after text: "Start after 3s"
   String formatStartAfter(int seconds) => '$cameraStartAfter ${seconds}s';
 
   /// Format people count: "5 people"
-  String formatPeopleCount(int count) => editorPeopleCount.replaceFirst('0', '$count');
+  String formatPeopleCount(int count) =>
+      editorPeopleCount.replaceFirst('0', '$count');
 
   /// Format error with details
-  String formatError(String baseError, String details) => '$baseError: $details';
+  String formatError(String baseError, String details) =>
+      '$baseError: $details';
 
   String filterNameForPreset(String presetId) {
     switch (presetId) {
@@ -243,6 +320,20 @@ class StoryEditorStrings {
         return cameraFilterFilmicFade;
       case 'pastelmist':
         return cameraFilterPastelMist;
+      case 'ar_golden':
+        return cameraFilterArGolden;
+      case 'ar_frost':
+        return cameraFilterArFrost;
+      case 'ar_neon':
+        return cameraFilterArNeon;
+      case 'ar_noir':
+        return cameraFilterArNoir;
+      case 'ar_prism':
+        return cameraFilterArPrism;
+      case 'ar_retro':
+        return cameraFilterArRetro;
+      case 'ar_stargaze':
+        return cameraFilterArStargaze;
       case 'none':
       default:
         return cameraFilterNormal;
