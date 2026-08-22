@@ -74,6 +74,8 @@ class StoryEditorStrings {
   final String cameraFilterArPrism;
   final String cameraFilterArRetro;
   final String cameraFilterArStargaze;
+  final String cameraFilterArGlasses;
+  final String cameraGlassesPhotoOnly;
 
   // ============ Gradient Text Editor ============
   final String gradientBalance;
@@ -204,6 +206,9 @@ class StoryEditorStrings {
     this.cameraFilterArPrism = 'Prism',
     this.cameraFilterArRetro = 'Retro',
     this.cameraFilterArStargaze = 'Stargaze',
+    this.cameraFilterArGlasses = 'Glasses',
+    this.cameraGlassesPhotoOnly =
+        'The face-tracked glasses lens is available for photos only.',
 
     // ─────────────────────────────────────────────────────────────
     // Gradient Text Editor
@@ -334,6 +339,8 @@ class StoryEditorStrings {
         return cameraFilterArRetro;
       case 'ar_stargaze':
         return cameraFilterArStargaze;
+      case 'ar_glasses':
+        return cameraFilterArGlasses;
       case 'none':
       default:
         return cameraFilterNormal;

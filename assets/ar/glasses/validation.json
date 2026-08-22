@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "asset_id": "ar_glasses_classic",
+  "status": "PASS",
+  "passed": true,
+  "blender_version": "5.2.0 LTS",
+  "objects": {
+    "LOD0": {
+      "object": "SM_AR_Glasses_Classic_LOD0",
+      "lod": "LOD0",
+      "triangles": 4400,
+      "vertices": 2214,
+      "polygons": 2368,
+      "materials": [
+        "MAT_Frame_Graphite",
+        "MAT_Lens_Smoke"
+      ],
+      "bounds_m": {
+        "min": [
+          -0.06840039789676666,
+          -0.023249998688697815,
+          -0.020250000059604645
+        ],
+        "max": [
+          0.06840039789676666,
+          0.023249998688697815,
+          0.10633322596549988
+        ]
+      },
+      "dimensions_m": {
+        "width": 0.13680079579353333,
+        "height": 0.04649999737739563,
+        "depth": 0.12658322602510452
+      },
+      "non_manifold_edges": 0,
+      "loose_vertices": 0,
+      "checks": {
+        "triangle_budget": true,
+        "material_budget": true,
+        "material_naming": true,
+        "object_naming": true,
+        "origin_at_eye_midpoint": true,
+        "rotation_applied": true,
+        "scale_applied": true,
+        "frame_width": true,
+        "manifold": true,
+        "no_loose_vertices": true,
+        "has_uvs": true
+      },
+      "passed": true
+    },
+    "LOD1": {
+      "object": "SM_AR_Glasses_Classic_LOD1",
+      "lod": "LOD1",
+      "triangles": 2300,
+      "vertices": 1164,
+      "polygons": 1260,
+      "materials": [
+        "MAT_Frame_Graphite",
+        "MAT_Lens_Smoke"
+      ],
+      "bounds_m": {
+        "min": [
+          -0.06840057671070099,
+          -0.023249998688697815,
+          -0.019948557019233704
+        ],
+        "max": [
+          0.06840057671070099,
+          0.023249998688697815,
+          0.10634442418813705
+        ]
+      },
+      "dimensions_m": {
+        "width": 0.13680115342140198,
+        "height": 0.04649999737739563,
+        "depth": 0.12629298120737076
+      },
+      "non_manifold_edges": 0,
+      "loose_vertices": 0,
+      "checks": {
+        "triangle_budget": true,
+        "material_budget": true,
+        "material_naming": true,
+        "object_naming": true,
+        "origin_at_eye_midpoint": true,
+        "rotation_applied": true,
+        "scale_applied": true,
+        "frame_width": true,
+        "manifold": true,
+        "no_loose_vertices": true,
+        "has_uvs": true
+      },
+      "passed": true
+    },
+    "LOD2": {
+      "object": "SM_AR_Glasses_Classic_LOD2",
+      "lod": "LOD2",
+      "triangles": 1056,
+      "vertices": 542,
+      "polygons": 596,
+      "materials": [
+        "MAT_Frame_Graphite",
+        "MAT_Lens_Smoke"
+      ],
+      "bounds_m": {
+        "min": [
+          -0.06840050965547562,
+          -0.023249998688697815,
+          -0.020250000059604645
+        ],
+        "max": [
+          0.06840050965547562,
+          0.023249998688697815,
+          0.10633036494255066
+        ]
+      },
+      "dimensions_m": {
+        "width": 0.13680101931095123,
+        "height": 0.04649999737739563,
+        "depth": 0.1265803650021553
+      },
+      "non_manifold_edges": 0,
+      "loose_vertices": 0,
+      "checks": {
+        "triangle_budget": true,
+        "material_budget": true,
+        "material_naming": true,
+        "object_naming": true,
+        "origin_at_eye_midpoint": true,
+        "rotation_applied": true,
+        "scale_applied": true,
+        "frame_width": true,
+        "manifold": true,
+        "no_loose_vertices": true,
+        "has_uvs": true
+      },
+      "passed": true
+    }
+  },
+  "exports": {
+    "LOD0": {
+      "glb": {
+        "bytes": 99856
+      },
+      "mesh": {
+        "vertices": 2214,
+        "triangles": 4400,
+        "bytes": 219764
+      },
+      "roundtrip": {
+        "mesh_objects": 1,
+        "triangles": 4400,
+        "materials": [
+          "MAT_Frame_Graphite.001",
+          "MAT_Lens_Smoke.001"
+        ]
+      }
+    },
+    "LOD1": {
+      "glb": {
+        "bytes": 53652
+      },
+      "mesh": {
+        "vertices": 1164,
+        "triangles": 2300,
+        "bytes": 112415
+      },
+      "roundtrip": {
+        "mesh_objects": 1,
+        "triangles": 2300,
+        "materials": [
+          "MAT_Frame_Graphite.001",
+          "MAT_Lens_Smoke.001"
+        ]
+      }
+    },
+    "LOD2": {
+      "glb": {
+        "bytes": 26280
+      },
+      "mesh": {
+        "vertices": 542,
+        "triangles": 1056,
+        "bytes": 50500
+      },
+      "roundtrip": {
+        "mesh_objects": 1,
+        "triangles": 1056,
+        "materials": [
+          "MAT_Frame_Graphite.001",
+          "MAT_Lens_Smoke.001"
+        ]
+      }
+    }
+  },
+  "runtime_mesh": {
+    "vertices": 542,
+    "triangles": 1056,
+    "bytes": 51338
+  },
+  "checks": {
+    "collection_naming": true,
+    "maximum_two_materials": true,
+    "all_lods_passed": true,
+    "glb_roundtrip": true,
+    "runtime_mesh_budget": true
+  }
+}

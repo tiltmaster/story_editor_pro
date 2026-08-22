@@ -4,11 +4,22 @@ import 'config/story_editor_filters.dart';
 class CameraFilterRailCatalog {
   const CameraFilterRailCatalog._();
 
+  static const StoryFilterPreset glasses = StoryFilterPreset(
+    id: 'ar_glasses',
+    name: 'Glasses',
+  );
+
   static List<StoryFilterPreset> get presets => <StoryFilterPreset>[
     ...StoryEditorFilters.presets,
     ...StoryEditorFilters.arPresets,
+    glasses,
   ];
 
   static bool isArIndex(int index) =>
-      index >= StoryEditorFilters.presets.length && index < presets.length;
+      index >= StoryEditorFilters.presets.length &&
+      index <
+          StoryEditorFilters.presets.length +
+              StoryEditorFilters.arPresets.length;
+
+  static bool isGlassesIndex(int index) => index == presets.length - 1;
 }

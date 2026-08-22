@@ -19,6 +19,12 @@ import 'config/story_editor_config.dart';
 import 'config/story_editor_filters.dart';
 import 'models/story_result.dart';
 import 'ar/ar_camera_filters.dart';
+import 'face_ar/face_ar_camera_tracker.dart';
+import 'face_ar/face_ar_detector.dart';
+import 'face_ar/face_ar_models.dart';
+import 'face_ar/glasses_capture_compositor.dart';
+import 'face_ar/glasses_mesh.dart';
+import 'face_ar/glasses_pose.dart';
 
 /// Layout types - Instagram Layout style collage layouts
 enum LayoutType {
@@ -91,6 +97,10 @@ class StoryCameraScreen extends StatefulWidget {
   /// its first frame. Contains timings only; no media or user data is exposed.
   final ValueChanged<CameraStartupMetrics>? onPreviewReady;
 
+  /// Optional factory used by tests or hosts with a custom on-device face
+  /// detector. When omitted, the package's ML Kit detector is used.
+  final FaceArDetector Function()? faceArDetectorFactory;
+
   const StoryCameraScreen({
     super.key,
     this.onImageCaptured,
@@ -100,6 +110,7 @@ class StoryCameraScreen extends StatefulWidget {
     this.closeFriendsList = const [],
     this.userProfileImageUrl,
     this.onPreviewReady,
+    this.faceArDetectorFactory,
   });
 
   @override
@@ -188,6 +199,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   late final ArCameraFilterController _arFilterController;
+  late final ValueNotifier<FaceArTrackingState> _faceTrackingState;
+  final GlassesPoseTracker _captureGlassesPoseTracker = GlassesPoseTracker();
+  final GlassesMeshRepository _glassesMeshRepository = GlassesMeshRepository();
+  late final GlassesCaptureCompositor _glassesCaptureCompositor;
+  FaceArCameraTracker? _faceCameraTracker;
+  Size? _cameraViewportSize;
+  bool _glassesLensSelected = false;
+  bool _faceTrackerStarting = false;
   int _activeFilterIndex = 0;
   final double _activeFilterStrength = 0.95;
 
@@ -200,14 +219,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         CameraLensDirection.front;
   }
 
-  int get _combinedFilterCount =>
-      StoryEditorFilters.presets.length + StoryEditorFilters.arPresets.length;
+  int get _combinedFilterCount => CameraFilterRailCatalog.presets.length;
 
   StoryFilterPreset get _activeFilterPreset =>
       StoryEditorFilters.presets[_activeFilterIndex];
   String get _activeFilterId => _activeFilterPreset.id;
-  String get _captureFilterId =>
-      _arFilterController.selectedId == ArCameraFilterId.none
+  String get _captureFilterId => _glassesLensSelected
+      ? StoryEditorFilters.none
+      : _arFilterController.selectedId == ArCameraFilterId.none
       ? _activeFilterId
       : _arFilterController.selectedFilter.exportPresetId;
   double get _captureFilterStrength =>
@@ -215,6 +234,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       ? _activeFilterStrength
       : _arFilterController.intensity;
   int get _selectedUnifiedFilterIndex {
+    if (_glassesLensSelected) return CameraFilterRailCatalog.presets.length - 1;
     if (_arFilterController.selectedId == ArCameraFilterId.none) {
       return _activeFilterIndex;
     }
@@ -226,6 +246,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   void _selectUnifiedFilter(int index) {
     final clamped = index.clamp(0, _combinedFilterCount - 1);
+    if (CameraFilterRailCatalog.isGlassesIndex(clamped)) {
+      _arFilterController.reset();
+      setState(() {
+        _activeFilterIndex = 0;
+        _glassesLensSelected = true;
+      });
+      unawaited(_startFaceTrackingIfReady());
+      return;
+    }
+    if (_glassesLensSelected) {
+      setState(() => _glassesLensSelected = false);
+      unawaited(_stopFaceTracking());
+    }
     if (clamped < StoryEditorFilters.presets.length) {
       _arFilterController.reset();
       if (_activeFilterIndex != clamped) {
@@ -258,6 +291,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
     _pulseController.repeat(reverse: true);
     _arFilterController = ArCameraFilterController();
+    _faceTrackingState = ValueNotifier<FaceArTrackingState>(
+      FaceArTrackingState(
+        observations: const <FaceArObservation>[],
+        faceLost: false,
+        timestamp: DateTime.now(),
+      ),
+    );
+    _glassesCaptureCompositor = GlassesCaptureCompositor(
+      repository: _glassesMeshRepository,
+    );
 
     _loadSettings();
     _requestPermissionsAndInitialize();
@@ -353,6 +396,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _cameraGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     _audioWarmTimer?.cancel();
+    unawaited(_faceCameraTracker?.close());
     _cameraController?.dispose();
     _boomerangTimer?.cancel();
     _boomerangRecorder?.dispose();
@@ -362,14 +406,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _handsFreeRecordingTimer?.cancel();
     _pulseController.dispose();
     _arFilterController.dispose();
+    _faceTrackingState.dispose();
     super.dispose();
   }
 
   void _resetFilterSelection() {
     _arFilterController.reset();
-    if (_activeFilterIndex != 0 && mounted) {
-      setState(() => _activeFilterIndex = 0);
+    final hadGlasses = _glassesLensSelected;
+    if ((_activeFilterIndex != 0 || hadGlasses) && mounted) {
+      setState(() {
+        _activeFilterIndex = 0;
+        _glassesLensSelected = false;
+      });
     }
+    if (hadGlasses) unawaited(_stopFaceTracking());
   }
 
   @override
@@ -397,6 +447,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _isVideoRecording = false;
     _isCapturing = false;
     _isHandsFreeCountingDown = false;
+    await _stopFaceTracking();
     final controller = _cameraController;
     _cameraController = null;
     _isInitialized = false;
@@ -404,6 +455,96 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (mounted) setState(() {});
     await controller?.dispose();
     await CameraPrewarm.discard();
+  }
+
+  void _updateFaceTrackingState(FaceArTrackingState state) {
+    if (_disposed) return;
+    _faceTrackingState.value = state;
+    _captureGlassesPoseTracker.update(state.primary, state.timestamp);
+  }
+
+  Future<void> _startFaceTrackingIfReady() async {
+    if (_disposed ||
+        !_glassesLensSelected ||
+        _faceTrackerStarting ||
+        _faceCameraTracker?.isStarted == true) {
+      return;
+    }
+    final controller = _cameraController;
+    final viewport = _cameraViewportSize;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        viewport == null ||
+        viewport.isEmpty ||
+        _cameras.isEmpty) {
+      return;
+    }
+    _faceTrackerStarting = true;
+    try {
+      final config = StoryEditorConfigProvider.read(context);
+      final existing = _faceCameraTracker;
+      if (existing != null) await existing.close();
+      if (_disposed || !_glassesLensSelected) return;
+      final tracker = FaceArCameraTracker(
+        viewportSize: viewport,
+        onState: _updateFaceTrackingState,
+        detector: widget.faceArDetectorFactory?.call(),
+      );
+      _faceCameraTracker = tracker;
+      final description = _cameras[_currentCameraIndex];
+      await tracker.start(
+        controller,
+        description,
+        previewMirrored:
+            description.lensDirection == CameraLensDirection.front &&
+            config.mirrorFrontCameraPreview,
+      );
+    } on CameraException catch (error) {
+      assert(() {
+        debugPrint('Face tracking stream unavailable: ${error.code}');
+        return true;
+      }());
+    } finally {
+      _faceTrackerStarting = false;
+    }
+  }
+
+  Future<void> _stopFaceTracking() async {
+    final tracker = _faceCameraTracker;
+    _faceCameraTracker = null;
+    _captureGlassesPoseTracker.reset();
+    if (!_disposed) {
+      _faceTrackingState.value = FaceArTrackingState(
+        observations: const <FaceArObservation>[],
+        faceLost: false,
+        timestamp: DateTime.now(),
+      );
+    }
+    await tracker?.close();
+  }
+
+  void _rememberCameraViewport(Size viewport) {
+    if (viewport.isEmpty || !viewport.isFinite) return;
+    final previous = _cameraViewportSize;
+    _cameraViewportSize = viewport;
+    final viewportChanged =
+        previous == null ||
+        (Offset(previous.width, previous.height) -
+                    Offset(viewport.width, viewport.height))
+                .distance >
+            1;
+    if (_glassesLensSelected && viewportChanged) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed) unawaited(_restartFaceTracking());
+      });
+    }
+  }
+
+  Future<void> _restartFaceTracking() async {
+    await _stopFaceTracking();
+    if (!_disposed && _glassesLensSelected) {
+      await _startFaceTrackingIfReady();
+    }
   }
 
   Future<void> _initializeCamera() async {
@@ -512,6 +653,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }) async {
     final expectedGeneration = generation ?? ++_cameraGeneration;
     if (_disposed || _lifecycleState != AppLifecycleState.resumed) return false;
+    await _stopFaceTracking();
     await _cameraController?.dispose();
     if (expectedGeneration != _cameraGeneration || _disposed) return false;
     _audioEnabled = enableAudio;
@@ -520,7 +662,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       camera,
       ResolutionPreset.veryHigh,
       enableAudio: enableAudio,
-      imageFormatGroup: ImageFormatGroup.jpeg,
+      imageFormatGroup: FaceArCameraTracker.requiredImageFormat,
     );
     _cameraController = controller;
 
@@ -547,6 +689,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             .catchError((_) {}),
       );
       unawaited(_applyPostInitCameraSettings());
+      if (_glassesLensSelected) unawaited(_startFaceTrackingIfReady());
       return true;
     } on CameraException catch (e) {
       debugPrint('CameraException: ${e.description}');
@@ -618,6 +761,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// explicitly begins a video action.
   Future<void> _rewarmWithAudio() async {
     if (_audioEnabled || !_isInitialized || !mounted) return;
+    if (_glassesLensSelected) return;
     if (_isVideoRecording || _isCapturing || _isProcessingVideo) return;
     if (_cameras.isEmpty) return;
     if (!await Permission.microphone.isGranted) return;
@@ -882,8 +1026,24 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     try {
       HapticFeedback.mediumImpact();
 
-      final XFile file = await _cameraController!.takePicture();
-      final imagePath = file.path;
+      final tracker = _faceCameraTracker;
+      final XFile file = _glassesLensSelected && tracker != null
+          ? await tracker.pauseForStillCapture(
+              () => _cameraController!.takePicture(),
+            )
+          : await _cameraController!.takePicture();
+      var imagePath = file.path;
+      final viewport = _cameraViewportSize;
+      final glassesPose = _glassesLensSelected
+          ? _captureGlassesPoseTracker.poseAt(DateTime.now())
+          : null;
+      if (glassesPose != null && viewport != null && !viewport.isEmpty) {
+        imagePath = await _glassesCaptureCompositor.composite(
+          imagePath: imagePath,
+          pose: glassesPose,
+          previewViewport: viewport,
+        );
+      }
 
       if (mounted) {
         // Add captured photo to list in layout mode
@@ -1366,6 +1526,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         _isCapturing ||
         _isVideoRecording ||
         _isStartingVideo) {
+      return;
+    }
+    if (_glassesLensSelected) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.storyEditorConfig.strings.cameraGlassesPhotoOnly,
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
       return;
     }
 
@@ -2583,6 +2756,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           // Use positioned area dimensions (excluding bottom bar)
           final availableWidth = constraints.maxWidth;
           final availableHeight = constraints.maxHeight;
+          _rememberCameraViewport(Size(availableWidth, availableHeight));
           final availableAspectRatio = availableWidth / availableHeight;
           final cameraAspectRatio = _cameraController!.value.aspectRatio;
 
@@ -2603,19 +2777,31 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             child: preview,
           );
 
+          final scaledPreview = Transform.scale(
+            scale: scale,
+            alignment: Alignment.center,
+            child: Center(
+              child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+                  ? Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+                      child: preview,
+                    )
+                  : preview,
+            ),
+          );
           return ClipRect(
-            child: Transform.scale(
-              scale: scale,
-              alignment: Alignment.center,
-              child: Center(
-                child: (isFrontCamera && !config.mirrorFrontCameraPreview)
-                    ? Transform(
-                        alignment: Alignment.center,
-                        transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
-                        child: preview,
-                      )
-                    : preview,
-              ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                scaledPreview,
+                if (_glassesLensSelected)
+                  GlassesLensOverlay(
+                    trackingState: _faceTrackingState,
+                    repository: _glassesMeshRepository,
+                    semanticLabel: config.strings.cameraFilterArGlasses,
+                  ),
+              ],
             ),
           );
         },
@@ -2823,6 +3009,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           itemBuilder: (context, index) {
             final preset = presets[index];
             final isAr = CameraFilterRailCatalog.isArIndex(index);
+            final isGlasses = CameraFilterRailCatalog.isGlassesIndex(index);
             final selected = index == _selectedUnifiedFilterIndex;
             final label = strings.filterNameForPreset(preset.id);
             return Semantics(
@@ -2853,7 +3040,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                           ],
                         ),
                         child: ClipOval(
-                          child: _buildUnifiedFilterPreview(preset.id, isAr),
+                          child: _buildUnifiedFilterPreview(
+                            preset.id,
+                            isAr,
+                            isGlasses: isGlasses,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 5),
@@ -2884,7 +3075,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  Widget _buildUnifiedFilterPreview(String presetId, bool isAr) {
+  Widget _buildUnifiedFilterPreview(
+    String presetId,
+    bool isAr, {
+    bool isGlasses = false,
+  }) {
+    if (isGlasses) {
+      return ColoredBox(
+        color: const Color(0xFFDBB777),
+        child: Image.asset(
+          glassesPreviewAsset,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const Center(
+            child: Icon(Icons.visibility, color: Color(0xFF17191E), size: 25),
+          ),
+        ),
+      );
+    }
     if (isAr) {
       final filter = ArCameraFilterCatalog.byPresetId(presetId);
       return DecoratedBox(
@@ -3810,6 +4017,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       onTap: () async {
         HapticFeedback.selectionClick();
         final wasBoomerangMode = _isBoomerangMode;
+        if (!wasBoomerangMode && _glassesLensSelected) {
+          _resetFilterSelection();
+        }
         setState(() {
           _isBoomerangMode = !_isBoomerangMode;
           // Close other modes if boomerang is opened
@@ -3930,6 +4140,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           GestureDetector(
             onTap: () {
               HapticFeedback.selectionClick();
+              if (!_isHandsFreeMode && _glassesLensSelected) {
+                _resetFilterSelection();
+              }
               setState(() {
                 if (!_isHandsFreeMode) {
                   // Open hands-free mode and selector

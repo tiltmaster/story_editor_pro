@@ -4,6 +4,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'face_ar/face_ar_camera_tracker.dart';
+
 /// Warms up the camera *before* the camera screen is shown so the live preview is
 /// ready on arrival, instead of the user staring at a ~0.7s black/spinner while
 /// the controller initializes on-screen.
@@ -66,7 +68,7 @@ class CameraPrewarm {
         cams[idx],
         ResolutionPreset.veryHigh,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: FaceArCameraTracker.requiredImageFormat,
       );
       pendingController = controller;
       await controller.initialize();

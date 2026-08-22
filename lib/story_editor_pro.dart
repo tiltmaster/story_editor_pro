@@ -14,6 +14,14 @@ export 'src/native_boomerang_service.dart';
 export 'src/flutter_camera_controller.dart';
 export 'src/flutter_camera_preview.dart';
 export 'src/ar/ar_camera_filters.dart';
+export 'src/face_ar/face_ar_models.dart';
+export 'src/face_ar/face_ar_transform.dart';
+export 'src/face_ar/face_ar_detector.dart';
+export 'src/face_ar/mlkit_face_ar_detector.dart';
+export 'src/face_ar/face_ar_camera_tracker.dart';
+export 'src/face_ar/glasses_pose.dart';
+export 'src/face_ar/glasses_mesh.dart';
+export 'src/face_ar/glasses_capture_compositor.dart';
 export 'src/video_overlay_export_service.dart';
 
 // Configuration
