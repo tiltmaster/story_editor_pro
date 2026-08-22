@@ -11,7 +11,6 @@ A Flutter story editor plugin with native camera support for iOS and Android.
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
-  # google_mlkit_face_detection requires iOS 15.5 or newer.
-  s.platform = :ios, '15.5'
+  s.platform = :ios, '12.0'
   s.swift_version = '5.0'
 end

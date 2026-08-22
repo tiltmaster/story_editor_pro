@@ -103,28 +103,4 @@ void main() {
     expect(withinBudget.metWarmTarget, isTrue);
     expect(outsideBudget.metWarmTarget, isFalse);
   });
-
-  test('unified rail preserves looks, seven effects, and glasses lens', () {
-    final presets = CameraFilterRailCatalog.presets;
-    expect(
-      presets,
-      hasLength(
-        StoryEditorFilters.presets.length +
-            StoryEditorFilters.arPresets.length +
-            1,
-      ),
-    );
-    expect(
-      presets.take(StoryEditorFilters.presets.length).map((item) => item.id),
-      StoryEditorFilters.presets.map((item) => item.id),
-    );
-    expect(
-      presets
-          .skip(StoryEditorFilters.presets.length)
-          .take(StoryEditorFilters.arPresets.length)
-          .map((item) => item.id),
-      StoryEditorFilters.arPresets.map((item) => item.id),
-    );
-    expect(presets.last.id, CameraFilterRailCatalog.glasses.id);
-  });
 }

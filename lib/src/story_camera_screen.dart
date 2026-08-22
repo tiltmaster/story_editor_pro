@@ -10,7 +10,6 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'story_editor_screen.dart';
 import 'camera_prewarm.dart';
-import 'camera_filter_rail.dart';
 import 'boomerang_recorder.dart';
 import 'gradient_text_editor.dart';
 import 'smart_shutter_button.dart';
@@ -18,13 +17,6 @@ import 'camera_settings_screen.dart';
 import 'config/story_editor_config.dart';
 import 'config/story_editor_filters.dart';
 import 'models/story_result.dart';
-import 'ar/ar_camera_filters.dart';
-import 'face_ar/face_ar_camera_tracker.dart';
-import 'face_ar/face_ar_detector.dart';
-import 'face_ar/face_ar_models.dart';
-import 'face_ar/glasses_capture_compositor.dart';
-import 'face_ar/glasses_mesh.dart';
-import 'face_ar/glasses_pose.dart';
 
 /// Layout types - Instagram Layout style collage layouts
 enum LayoutType {
@@ -93,13 +85,8 @@ class StoryCameraScreen extends StatefulWidget {
   /// User's profile image URL for "Your Story" section in share bottomsheet
   final String? userProfileImageUrl;
 
-  /// Called once after the initialized camera preview has been submitted for
-  /// its first frame. Contains timings only; no media or user data is exposed.
+  /// Reports camera startup timings after the initialized preview is rendered.
   final ValueChanged<CameraStartupMetrics>? onPreviewReady;
-
-  /// Optional factory used by tests or hosts with a custom on-device face
-  /// detector. When omitted, the package's ML Kit detector is used.
-  final FaceArDetector Function()? faceArDetectorFactory;
 
   const StoryCameraScreen({
     super.key,
@@ -110,7 +97,6 @@ class StoryCameraScreen extends StatefulWidget {
     this.closeFriendsList = const [],
     this.userProfileImageUrl,
     this.onPreviewReady,
-    this.faceArDetectorFactory,
   });
 
   @override
@@ -124,13 +110,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   List<CameraDescription> _cameras = [];
   int _currentCameraIndex = 0;
   bool _isInitialized = false;
-  bool _audioEnabled =
-      false; // whether the live controller was created with audio
-  bool _disposed = false;
+  bool _audioEnabled = false; // whether the live controller was created with audio
   bool _previewReadyReported = false;
-  int _cameraGeneration = 0;
-  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
-  Timer? _audioWarmTimer;
   final Stopwatch _routeStartupStopwatch = Stopwatch();
 
   bool _isLoading = true;
@@ -156,8 +137,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // Video recording state
   bool _isVideoRecording = false;
   bool _isProcessingVideo = false;
-  bool _isStartingVideo = false;
-  bool _cancelPendingVideoStart = false;
   Timer? _videoRecordingTimer;
   int _videoRecordingElapsedMs = 0;
   static const int _videoMaxSeconds = 60; // Max 60 seconds
@@ -198,15 +177,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // Animation controller (for boomerang button)
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
-  late final ArCameraFilterController _arFilterController;
-  late final ValueNotifier<FaceArTrackingState> _faceTrackingState;
-  final GlassesPoseTracker _captureGlassesPoseTracker = GlassesPoseTracker();
-  final GlassesMeshRepository _glassesMeshRepository = GlassesMeshRepository();
-  late final GlassesCaptureCompositor _glassesCaptureCompositor;
-  FaceArCameraTracker? _faceCameraTracker;
-  Size? _cameraViewportSize;
-  bool _glassesLensSelected = false;
-  bool _faceTrackerStarting = false;
+  late final PageController _filterPageController;
   int _activeFilterIndex = 0;
   final double _activeFilterStrength = 0.95;
 
@@ -215,65 +186,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (_currentCameraIndex < 0 || _currentCameraIndex >= _cameras.length) {
       return false;
     }
-    return _cameras[_currentCameraIndex].lensDirection ==
-        CameraLensDirection.front;
+    return _cameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
   }
 
-  int get _combinedFilterCount => CameraFilterRailCatalog.presets.length;
+  int get _combinedFilterCount => StoryEditorFilters.presets.length;
 
   StoryFilterPreset get _activeFilterPreset =>
       StoryEditorFilters.presets[_activeFilterIndex];
   String get _activeFilterId => _activeFilterPreset.id;
-  String get _captureFilterId => _glassesLensSelected
-      ? StoryEditorFilters.none
-      : _arFilterController.selectedId == ArCameraFilterId.none
-      ? _activeFilterId
-      : _arFilterController.selectedFilter.exportPresetId;
-  double get _captureFilterStrength =>
-      _arFilterController.selectedId == ArCameraFilterId.none
-      ? _activeFilterStrength
-      : _arFilterController.intensity;
-  int get _selectedUnifiedFilterIndex {
-    if (_glassesLensSelected) return CameraFilterRailCatalog.presets.length - 1;
-    if (_arFilterController.selectedId == ArCameraFilterId.none) {
-      return _activeFilterIndex;
-    }
-    final arIndex = StoryEditorFilters.arPresets.indexWhere(
-      (preset) => preset.id == _arFilterController.selectedFilter.presetId,
-    );
-    return StoryEditorFilters.presets.length + arIndex.clamp(0, 6);
-  }
-
-  void _selectUnifiedFilter(int index) {
-    final clamped = index.clamp(0, _combinedFilterCount - 1);
-    if (CameraFilterRailCatalog.isGlassesIndex(clamped)) {
-      _arFilterController.reset();
-      setState(() {
-        _activeFilterIndex = 0;
-        _glassesLensSelected = true;
-      });
-      unawaited(_startFaceTrackingIfReady());
-      return;
-    }
-    if (_glassesLensSelected) {
-      setState(() => _glassesLensSelected = false);
-      unawaited(_stopFaceTracking());
-    }
-    if (clamped < StoryEditorFilters.presets.length) {
-      _arFilterController.reset();
-      if (_activeFilterIndex != clamped) {
-        setState(() => _activeFilterIndex = clamped);
-      }
-      return;
-    }
-
-    final arPreset = StoryEditorFilters
-        .arPresets[clamped - StoryEditorFilters.presets.length];
-    if (_activeFilterIndex != 0) setState(() => _activeFilterIndex = 0);
-    _arFilterController.select(
-      ArCameraFilterCatalog.byPresetId(arPreset.id).id,
-    );
-  }
 
   @override
   void initState() {
@@ -290,17 +210,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
     _pulseController.repeat(reverse: true);
-    _arFilterController = ArCameraFilterController();
-    _faceTrackingState = ValueNotifier<FaceArTrackingState>(
-      FaceArTrackingState(
-        observations: const <FaceArObservation>[],
-        faceLost: false,
-        timestamp: DateTime.now(),
-      ),
+    _filterPageController = PageController(
+      viewportFraction: 0.18,
+      initialPage: _activeFilterIndex,
     );
-    _glassesCaptureCompositor = GlassesCaptureCompositor(
-      repository: _glassesMeshRepository,
-    );
+    _filterPageController.addListener(_onFilterScroll);
 
     _loadSettings();
     _requestPermissionsAndInitialize();
@@ -308,16 +222,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Requests all required permissions when story editor is opened
   Future<void> _requestPermissionsAndInitialize() async {
-    // Never prompt before the camera screen is opened by a user action. If the
-    // camera is already authorized, avoid Permission.request() entirely and let
-    // preview initialization overlap the route transition.
     final cameraStatus = await Permission.camera.status;
-    if (_disposed) return;
     final resolvedCameraStatus = cameraStatus.isGranted
         ? cameraStatus
         : await Permission.camera.request();
-    if (_disposed) return;
-
+    if (!mounted) return;
     _hasPermission = resolvedCameraStatus.isGranted;
 
     if (!_hasPermission) {
@@ -329,35 +238,29 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       return;
     }
 
-    // Preview is capture-critical. Gallery status and its thumbnail are lazy
-    // secondary work and must not extend time-to-first-preview.
-    await _initializeCamera();
-    unawaited(_refreshGalleryAccessAndThumbnail());
-  }
-
-  Future<void> _refreshGalleryAccessAndThumbnail() async {
+    // Gallery state is read without prompting and never blocks first preview.
     _hasGalleryPermission = await Permission.photos.isGranted;
-    if (_disposed || !_hasGalleryPermission) return;
-    await _loadLastGalleryImage();
+
+    // Permissions granted, initialize camera
+    await _initializeCamera();
   }
 
   /// Dialog to show when permission is denied
   void _showPermissionDeniedDialog() {
     if (!mounted) return;
-    final strings = context.storyEditorConfig.strings;
 
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.grey.shade900,
-        title: Text(
-          strings.cameraPermissionRequired,
-          style: const TextStyle(color: Colors.white),
+        title: const Text(
+          'Permission Required',
+          style: TextStyle(color: Colors.white),
         ),
-        content: Text(
-          strings.cameraPermissionDescription,
-          style: const TextStyle(color: Colors.white70),
+        content: const Text(
+          'We need camera and gallery permissions to create stories. Please grant permission from settings.',
+          style: TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
@@ -365,14 +268,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               Navigator.pop(ctx);
               Navigator.pop(context);
             },
-            child: Text(strings.cameraCancel),
+            child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               openAppSettings();
             },
-            child: Text(strings.cameraGrantPermission),
+            child: const Text('Open Settings'),
           ),
         ],
       ),
@@ -392,11 +295,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   @override
   void dispose() {
-    _disposed = true;
-    _cameraGeneration++;
     WidgetsBinding.instance.removeObserver(this);
-    _audioWarmTimer?.cancel();
-    unawaited(_faceCameraTracker?.close());
     _cameraController?.dispose();
     _boomerangTimer?.cancel();
     _boomerangRecorder?.dispose();
@@ -405,155 +304,44 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _handsFreeCountdownTimer?.cancel();
     _handsFreeRecordingTimer?.cancel();
     _pulseController.dispose();
-    _arFilterController.dispose();
-    _faceTrackingState.dispose();
+    _filterPageController.removeListener(_onFilterScroll);
+    _filterPageController.dispose();
     super.dispose();
   }
 
-  void _resetFilterSelection() {
-    _arFilterController.reset();
-    final hadGlasses = _glassesLensSelected;
-    if ((_activeFilterIndex != 0 || hadGlasses) && mounted) {
-      setState(() {
-        _activeFilterIndex = 0;
-        _glassesLensSelected = false;
-      });
+  void _onFilterScroll() {
+    if (!_filterPageController.hasClients) return;
+    final page = _filterPageController.page;
+    if (page == null) return;
+    final nextIndex = page.round().clamp(0, _combinedFilterCount - 1);
+    if (nextIndex != _activeFilterIndex && mounted) {
+      setState(() => _activeFilterIndex = nextIndex);
     }
-    if (hadGlasses) unawaited(_stopFaceTracking());
+  }
+
+  void _resetFilterSelection() {
+    if (_activeFilterIndex != 0 && mounted) {
+      setState(() => _activeFilterIndex = 0);
+    }
+    if (_filterPageController.hasClients) {
+      _filterPageController.jumpToPage(0);
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _lifecycleState = state;
-    if (state == AppLifecycleState.resumed) {
-      if (_hasPermission) unawaited(_initializeCamera());
-      return;
-    }
-
-    // Camera hardware must never remain held while backgrounded. Invalidating
-    // the generation also prevents a late initialize() completion from being
-    // attached after an inactive/paused transition.
-    _cameraGeneration++;
-    _audioWarmTimer?.cancel();
-    unawaited(_releaseCamera());
-  }
-
-  Future<void> _releaseCamera() async {
-    _videoRecordingTimer?.cancel();
-    _handsFreeCountdownTimer?.cancel();
-    _handsFreeRecordingTimer?.cancel();
-    _isStartingVideo = false;
-    _cancelPendingVideoStart = true;
-    _isVideoRecording = false;
-    _isCapturing = false;
-    _isHandsFreeCountingDown = false;
-    await _stopFaceTracking();
     final controller = _cameraController;
-    _cameraController = null;
-    _isInitialized = false;
-    _audioEnabled = false;
-    if (mounted) setState(() {});
-    await controller?.dispose();
-    await CameraPrewarm.discard();
-  }
+    if (controller == null || !controller.value.isInitialized) return;
 
-  void _updateFaceTrackingState(FaceArTrackingState state) {
-    if (_disposed) return;
-    _faceTrackingState.value = state;
-    _captureGlassesPoseTracker.update(state.primary, state.timestamp);
-  }
-
-  Future<void> _startFaceTrackingIfReady() async {
-    if (_disposed ||
-        !_glassesLensSelected ||
-        _faceTrackerStarting ||
-        _faceCameraTracker?.isStarted == true) {
-      return;
-    }
-    final controller = _cameraController;
-    final viewport = _cameraViewportSize;
-    if (controller == null ||
-        !controller.value.isInitialized ||
-        viewport == null ||
-        viewport.isEmpty ||
-        _cameras.isEmpty) {
-      return;
-    }
-    _faceTrackerStarting = true;
-    try {
-      final config = StoryEditorConfigProvider.read(context);
-      final existing = _faceCameraTracker;
-      if (existing != null) await existing.close();
-      if (_disposed || !_glassesLensSelected) return;
-      final tracker = FaceArCameraTracker(
-        viewportSize: viewport,
-        onState: _updateFaceTrackingState,
-        detector: widget.faceArDetectorFactory?.call(),
-      );
-      _faceCameraTracker = tracker;
-      final description = _cameras[_currentCameraIndex];
-      await tracker.start(
-        controller,
-        description,
-        previewMirrored:
-            description.lensDirection == CameraLensDirection.front &&
-            config.mirrorFrontCameraPreview,
-      );
-    } on CameraException catch (error) {
-      assert(() {
-        debugPrint('Face tracking stream unavailable: ${error.code}');
-        return true;
-      }());
-    } finally {
-      _faceTrackerStarting = false;
-    }
-  }
-
-  Future<void> _stopFaceTracking() async {
-    final tracker = _faceCameraTracker;
-    _faceCameraTracker = null;
-    _captureGlassesPoseTracker.reset();
-    if (!_disposed) {
-      _faceTrackingState.value = FaceArTrackingState(
-        observations: const <FaceArObservation>[],
-        faceLost: false,
-        timestamp: DateTime.now(),
-      );
-    }
-    await tracker?.close();
-  }
-
-  void _rememberCameraViewport(Size viewport) {
-    if (viewport.isEmpty || !viewport.isFinite) return;
-    final previous = _cameraViewportSize;
-    _cameraViewportSize = viewport;
-    final viewportChanged =
-        previous == null ||
-        (Offset(previous.width, previous.height) -
-                    Offset(viewport.width, viewport.height))
-                .distance >
-            1;
-    if (_glassesLensSelected && viewportChanged) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!_disposed) unawaited(_restartFaceTracking());
-      });
-    }
-  }
-
-  Future<void> _restartFaceTracking() async {
-    await _stopFaceTracking();
-    if (!_disposed && _glassesLensSelected) {
-      await _startFaceTrackingIfReady();
+    if (state == AppLifecycleState.inactive) {
+      controller.dispose();
+      _isInitialized = false;
+    } else if (state == AppLifecycleState.resumed) {
+      _initializeCamera();
     }
   }
 
   Future<void> _initializeCamera() async {
-    if (_disposed || _lifecycleState != AppLifecycleState.resumed) return;
-    if (_isInitialized && _cameraController?.value.isInitialized == true) {
-      return;
-    }
-    final generation = ++_cameraGeneration;
-
     try {
       // Don't start if no permission
       if (!_hasPermission) {
@@ -564,12 +352,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       // Adopt a controller pre-warmed during navigation, if one is ready — this
       // skips the on-screen init and shows the preview immediately (no black).
       final prewarmed = await CameraPrewarm.takePrepared();
-      if (generation != _cameraGeneration ||
-          _disposed ||
-          _lifecycleState != AppLifecycleState.resumed) {
-        await prewarmed?.controller.dispose();
-        return;
-      }
       if (prewarmed != null && mounted) {
         await _cameraController?.dispose();
         _cameraController = prewarmed.controller;
@@ -579,18 +361,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         _isInitialized = true;
         setState(() => _isLoading = false);
         _reportPreviewReady(
-          generation: generation,
           usedPrewarm: true,
           controllerInitialization: prewarmed.warmupDuration,
           screenWaitForController: prewarmed.screenWaitDuration,
         );
-        unawaited(
-          _cameraController!
-              .lockCaptureOrientation(DeviceOrientation.portraitUp)
-              .catchError((_) {}),
-        );
         unawaited(_applyPostInitCameraSettings());
-        _scheduleAudioWarmup();
+        if (_hasGalleryPermission) {
+          unawaited(_loadLastGalleryImage());
+        }
+        unawaited(
+          Future.delayed(const Duration(milliseconds: 400), _rewarmWithAudio),
+        );
+        return;
+      } else if (prewarmed != null) {
+        // Screen was disposed while warming up; release the controller.
+        await prewarmed.controller.dispose();
         return;
       }
 
@@ -598,9 +383,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       if (!mounted) return;
       final config = StoryEditorConfigProvider.read(context);
       final results = await Future.wait([
-        CameraPrewarm.cameras == null
-            ? availableCameras()
-            : Future<List<CameraDescription>>.value(CameraPrewarm.cameras!),
+        availableCameras(),
         config.settings.getFrontCameraDefault(),
       ]);
       _cameras = results[0] as List<CameraDescription>;
@@ -622,21 +405,27 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       if (_currentCameraIndex == -1) _currentCameraIndex = 0;
 
       // Open with audio OFF for the fastest possible preview.
-      final initializationStopwatch = Stopwatch()..start();
-      final initialized = await _setupCameraController(
-        _cameras[_currentCameraIndex],
-        generation: generation,
-      );
-      initializationStopwatch.stop();
-      if (initialized) {
+      final initialization = Stopwatch()..start();
+      await _setupCameraController(_cameras[_currentCameraIndex]);
+      initialization.stop();
+      if (_isInitialized) {
         _reportPreviewReady(
-          generation: generation,
           usedPrewarm: false,
-          controllerInitialization: initializationStopwatch.elapsed,
-          screenWaitForController: initializationStopwatch.elapsed,
+          controllerInitialization: initialization.elapsed,
+          screenWaitForController: initialization.elapsed,
         );
-        _scheduleAudioWarmup();
       }
+
+      // Gallery thumbnail is non-critical — don't block the preview on it.
+      if (_hasGalleryPermission && mounted) {
+        unawaited(_loadLastGalleryImage());
+      }
+
+      // Silently upgrade to an audio-enabled controller shortly after, so video
+      // has sound without slowing the open.
+      unawaited(
+        Future.delayed(const Duration(milliseconds: 400), _rewarmWithAudio),
+      );
     } catch (e) {
       debugPrint('Camera initialization error: $e');
     }
@@ -646,89 +435,57 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  Future<bool> _setupCameraController(
+  Future<void> _setupCameraController(
     CameraDescription camera, {
     bool enableAudio = false,
-    int? generation,
   }) async {
-    final expectedGeneration = generation ?? ++_cameraGeneration;
-    if (_disposed || _lifecycleState != AppLifecycleState.resumed) return false;
-    await _stopFaceTracking();
     await _cameraController?.dispose();
-    if (expectedGeneration != _cameraGeneration || _disposed) return false;
     _audioEnabled = enableAudio;
 
-    final controller = CameraController(
+    _cameraController = CameraController(
       camera,
       ResolutionPreset.veryHigh,
       enableAudio: enableAudio,
-      imageFormatGroup: FaceArCameraTracker.requiredImageFormat,
+      imageFormatGroup: ImageFormatGroup.jpeg,
     );
-    _cameraController = controller;
 
     try {
-      await controller.initialize();
-      if (expectedGeneration != _cameraGeneration ||
-          _disposed ||
-          _lifecycleState != AppLifecycleState.resumed) {
-        if (identical(_cameraController, controller)) _cameraController = null;
-        await controller.dispose();
-        return false;
-      }
-
-      // initialize() is the first-preview gate. Orientation, zoom and flash are
-      // secondary platform calls and run after the initialized preview renders.
+      await _cameraController!.initialize();
       _isInitialized = true;
       if (mounted) setState(() {});
 
-      debugPrint('Camera initialized: ${controller.value.previewSize}');
+      debugPrint('Camera initialized: ${_cameraController!.value.previewSize}');
 
       unawaited(
-        controller
+        _cameraController!
             .lockCaptureOrientation(DeviceOrientation.portraitUp)
             .catchError((_) {}),
       );
       unawaited(_applyPostInitCameraSettings());
-      if (_glassesLensSelected) unawaited(_startFaceTrackingIfReady());
-      return true;
     } on CameraException catch (e) {
       debugPrint('CameraException: ${e.description}');
       _isInitialized = false;
-      if (identical(_cameraController, controller)) _cameraController = null;
-      await controller.dispose();
-      return false;
     }
   }
 
   void _reportPreviewReady({
-    required int generation,
     required bool usedPrewarm,
     required Duration controllerInitialization,
     required Duration screenWaitForController,
   }) {
     if (_previewReadyReported) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_previewReadyReported ||
-          _disposed ||
-          generation != _cameraGeneration ||
-          !_isInitialized) {
-        return;
-      }
+      if (_previewReadyReported || !mounted || !_isInitialized) return;
       _previewReadyReported = true;
       _routeStartupStopwatch.stop();
-      final metrics = CameraStartupMetrics(
-        usedPrewarm: usedPrewarm,
-        controllerInitialization: controllerInitialization,
-        screenWaitForController: screenWaitForController,
-        routeToPreviewReady: _routeStartupStopwatch.elapsed,
+      widget.onPreviewReady?.call(
+        CameraStartupMetrics(
+          usedPrewarm: usedPrewarm,
+          controllerInitialization: controllerInitialization,
+          screenWaitForController: screenWaitForController,
+          routeToPreviewReady: _routeStartupStopwatch.elapsed,
+        ),
       );
-      debugPrint(
-        'camera_startup preview_ready_ms=${metrics.routeToPreviewReady.inMilliseconds} '
-        'init_ms=${metrics.controllerInitialization.inMilliseconds} '
-        'screen_wait_ms=${metrics.screenWaitForController.inMilliseconds} '
-        'prewarmed=${metrics.usedPrewarm} target_met=${metrics.metWarmTarget}',
-      );
-      widget.onPreviewReady?.call(metrics);
     });
   }
 
@@ -746,25 +503,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  void _scheduleAudioWarmup() {
-    _audioWarmTimer?.cancel();
-    // Keep the first-preview window stable. Audio is attached after the warm
-    // startup budget, and only when the permission was already granted.
-    _audioWarmTimer = Timer(
-      const Duration(milliseconds: 1200),
-      () => unawaited(_rewarmWithAudio()),
-    );
-  }
-
-  /// Rebuild with audio after first preview, but never prompt from background
-  /// work. A missing microphone permission is requested only after the user
-  /// explicitly begins a video action.
+  /// After the fast audio-off preview is live, rebuild the controller with audio
+  /// enabled so videos have sound — without slowing the initial open. Idempotent
+  /// and skipped while capturing so it never interrupts a recording.
   Future<void> _rewarmWithAudio() async {
     if (_audioEnabled || !_isInitialized || !mounted) return;
-    if (_glassesLensSelected) return;
     if (_isVideoRecording || _isCapturing || _isProcessingVideo) return;
     if (_cameras.isEmpty) return;
-    if (!await Permission.microphone.isGranted) return;
     await _setupCameraController(
       _cameras[_currentCameraIndex],
       enableAudio: true,
@@ -1026,24 +771,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     try {
       HapticFeedback.mediumImpact();
 
-      final tracker = _faceCameraTracker;
-      final XFile file = _glassesLensSelected && tracker != null
-          ? await tracker.pauseForStillCapture(
-              () => _cameraController!.takePicture(),
-            )
-          : await _cameraController!.takePicture();
-      var imagePath = file.path;
-      final viewport = _cameraViewportSize;
-      final glassesPose = _glassesLensSelected
-          ? _captureGlassesPoseTracker.poseAt(DateTime.now())
-          : null;
-      if (glassesPose != null && viewport != null && !viewport.isEmpty) {
-        imagePath = await _glassesCaptureCompositor.composite(
-          imagePath: imagePath,
-          pose: glassesPose,
-          previewViewport: viewport,
-        );
-      }
+      final XFile file = await _cameraController!.takePicture();
+      final imagePath = file.path;
 
       if (mounted) {
         // Add captured photo to list in layout mode
@@ -1064,8 +793,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   imagePath: imagePath,
                   primaryColor: widget.primaryColor,
                   flipHorizontally: _isFrontCameraActive,
-                  initialFilterPreset: _captureFilterId,
-                  initialFilterStrength: _captureFilterStrength,
+                  initialFilterPreset: _activeFilterId,
+                  initialFilterStrength: _activeFilterStrength,
                   initialTextOverlay: pendingOverlay,
                   closeFriendsList: widget.closeFriendsList,
                   userProfileImageUrl: widget.userProfileImageUrl,
@@ -1524,38 +1253,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (_cameraController == null ||
         !_isInitialized ||
         _isCapturing ||
-        _isVideoRecording ||
-        _isStartingVideo) {
-      return;
-    }
-    if (_glassesLensSelected) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.storyEditorConfig.strings.cameraGlassesPhotoOnly,
-            ),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+        _isVideoRecording) {
       return;
     }
 
     HapticFeedback.heavyImpact();
-    _isStartingVideo = true;
-    _cancelPendingVideoStart = false;
-    if (mounted) setState(() => _isCapturing = true);
 
     try {
-      if (!await _ensureAudioEnabled()) {
-        if (mounted) setState(() => _isCapturing = false);
-        return;
-      }
-      if (_cancelPendingVideoStart || _disposed || !mounted) {
-        if (mounted) setState(() => _isCapturing = false);
-        return;
-      }
       await _cameraController!.startVideoRecording();
 
       if (mounted) {
@@ -1564,11 +1268,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _isCapturing = true;
           _videoRecordingElapsedMs = 0;
         });
-
-        if (_cancelPendingVideoStart) {
-          unawaited(_stopVideoRecording());
-          return;
-        }
 
         // Start video duration timer
         _videoRecordingTimer?.cancel();
@@ -1591,32 +1290,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
     } catch (e) {
       debugPrint('Video start error: $e');
-      if (mounted) setState(() => _isCapturing = false);
-    } finally {
-      _isStartingVideo = false;
     }
-  }
-
-  void _requestVideoStop() {
-    if (_isStartingVideo) {
-      _cancelPendingVideoStart = true;
-      return;
-    }
-    if (_isVideoRecording) unawaited(_stopVideoRecording());
-  }
-
-  Future<bool> _ensureAudioEnabled() async {
-    if (_audioEnabled) return true;
-    var status = await Permission.microphone.status;
-    if (!status.isGranted) {
-      status = await Permission.microphone.request();
-    }
-    if (!status.isGranted || _disposed || !mounted) return false;
-    if (_cameras.isEmpty) return false;
-    return _setupCameraController(
-      _cameras[_currentCameraIndex],
-      enableAudio: true,
-    );
   }
 
   Future<void> _stopVideoRecording() async {
@@ -1654,8 +1328,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
                 flipHorizontally: _isFrontCameraActive,
-                initialFilterPreset: _captureFilterId,
-                initialFilterStrength: _captureFilterStrength,
+                initialFilterPreset: _activeFilterId,
+                initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
@@ -1838,8 +1512,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
                 flipHorizontally: _isFrontCameraActive,
-                initialFilterPreset: _captureFilterId,
-                initialFilterStrength: _captureFilterStrength,
+                initialFilterPreset: _activeFilterId,
+                initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
@@ -1878,7 +1552,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     String videoPath, {
     double maxDuration = 4.0,
   }) async {
-    debugPrint('Creating boomerang effect');
+    debugPrint('Creating boomerang effect from video: $videoPath');
 
     // Get config before async operations
     final config = context.storyEditorConfig;
@@ -1891,15 +1565,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
 
       final inputSize = await inputFile.length();
-      debugPrint(
-        'Input file size: ${(inputSize / 1024 / 1024).toStringAsFixed(2)} MB',
-      );
+      debugPrint('Input file size: ${(inputSize / 1024 / 1024).toStringAsFixed(2)} MB');
 
       // Create native boomerang
       const channel = MethodChannel('story_editor_pro');
       final tempDir = await getTemporaryDirectory();
-      final outputPath =
-          '${tempDir.path}/boomerang_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final outputPath = '${tempDir.path}/boomerang_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
       final result = await channel.invokeMethod<String>('createBoomerang', {
         'inputPath': videoPath,
@@ -1913,10 +1584,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         final outputFile = File(result);
         if (await outputFile.exists()) {
           final outputSize = await outputFile.length();
-          debugPrint(
-            'Boomerang created '
-            '(${(outputSize / 1024 / 1024).toStringAsFixed(2)} MB)',
-          );
+          debugPrint('Boomerang created: $result (${(outputSize / 1024 / 1024).toStringAsFixed(2)} MB)');
 
           // Delete original video
           try {
@@ -1993,15 +1661,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     HapticFeedback.heavyImpact();
 
     try {
-      if (!await _ensureAudioEnabled()) {
-        if (mounted) {
-          setState(() {
-            _isHandsFreeCountingDown = false;
-            _isCapturing = false;
-          });
-        }
-        return;
-      }
       await _cameraController!.startVideoRecording();
 
       setState(() {
@@ -2073,8 +1732,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
                 flipHorizontally: _isFrontCameraActive,
-                initialFilterPreset: _captureFilterId,
-                initialFilterStrength: _captureFilterStrength,
+                initialFilterPreset: _activeFilterId,
+                initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
@@ -2199,9 +1858,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             Container(height: statusBarHeight, color: Colors.black),
             // Remaining area
             Expanded(
-              child: _isLayoutMode
-                  ? _buildLayoutModeBody()
-                  : _buildNormalModeBody(),
+              child: _isLayoutMode ? _buildLayoutModeBody() : _buildNormalModeBody(),
             ),
           ],
         ),
@@ -2537,95 +2194,95 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           HapticFeedback.mediumImpact();
           _pickImageForLayoutTile(index);
         },
-        child: Container(
-          // Separate with thin white line
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: isActive
-                  ? Colors.white
-                  : Colors.white.withValues(alpha: 0.2),
-              width: isActive ? 2 : 0.5,
-            ),
+      child: Container(
+        // Separate with thin white line
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isActive
+                ? Colors.white
+                : Colors.white.withValues(alpha: 0.2),
+            width: isActive ? 2 : 0.5,
           ),
-          child: capturedPhoto != null
-              // Captured photo
-              ? Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image.file(capturedPhoto, fit: BoxFit.cover),
-                    // Delete icon - hide during processing
-                    if (!_isLayoutProcessing)
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: const BoxDecoration(
-                            color: Colors.black54,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 18,
-                          ),
+        ),
+        child: capturedPhoto != null
+            // Captured photo
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.file(capturedPhoto, fit: BoxFit.cover),
+                  // Delete icon - hide during processing
+                  if (!_isLayoutProcessing)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Colors.black54,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                          size: 18,
                         ),
                       ),
-                    // Index indicator - hide during processing
-                    if (!_isLayoutProcessing)
-                      Positioned(
-                        bottom: 8,
-                        left: 8,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            '${index + 1}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                    ),
+                  // Index indicator - hide during processing
+                  if (!_isLayoutProcessing)
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
                         ),
-                      ),
-                  ],
-                )
-              // Active tile - camera preview
-              : isActive
-              ? _buildTileCameraPreview(index)
-              // Pending tile
-              : Container(
-                  color: Colors.grey.shade900,
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.camera_alt_outlined,
-                          color: Colors.white.withValues(alpha: 0.4),
-                          size: 32,
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        const SizedBox(height: 8),
-                        Text(
+                        child: Text(
                           '${index + 1}',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.4),
-                            fontSize: 20,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                      ],
+                      ),
                     ),
+                ],
+              )
+            // Active tile - camera preview
+            : isActive
+            ? _buildTileCameraPreview(index)
+            // Pending tile
+            : Container(
+                color: Colors.grey.shade900,
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.camera_alt_outlined,
+                        color: Colors.white.withValues(alpha: 0.4),
+                        size: 32,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-        ),
+              ),
+      ),
       ),
     );
   }
@@ -2727,12 +2384,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
 
     final config = StoryEditorConfigProvider.read(context);
-    final isFrontCamera =
-        _cameras.isNotEmpty &&
+    final isFrontCamera = _cameras.isNotEmpty &&
         _currentCameraIndex >= 0 &&
         _currentCameraIndex < _cameras.length &&
-        _cameras[_currentCameraIndex].lensDirection ==
-            CameraLensDirection.front;
+        _cameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
 
     return GestureDetector(
       onScaleStart: _onScaleStart,
@@ -2745,18 +2400,26 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         }
         final velocity = details.primaryVelocity ?? 0;
         if (velocity.abs() < 120) return;
-        final current = _selectedUnifiedFilterIndex;
-        final next = velocity < 0
-            ? (current + 1).clamp(0, _combinedFilterCount - 1)
-            : (current - 1).clamp(0, _combinedFilterCount - 1);
-        _selectUnifiedFilter(next);
+        int next = _activeFilterIndex;
+        setState(() {
+          if (velocity < 0 && _activeFilterIndex < _combinedFilterCount - 1) {
+            _activeFilterIndex++;
+          } else if (velocity > 0 && _activeFilterIndex > 0) {
+            _activeFilterIndex--;
+          }
+          next = _activeFilterIndex;
+        });
+        _filterPageController.animateToPage(
+          next,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
       },
       child: LayoutBuilder(
         builder: (context, constraints) {
           // Use positioned area dimensions (excluding bottom bar)
           final availableWidth = constraints.maxWidth;
           final availableHeight = constraints.maxHeight;
-          _rememberCameraViewport(Size(availableWidth, availableHeight));
           final availableAspectRatio = availableWidth / availableHeight;
           final cameraAspectRatio = _cameraController!.value.aspectRatio;
 
@@ -2768,40 +2431,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             _activeFilterId,
             _activeFilterStrength,
           );
-          preview = ArCameraFilterSurface(
-            controller: _arFilterController,
-            capabilities: ArCameraCapabilities.current(
-              quality: ArCameraQuality.balanced,
-              reduceMotion: MediaQuery.disableAnimationsOf(context),
-            ),
-            child: preview,
-          );
 
-          final scaledPreview = Transform.scale(
-            scale: scale,
-            alignment: Alignment.center,
-            child: Center(
-              child: (isFrontCamera && !config.mirrorFrontCameraPreview)
-                  ? Transform(
-                      alignment: Alignment.center,
-                      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
-                      child: preview,
-                    )
-                  : preview,
-            ),
-          );
           return ClipRect(
-            child: Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                scaledPreview,
-                if (_glassesLensSelected)
-                  GlassesLensOverlay(
-                    trackingState: _faceTrackingState,
-                    repository: _glassesMeshRepository,
-                    semanticLabel: config.strings.cameraFilterArGlasses,
-                  ),
-              ],
+            child: Transform.scale(
+              scale: scale,
+              alignment: Alignment.center,
+              child: Center(
+                child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+                    ? Transform(
+                        alignment: Alignment.center,
+                        transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+                        child: preview,
+                      )
+                    : preview,
+              ),
             ),
           );
         },
@@ -2839,7 +2482,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
             const SizedBox(height: 32),
             ElevatedButton(
-              onPressed: _requestPermissionsAndInitialize,
+              onPressed: _initializeCamera,
               style: ElevatedButton.styleFrom(
                 backgroundColor: widget.primaryColor ?? Colors.blue,
                 padding: const EdgeInsets.symmetric(
@@ -2864,11 +2507,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Top controls - status bar already separate, no SafeArea
   Widget _buildTopControlsRow() {
     // Hide top bar during all recording and processing states
-    final shouldHide =
-        _isLayoutProcessing ||
-        _isHandsFreeCountingDown ||
-        _isVideoRecording ||
-        _isProcessingVideo;
+    final shouldHide = _isLayoutProcessing || _isHandsFreeCountingDown ||
+        _isVideoRecording || _isProcessingVideo;
 
     return Positioned(
       top: 0,
@@ -2887,9 +2527,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             // Arabic/RTL Directionality, so the X can never slide under the
             // settings rail.
             child: Align(
-              alignment: _toolsOnLeft
-                  ? Alignment.centerRight
-                  : Alignment.centerLeft,
+              alignment:
+                  _toolsOnLeft ? Alignment.centerRight : Alignment.centerLeft,
               child: _buildIconButton(
                 iconWidget: SvgPicture.asset(
                   'packages/story_editor_pro/assets/icons/xmark.svg',
@@ -2901,33 +2540,33 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   ),
                 ),
                 onTap: () {
-                  // If in special modes only close the mode, otherwise close the screen
-                  if (_isLayoutMode) {
-                    setState(() {
-                      _isLayoutMode = false;
-                      _showLayoutSelector = false;
-                      _capturedLayoutPhotos = [];
-                      _activeLayoutIndex = 0;
-                    });
-                  } else if (_isBoomerangMode) {
-                    setState(() {
-                      _isBoomerangMode = false;
-                    });
-                  } else if (_isHandsFreeMode) {
-                    setState(() {
-                      _isHandsFreeMode = false;
-                      _showHandsFreeSelector = false;
-                    });
-                  } else {
-                    Navigator.pop(context);
-                  }
-                },
+                    // If in special modes only close the mode, otherwise close the screen
+                    if (_isLayoutMode) {
+                      setState(() {
+                        _isLayoutMode = false;
+                        _showLayoutSelector = false;
+                        _capturedLayoutPhotos = [];
+                        _activeLayoutIndex = 0;
+                      });
+                    } else if (_isBoomerangMode) {
+                      setState(() {
+                        _isBoomerangMode = false;
+                      });
+                    } else if (_isHandsFreeMode) {
+                      setState(() {
+                        _isHandsFreeMode = false;
+                        _showHandsFreeSelector = false;
+                      });
+                    } else {
+                      Navigator.pop(context);
+                    }
+                  },
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 
   /// Capture button area - positioned at bottom in Stack
@@ -2943,9 +2582,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     final config = context.storyEditorConfig;
     final screenHeight = MediaQuery.of(context).size.height;
-    final bottomOffset = screenHeight < config.smallScreenBreakpoint
-        ? 10.0
-        : 20.0;
+    final bottomOffset = screenHeight < config.smallScreenBreakpoint ? 10.0 : 20.0;
 
     return Positioned(
       left: 0,
@@ -2954,8 +2591,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Center(
         child: _buildIntegratedCaptureWithFilters(
           captureButton,
-          showFilters:
-              !_isBoomerangMode &&
+          showFilters: !_isBoomerangMode &&
               !_isVideoRecording &&
               !_isProcessingVideo &&
               !_isHandsFreeCountingDown,
@@ -2969,25 +2605,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     bool showFilters = true,
   }) {
     return SizedBox(
-      width: double.infinity,
-      height: showFilters ? 220 : 126,
+      height: 126,
       child: Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
         children: [
           if (showFilters)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: _buildFilterSelector(),
+            Positioned.fill(
+              child: Align(
+                alignment: Alignment.center,
+                child: _buildFilterSelector(),
+              ),
             ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Center(child: captureButton),
-          ),
+          Center(child: captureButton),
         ],
       ),
     );
@@ -2995,129 +2625,142 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Widget _buildFilterSelector() {
     final strings = context.storyEditorConfig.strings;
-    final presets = CameraFilterRailCatalog.presets;
-    return AnimatedBuilder(
-      animation: _arFilterController,
-      builder: (context, _) => SizedBox(
-        height: 108,
-        child: ListView.separated(
-          key: const ValueKey<String>('unified-camera-filter-selector'),
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsetsDirectional.symmetric(horizontal: 16),
-          itemCount: presets.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (context, index) {
-            final preset = presets[index];
-            final isAr = CameraFilterRailCatalog.isArIndex(index);
-            final isGlasses = CameraFilterRailCatalog.isGlassesIndex(index);
-            final selected = index == _selectedUnifiedFilterIndex;
-            final label = strings.filterNameForPreset(preset.id);
-            return Semantics(
-              button: true,
-              selected: selected,
-              label: label,
-              child: InkResponse(
-                key: ValueKey<String>('camera-filter-${preset.id}'),
-                radius: 38,
-                onTap: () => _selectUnifiedFilter(index),
-                child: SizedBox(
-                  width: 66,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 160),
-                        width: selected ? 56 : 50,
-                        height: selected ? 56 : 50,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: selected ? Colors.white : Colors.white54,
-                            width: selected ? 3 : 1,
+    final presets = StoryEditorFilters.presets;
+    const bubbleSize = 52.0;
+
+    return SizedBox(
+      height: 108,
+      child: PageView.builder(
+        controller: _filterPageController,
+        pageSnapping: true,
+        physics: const BouncingScrollPhysics(),
+        itemCount: presets.length,
+        itemBuilder: (context, index) {
+          final preset = presets[index];
+          return AnimatedBuilder(
+            animation: _filterPageController,
+            builder: (context, child) {
+              double page = _activeFilterIndex.toDouble();
+              if (_filterPageController.hasClients &&
+                  _filterPageController.position.hasPixels) {
+                page = _filterPageController.page ?? _activeFilterIndex.toDouble();
+              }
+              final distance = (page - index).abs();
+              final focus = (1.0 - distance).clamp(0.0, 1.0);
+              final scale = 0.82 + (0.22 * focus);
+              final selected = distance < 0.5;
+
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 7),
+                  child: SizedBox(
+                    width: bubbleSize + 8,
+                    height: 96,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.center,
+                      children: [
+                        Positioned(
+                          top: 0,
+                          left: -10,
+                          right: -10,
+                          child: selected
+                              ? const SizedBox.shrink()
+                              : Text(
+                                  strings.filterNameForPreset(preset.id),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Color.lerp(
+                                      Colors.white60,
+                                      Colors.white,
+                                      focus,
+                                    ),
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                        ),
+                        Transform.scale(
+                          scale: scale,
+                          child: Container(
+                            width: bubbleSize,
+                            height: bubbleSize,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Color.lerp(Colors.white38, Colors.white, focus) ??
+                                    Colors.white38,
+                                width: 1.1 + (1.5 * focus),
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black45,
+                                  blurRadius: 6,
+                                  spreadRadius: 0.5,
+                                ),
+                              ],
+                            ),
+                            child: ClipOval(
+                              child: Opacity(
+                                opacity: selected ? 0.95 : 0.72,
+                                child: _buildFilterBubblePreview(preset.id),
+                              ),
+                            ),
                           ),
-                          boxShadow: const [
-                            BoxShadow(color: Colors.black38, blurRadius: 5),
-                          ],
                         ),
-                        child: ClipOval(
-                          child: _buildUnifiedFilterPreview(
-                            preset.id,
-                            isAr,
-                            isGlasses: isGlasses,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: selected ? Colors.white : Colors.white70,
-                          fontSize: 11,
-                          fontWeight: selected
-                              ? FontWeight.w700
-                              : FontWeight.w500,
-                          shadows: const [
-                            Shadow(color: Colors.black87, blurRadius: 3),
-                          ],
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
-        ),
+              );
+            },
+          );
+        },
       ),
     );
   }
 
-  Widget _buildUnifiedFilterPreview(
-    String presetId,
-    bool isAr, {
-    bool isGlasses = false,
-  }) {
-    if (isGlasses) {
-      return ColoredBox(
-        color: const Color(0xFFDBB777),
-        child: Image.asset(
-          glassesPreviewAsset,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => const Center(
-            child: Icon(Icons.visibility, color: Color(0xFF17191E), size: 25),
+  Widget _buildFilterBubblePreview(String filterId) {
+    if (_cameraController == null || !_isInitialized) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(color: Color(0xFF444444)),
+      );
+    }
+
+    final config = StoryEditorConfigProvider.read(context);
+    final isFrontCamera = _isFrontCameraActive;
+
+    final Widget preview = _buildLiveFilteredPreview(
+      CameraPreview(_cameraController!),
+      filterId,
+      _activeFilterStrength,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableAspectRatio = constraints.maxWidth / constraints.maxHeight;
+        final cameraAspectRatio = _cameraController!.value.aspectRatio;
+        var scale = availableAspectRatio * cameraAspectRatio;
+        if (scale < 1) scale = 1 / scale;
+
+        return ClipRect(
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.center,
+            child: Center(
+              child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+                  ? Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+                      child: preview,
+                    )
+                  : preview,
+            ),
           ),
-        ),
-      );
-    }
-    if (isAr) {
-      final filter = ArCameraFilterCatalog.byPresetId(presetId);
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(colors: filter.previewColors),
-        ),
-        child: Center(child: Icon(filter.icon, color: Colors.white, size: 22)),
-      );
-    }
-    final controller = _cameraController;
-    if (controller == null || !_isInitialized) {
-      return const ColoredBox(color: Color(0xFF444444));
-    }
-    return ColorFiltered(
-      colorFilter: StoryEditorFilters.colorFilter(
-        presetId,
-        _activeFilterStrength,
-      ),
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: 50,
-          height: 50 * controller.value.aspectRatio,
-          child: CameraPreview(controller),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -3143,22 +2786,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     Widget preview = buildBaseLayer();
 
-    final bool needsVignette =
-        filterId == 'vignette' ||
+    final bool needsVignette = filterId == 'vignette' ||
         filterId == 'cinematic' ||
         filterId == 'nightneon' ||
         filterId == 'filmicfade' ||
         filterId == 'retro2044';
     if (needsVignette) {
-      final vignetteOpacity =
-          switch (filterId) {
-            'cinematic' => 0.48,
-            'nightneon' => 0.36,
-            'filmicfade' => 0.42,
-            'retro2044' => 0.30,
-            _ => 0.52,
-          } *
-          s;
+      final vignetteOpacity = switch (filterId) {
+        'cinematic' => 0.48,
+        'nightneon' => 0.36,
+        'filmicfade' => 0.42,
+        'retro2044' => 0.30,
+        _ => 0.52,
+      } * s;
       preview = Stack(
         fit: StackFit.expand,
         children: [
@@ -3231,9 +2871,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         ? config.shutterButtonSizeSmall
         : config.shutterButtonSizeLarge;
     final double size = baseSize * 0.9;
-    final double strokeWidth = screenHeight < config.smallScreenBreakpoint
-        ? 4
-        : 6;
+    final double strokeWidth = screenHeight < config.smallScreenBreakpoint ? 4 : 6;
     final Color recordingColor = config.recordingIndicatorColor;
 
     // Video recording progress (0.0 - 1.0)
@@ -3302,10 +2940,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerUp: (_) {
-        _requestVideoStop();
+        if (_isVideoRecording) {
+          _stopVideoRecording();
+        }
       },
       onPointerCancel: (_) {
-        _requestVideoStop();
+        if (_isVideoRecording) {
+          _stopVideoRecording();
+        }
       },
       child: GestureDetector(
         onTap: () {
@@ -3330,10 +2972,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             final deltaY = _longPressStartY - details.globalPosition.dy;
             // Every 100 pixels = 1x zoom change
             final zoomDelta = deltaY / 100.0;
-            final newZoom = (_longPressZoomStart + zoomDelta).clamp(
-              _minZoom,
-              _maxZoom,
-            );
+            final newZoom = (_longPressZoomStart + zoomDelta).clamp(_minZoom, _maxZoom);
             if (newZoom != _zoomLevel) {
               setState(() => _zoomLevel = newZoom);
               _cameraController!.setZoomLevel(_zoomLevel);
@@ -3341,13 +2980,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           }
         },
         onLongPressEnd: (_) {
-          _requestVideoStop();
+          if (_isVideoRecording) {
+            _stopVideoRecording();
+          }
         },
         onLongPressUp: () {
-          _requestVideoStop();
+          if (_isVideoRecording) {
+            _stopVideoRecording();
+          }
         },
         onLongPressCancel: () {
-          _requestVideoStop();
+          if (_isVideoRecording) {
+            _stopVideoRecording();
+          }
         },
         child: AnchoredShutterControl(
           key: const ValueKey('camera_normal_capture_control'),
@@ -3453,6 +3098,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       },
       child: AnchoredShutterControl(
         key: const ValueKey('camera_timer_capture_control'),
+        width: 180,
         status: status,
         shutter: shutter,
       ),
@@ -3485,10 +3131,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         if (_cameraController != null && _isInitialized) {
           final deltaY = _longPressStartY - details.globalPosition.dy;
           final zoomDelta = deltaY / 100.0;
-          final newZoom = (_longPressZoomStart + zoomDelta).clamp(
-            _minZoom,
-            _maxZoom,
-          );
+          final newZoom =
+              (_longPressZoomStart + zoomDelta).clamp(_minZoom, _maxZoom);
           if (newZoom != _zoomLevel) {
             setState(() => _zoomLevel = newZoom);
             _cameraController!.setZoomLevel(_zoomLevel);
@@ -3627,11 +3271,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildBottomBarRow() {
     final config = StoryEditorConfigProvider.read(context);
     // Hide buttons during recording or processing
-    final shouldHide =
-        _isProcessingVideo ||
-        _isVideoRecording ||
-        _isLayoutProcessing ||
-        _isHandsFreeCountingDown;
+    final shouldHide = _isProcessingVideo || _isVideoRecording || _isLayoutProcessing || _isHandsFreeCountingDown;
 
     return Container(
       padding: EdgeInsets.only(
@@ -3650,9 +3290,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              config.showGalleryButton
-                  ? _buildGalleryButton()
-                  : const SizedBox(width: 40),
+              config.showGalleryButton ? _buildGalleryButton() : const SizedBox(width: 40),
               if (!_isLayoutMode) _buildModeSelector(),
               if (_isLayoutMode) const SizedBox(width: 40),
               _buildIconButton(
@@ -3678,11 +3316,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildBottomBar() {
     final config = StoryEditorConfigProvider.read(context);
     // Hide buttons during recording or processing
-    final shouldHide =
-        _isProcessingVideo ||
-        _isVideoRecording ||
-        _isLayoutProcessing ||
-        _isHandsFreeCountingDown;
+    final shouldHide = _isProcessingVideo || _isVideoRecording || _isLayoutProcessing || _isHandsFreeCountingDown;
 
     return Positioned(
       left: 0,
@@ -3705,9 +3339,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                config.showGalleryButton
-                    ? _buildGalleryButton()
-                    : const SizedBox(width: 40),
+                config.showGalleryButton ? _buildGalleryButton() : const SizedBox(width: 40),
                 // Hide mode selector in layout mode
                 if (!_isLayoutMode) _buildModeSelector(),
                 // SizedBox for spacing in layout mode
@@ -3745,81 +3377,81 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _openGallery();
         }
       },
-      child: SizedBox(
-        width: 40,
-        height: 40,
-        child: Stack(
-          children: [
-            // Main gallery box - with white border
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Colors.white, width: 1.5),
-                color: hasThumbnail ? null : Colors.white10,
-              ),
-              child: hasThumbnail
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Image.memory(
-                        _lastGalleryThumbnail!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Center(
-                            child: SvgPicture.asset(
-                              'packages/story_editor_pro/assets/icons/media-image-folder.svg',
-                              width: 17,
-                              height: 17,
-                              colorFilter: const ColorFilter.mode(
-                                Colors.white,
-                                BlendMode.srcIn,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Stack(
+            children: [
+              // Main gallery box - with white border
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.white, width: 1.5),
+                  color: hasThumbnail ? null : Colors.white10,
+                ),
+                child: hasThumbnail
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: Image.memory(
+                          _lastGalleryThumbnail!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Center(
+                              child: SvgPicture.asset(
+                                'packages/story_editor_pro/assets/icons/media-image-folder.svg',
+                                width: 17,
+                                height: 17,
+                                colorFilter: const ColorFilter.mode(
+                                  Colors.white,
+                                  BlendMode.srcIn,
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
-                    )
-                  : Center(
-                      child: SvgPicture.asset(
-                        'packages/story_editor_pro/assets/icons/media-image-folder.svg',
-                        width: 17,
-                        height: 17,
-                        colorFilter: const ColorFilter.mode(
-                          Colors.white,
-                          BlendMode.srcIn,
+                            );
+                          },
+                        ),
+                      )
+                    : Center(
+                        child: SvgPicture.asset(
+                          'packages/story_editor_pro/assets/icons/media-image-folder.svg',
+                          width: 17,
+                          height: 17,
+                          colorFilter: const ColorFilter.mode(
+                            Colors.white,
+                            BlendMode.srcIn,
+                          ),
                         ),
                       ),
-                    ),
-            ),
-            // Plus icon at bottom right corner
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.black,
-                  border: Border.all(color: Colors.white, width: 1.5),
-                ),
-                child: Center(
-                  child: SvgPicture.asset(
-                    'packages/story_editor_pro/assets/icons/plus.svg',
-                    width: 7,
-                    height: 7,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
+              ),
+              // Plus icon at bottom right corner
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.black,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: Center(
+                    child: SvgPicture.asset(
+                      'packages/story_editor_pro/assets/icons/plus.svg',
+                      width: 7,
+                      height: 7,
+                      colorFilter: const ColorFilter.mode(
+                        Colors.white,
+                        BlendMode.srcIn,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
     );
   }
 
@@ -3859,7 +3491,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             width: 1.0,
           ),
           boxShadow: const [
-            BoxShadow(color: Colors.black54, blurRadius: 8, spreadRadius: 0.2),
+            BoxShadow(
+              color: Colors.black54,
+              blurRadius: 8,
+              spreadRadius: 0.2,
+            ),
           ],
         ),
         child: Center(
@@ -3894,10 +3530,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Old _buildSideTools - still used for Layout mode
   Widget _buildSideTools() {
     // Hide during recording or processing
-    final shouldHide =
-        _isProcessingVideo ||
-        _isLayoutProcessing ||
-        _isHandsFreeCountingDown ||
+    final shouldHide = _isProcessingVideo || _isLayoutProcessing || _isHandsFreeCountingDown ||
         _isVideoRecording;
     return Positioned(
       right: _toolsOnLeft ? null : 16,
@@ -3936,15 +3569,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final screenHeight = MediaQuery.of(context).size.height;
     // Less spacing on small screens, more on large screens
     final bottomOffset = screenHeight * 0.15; // 15% of screen
-    final itemSpacing = screenHeight < config.smallScreenBreakpoint
-        ? 8.0
-        : 16.0;
+    final itemSpacing = screenHeight < config.smallScreenBreakpoint ? 8.0 : 16.0;
 
     // Hide during recording or processing
-    final shouldHide =
-        _isProcessingVideo ||
-        _isLayoutProcessing ||
-        _isHandsFreeCountingDown ||
+    final shouldHide = _isProcessingVideo || _isLayoutProcessing || _isHandsFreeCountingDown ||
         _isVideoRecording;
     return Positioned(
       right: _toolsOnLeft ? null : 16,
@@ -3969,10 +3597,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                       'packages/story_editor_pro/assets/icons/settings.svg',
                       width: 24,
                       height: 24,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
-                      ),
+                      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
                     ),
                     onTap: () async {
                       await Navigator.push(
@@ -4017,9 +3642,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       onTap: () async {
         HapticFeedback.selectionClick();
         final wasBoomerangMode = _isBoomerangMode;
-        if (!wasBoomerangMode && _glassesLensSelected) {
-          _resetFilterSelection();
-        }
         setState(() {
           _isBoomerangMode = !_isBoomerangMode;
           // Close other modes if boomerang is opened
@@ -4033,9 +3655,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
         // Pre-warm encoder when switching to boomerang mode
         // This prevents delay when recording starts
-        if (!wasBoomerangMode &&
-            _isBoomerangMode &&
-            _cameraController != null) {
+        if (!wasBoomerangMode && _isBoomerangMode && _cameraController != null) {
           try {
             debugPrint('Boomerang: Pre-warming encoder...');
             await _cameraController!.startVideoRecording();
@@ -4076,7 +3696,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         await openGradientTextEditor(
           context,
           onComplete: (text, gradient) async {
-            debugPrint('Create Mode: Text overlay submitted');
+            debugPrint('Create Mode: onComplete called with text: $text');
 
             // Create only gradient background image (without text)
             final bgImagePath = await _createGradientBackground(gradient);
@@ -4140,9 +3760,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           GestureDetector(
             onTap: () {
               HapticFeedback.selectionClick();
-              if (!_isHandsFreeMode && _glassesLensSelected) {
-                _resetFilterSelection();
-              }
               setState(() {
                 if (!_isHandsFreeMode) {
                   // Open hands-free mode and selector

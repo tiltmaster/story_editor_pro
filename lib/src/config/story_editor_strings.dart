@@ -67,15 +67,6 @@ class StoryEditorStrings {
   final String cameraFilterProductCrisp;
   final String cameraFilterFilmicFade;
   final String cameraFilterPastelMist;
-  final String cameraFilterArGolden;
-  final String cameraFilterArFrost;
-  final String cameraFilterArNeon;
-  final String cameraFilterArNoir;
-  final String cameraFilterArPrism;
-  final String cameraFilterArRetro;
-  final String cameraFilterArStargaze;
-  final String cameraFilterArGlasses;
-  final String cameraGlassesPhotoOnly;
 
   // ============ Gradient Text Editor ============
   final String gradientBalance;
@@ -199,16 +190,6 @@ class StoryEditorStrings {
     this.cameraFilterProductCrisp = 'Product Crisp',
     this.cameraFilterFilmicFade = 'Filmic Fade',
     this.cameraFilterPastelMist = 'Pastel Mist',
-    this.cameraFilterArGolden = 'Golden',
-    this.cameraFilterArFrost = 'Frost',
-    this.cameraFilterArNeon = 'Neon',
-    this.cameraFilterArNoir = 'Noir',
-    this.cameraFilterArPrism = 'Prism',
-    this.cameraFilterArRetro = 'Retro',
-    this.cameraFilterArStargaze = 'Stargaze',
-    this.cameraFilterArGlasses = 'Glasses',
-    this.cameraGlassesPhotoOnly =
-        'The face-tracked glasses lens is available for photos only.',
 
     // ─────────────────────────────────────────────────────────────
     // Gradient Text Editor
@@ -325,22 +306,6 @@ class StoryEditorStrings {
         return cameraFilterFilmicFade;
       case 'pastelmist':
         return cameraFilterPastelMist;
-      case 'ar_golden':
-        return cameraFilterArGolden;
-      case 'ar_frost':
-        return cameraFilterArFrost;
-      case 'ar_neon':
-        return cameraFilterArNeon;
-      case 'ar_noir':
-        return cameraFilterArNoir;
-      case 'ar_prism':
-        return cameraFilterArPrism;
-      case 'ar_retro':
-        return cameraFilterArRetro;
-      case 'ar_stargaze':
-        return cameraFilterArStargaze;
-      case 'ar_glasses':
-        return cameraFilterArGlasses;
       case 'none':
       default:
         return cameraFilterNormal;
