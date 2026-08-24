@@ -42,6 +42,41 @@ struct FaceARPose: Equatable {
     }
 }
 
+enum FaceARPoseGeometry {
+    /// Converts detector-semantic eye points into a stable screen-space axis.
+    /// Anatomical left/right labels can reverse their X ordering under mirror
+    /// transforms; roll must always follow visual left-to-right ordering.
+    static func make(firstEye: CGPoint, secondEye: CGPoint, nose: CGPoint?) -> FaceARPose? {
+        let left: CGPoint
+        let right: CGPoint
+        if firstEye.x <= secondEye.x {
+            left = firstEye; right = secondEye
+        } else {
+            left = secondEye; right = firstEye
+        }
+        let dx = right.x - left.x
+        let dy = right.y - left.y
+        let distance = hypot(dx, dy)
+        guard distance > 0.015 else { return nil }
+        let center = CGPoint(x: (left.x + right.x) * 0.5, y: (left.y + right.y) * 0.5)
+        let yaw: CGFloat
+        if let nose = nose {
+            // Project along the eye axis so head roll cannot masquerade as yaw.
+            let alongAxis = ((nose.x - center.x) * dx + (nose.y - center.y) * dy) /
+                (distance * distance)
+            yaw = max(-1, min(1, alongAxis * 1.8))
+        } else {
+            yaw = 0
+        }
+        return FaceARPose(
+            center: center,
+            eyeDistance: distance,
+            rollRadians: atan2(dy, dx),
+            yawNormalized: yaw
+        )
+    }
+}
+
 protocol FaceLandmarkTracking: AnyObject {
     func track(pixelBuffer: CVPixelBuffer, timestampMilliseconds: Int, completion: @escaping (FaceARPose?) -> Void)
     func cancel()
@@ -109,23 +144,14 @@ final class MediaPipeFaceLandmarkTracker: NSObject, FaceLandmarkTracking, FaceLa
         // MediaPipe Face Mesh outer eye-corner landmarks.
         let left = landmarks[33]
         let right = landmarks[263]
-        var dx = CGFloat(right.x - left.x)
         // MediaPipe image coordinates use a top-left origin. Core Image uses a
         // bottom-left origin, so invert Y once at the provider boundary.
         let leftY = 1 - CGFloat(left.y)
         let rightY = 1 - CGFloat(right.y)
-        var dy = rightY - leftY
-        if dx < 0 { dx = -dx; dy = -dy }
-        let distance = hypot(dx, dy)
-        guard distance > 0.015 else { callback?(nil); return }
-        let eyeCenterX = CGFloat(left.x + right.x) * 0.5
-        let noseX = CGFloat(landmarks[1].x)
-        let yaw = max(-1, min(1, (noseX - eyeCenterX) / distance * 1.8))
-        callback?(FaceARPose(
-            center: CGPoint(x: eyeCenterX, y: (leftY + rightY) * 0.5),
-            eyeDistance: distance,
-            rollRadians: atan2(dy, dx),
-            yawNormalized: yaw
+        callback?(FaceARPoseGeometry.make(
+            firstEye: CGPoint(x: CGFloat(left.x), y: leftY),
+            secondEye: CGPoint(x: CGFloat(right.x), y: rightY),
+            nose: CGPoint(x: CGFloat(landmarks[1].x), y: 1 - CGFloat(landmarks[1].y))
         ))
     }
 
@@ -167,20 +193,8 @@ final class VisionFaceLandmarkTracker: FaceLandmarkTracking {
         guard let observation = observation,
               let left = center(of: observation.landmarks?.leftEye, in: observation.boundingBox),
               let right = center(of: observation.landmarks?.rightEye, in: observation.boundingBox) else { return nil }
-        var dx = right.x - left.x
-        var dy = right.y - left.y
-        if dx < 0 { dx = -dx; dy = -dy }
-        let distance = hypot(dx, dy)
-        guard distance > 0.015 else { return nil }
-        let eyeCenter = CGPoint(x: (left.x + right.x) * 0.5, y: (left.y + right.y) * 0.5)
         let nose = center(of: observation.landmarks?.nose, in: observation.boundingBox)
-        let yaw = nose.map { max(-1, min(1, ($0.x - eyeCenter.x) / distance * 1.8)) } ?? 0
-        return FaceARPose(
-            center: eyeCenter,
-            eyeDistance: distance,
-            rollRadians: atan2(dy, dx),
-            yawNormalized: yaw
-        )
+        return FaceARPoseGeometry.make(firstEye: left, secondEye: right, nose: nose)
     }
 
     private static func center(of region: VNFaceLandmarkRegion2D?, in box: CGRect) -> CGPoint? {
@@ -368,9 +382,9 @@ final class FaceARCoordinator {
     }
 
     private let modelPath: String?
-    private let meshPath: String?
+    private let meshPaths: [String: String]
     private let lock = NSLock()
-    private lazy var renderer = FaceARFrameRenderer(meshPath: meshPath)
+    private var renderers: [String: FaceARFrameRenderer] = [:]
     private var tracker: FaceLandmarkTracking?
     private var backend = "unprepared"
     private var state: State = .disabled
@@ -386,20 +400,23 @@ final class FaceARCoordinator {
     private var preparationGeneration: UInt = 0
     private var lastTimestampMilliseconds = -1
 
-    init(modelPath: String?, meshPath: String?) {
+    init(modelPath: String?, meshPaths: [String: String]) {
         self.modelPath = modelPath
-        self.meshPath = meshPath
+        self.meshPaths = meshPaths
     }
 
     var capabilities: [String: Any] {
         lock.lock(); let currentBackend = backend; lock.unlock()
-        return ["supported": true, "backend": currentBackend, "maxFaces": 1,
-                "supports3D": false, "supportsRecording": true]
+        let supported = !meshPaths.isEmpty
+        return ["supported": supported, "backend": currentBackend, "maxFaces": 1,
+                "supports3D": false, "supportsRecording": supported,
+                "faceTracking": supported, "preview": supported, "recording": supported,
+                "lensIds": Array(meshPaths.keys).sorted()]
     }
 
     var hasActiveEffect: Bool {
         lock.lock(); defer { lock.unlock() }
-        return enabled && lensId == "glasses_classic" && state == .active
+        return enabled && lensId != "none" && renderers[lensId] != nil && state == .active
     }
 
     func setEventSink(_ sink: FlutterEventSink?) {
@@ -428,7 +445,9 @@ final class FaceARCoordinator {
             if selected == nil { selected = VisionFaceLandmarkTracker() }
             // Mesh parsing/rasterization is part of asynchronous preparation,
             // never camera startup or the first preview frame.
-            _ = self.renderer.usesRuntimeMesh
+            let preparedRenderers = self.meshPaths.mapValues {
+                FaceARFrameRenderer(meshPath: $0)
+            }
             self.lock.lock()
             guard generation == self.preparationGeneration else {
                 self.lock.unlock()
@@ -436,6 +455,7 @@ final class FaceARCoordinator {
                 return
             }
             self.tracker = selected
+            self.renderers = preparedRenderers
             self.backend = selectedBackend
             self.preparationStarted = false
             let next: State
@@ -464,7 +484,7 @@ final class FaceARCoordinator {
     }
 
     func setLens(id: String, intensity value: Double) throws {
-        guard id == "none" || id == "glasses_classic" else {
+        guard id == "none" || meshPaths[id] != nil else {
             throw NSError(domain: "FaceAR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown lens id: \(id)"])
         }
         lock.lock()
@@ -480,7 +500,8 @@ final class FaceARCoordinator {
 
     func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime) -> CVPixelBuffer {
         lock.lock()
-        let active = enabled && lensId == "glasses_classic" && state == .active
+        let currentRenderer = renderers[lensId]
+        let active = enabled && lensId != "none" && currentRenderer != nil && state == .active
         let currentPose = pose
         let currentIntensity = intensity
         frameIndex &+= 1
@@ -499,7 +520,8 @@ final class FaceARCoordinator {
             currentTracker?.track(pixelBuffer: pixelBuffer, timestampMilliseconds: millis) { [weak self] detected in
                 guard let self = self else { return }
                 self.lock.lock()
-                guard self.enabled && self.lensId == "glasses_classic" && self.state == .active else {
+                guard self.enabled && self.lensId != "none" &&
+                      self.renderers[self.lensId] != nil && self.state == .active else {
                     self.pose = nil
                     self.trackingInFlight = false
                     self.lock.unlock()
@@ -515,15 +537,22 @@ final class FaceARCoordinator {
             }
         }
         guard active, let currentPose = currentPose else { return pixelBuffer }
-        return renderer.render(input: pixelBuffer, pose: currentPose, intensity: currentIntensity) ?? pixelBuffer
+        return currentRenderer?.render(
+            input: pixelBuffer,
+            pose: currentPose,
+            intensity: currentIntensity
+        ) ?? pixelBuffer
     }
 
-    func jpegData(from buffer: CVPixelBuffer) -> Data? { renderer.jpegData(from: buffer) }
+    func jpegData(from buffer: CVPixelBuffer) -> Data? {
+        lock.lock(); let renderer = renderers[lensId]; lock.unlock()
+        return renderer?.jpegData(from: buffer)
+    }
 
     func dispose() {
         lock.lock()
         let trackerToCancel = tracker
-        tracker = nil; pose = nil; enabled = false; lensId = "none"
+        tracker = nil; renderers.removeAll(); pose = nil; enabled = false; lensId = "none"
         trackingInFlight = false; lastTrackingEvent = nil; backend = "unprepared"; state = .disabled
         preparationStarted = false; preparationGeneration &+= 1; lastTimestampMilliseconds = -1
         lock.unlock()

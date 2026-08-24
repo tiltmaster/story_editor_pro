@@ -982,6 +982,7 @@ class _StickerDrawerState extends State<_StickerDrawer> {
       expand: false,
       builder: (context, scrollController) {
         return Container(
+          width: double.infinity,
           decoration: const BoxDecoration(
             // Slightly translucent so the story stays visible behind
             color: Color(0xCC141414),
@@ -1395,12 +1396,14 @@ class _StickerDrawerState extends State<_StickerDrawer> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => SizedBox(
+        width: double.infinity,
         height: MediaQuery.of(ctx).size.height * 0.55,
         child: EmojiPicker(
           onEmojiSelected: (category, e) => Navigator.pop(ctx, e.emoji),
           config: const Config(
             checkPlatformCompatibility: true,
             emojiViewConfig: EmojiViewConfig(
+              columns: 8,
               emojiSizeMax: 30,
               backgroundColor: Colors.transparent,
             ),

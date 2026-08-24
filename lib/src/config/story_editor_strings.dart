@@ -69,10 +69,14 @@ class StoryEditorStrings {
   final String cameraFilterPastelMist;
   final String cameraLensClassicGlasses;
   final String cameraLensClassicGlassesArabic;
+  final String cameraLensAviatorGold;
+  final String cameraLensAviatorGoldArabic;
+  final String cameraLensVisorCyan;
+  final String cameraLensVisorCyanArabic;
 
   // Legacy host-app localization inputs retained for source compatibility.
-  // These labels do not add presets; the only native AR lens exposed by the
-  // editor remains [cameraLensClassicGlasses].
+  // These labels do not add presets; native mesh lenses use the dedicated
+  // cameraLens* fields above.
   final String cameraFilterArGolden;
   final String cameraFilterArFrost;
   final String cameraFilterArNeon;
@@ -207,6 +211,10 @@ class StoryEditorStrings {
     this.cameraFilterPastelMist = 'Pastel Mist',
     this.cameraLensClassicGlasses = 'Classic Glasses',
     this.cameraLensClassicGlassesArabic = 'نظارات كلاسيكية',
+    this.cameraLensAviatorGold = 'Aviator Gold',
+    this.cameraLensAviatorGoldArabic = 'نظارات طيار ذهبية',
+    this.cameraLensVisorCyan = 'Cyan Visor',
+    this.cameraLensVisorCyanArabic = 'قناع سماوي',
     this.cameraFilterArGolden = 'Golden',
     this.cameraFilterArFrost = 'Frost',
     this.cameraFilterArNeon = 'Neon',
@@ -302,6 +310,14 @@ class StoryEditorStrings {
         return languageCode.toLowerCase().startsWith('ar')
             ? cameraLensClassicGlassesArabic
             : cameraLensClassicGlasses;
+      case 'glasses_aviator_gold':
+        return languageCode.toLowerCase().startsWith('ar')
+            ? cameraLensAviatorGoldArabic
+            : cameraLensAviatorGold;
+      case 'glasses_visor_cyan':
+        return languageCode.toLowerCase().startsWith('ar')
+            ? cameraLensVisorCyanArabic
+            : cameraLensVisorCyan;
       case 'vivid':
         return cameraFilterVivid;
       case 'warm':

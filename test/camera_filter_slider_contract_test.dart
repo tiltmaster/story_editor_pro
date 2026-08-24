@@ -25,15 +25,33 @@ void main() {
       supportsClassicGlasses: false,
     );
     final supported = StoryEditorFilters.cameraPresetsFor(
-      supportsClassicGlasses: true,
+      supportedNativeLensIds: NativeArLensIds.glasses,
     );
 
     expect(unsupported, same(StoryEditorFilters.presets));
-    expect(supported.length, StoryEditorFilters.presets.length + 1);
+    expect(supported.length, StoryEditorFilters.presets.length + 3);
     expect(
       supported.take(StoryEditorFilters.presets.length),
       orderedEquals(StoryEditorFilters.presets),
     );
+    expect(
+      supported
+          .skip(StoryEditorFilters.presets.length)
+          .map((preset) => preset.id),
+      orderedEquals(<String>[
+        NativeArLensIds.classicGlasses,
+        NativeArLensIds.aviatorGold,
+        NativeArLensIds.visorCyan,
+      ]),
+    );
+  });
+
+  test('legacy capability flag exposes only classic glasses', () {
+    final supported = StoryEditorFilters.cameraPresetsFor(
+      supportsClassicGlasses: true,
+    );
+
+    expect(supported.length, StoryEditorFilters.presets.length + 1);
     expect(supported.last.id, NativeArLensIds.classicGlasses);
   });
 
@@ -53,6 +71,33 @@ void main() {
         languageCode: 'ar',
       ),
       'نظارات كلاسيكية',
+    );
+  });
+
+  test('new authored glasses labels are localized for English and Arabic', () {
+    const strings = StoryEditorStrings();
+
+    expect(
+      strings.filterNameForPreset(NativeArLensIds.aviatorGold),
+      'Aviator Gold',
+    );
+    expect(
+      strings.filterNameForPreset(
+        NativeArLensIds.aviatorGold,
+        languageCode: 'ar',
+      ),
+      'نظارات طيار ذهبية',
+    );
+    expect(
+      strings.filterNameForPreset(NativeArLensIds.visorCyan),
+      'Cyan Visor',
+    );
+    expect(
+      strings.filterNameForPreset(
+        NativeArLensIds.visorCyan,
+        languageCode: 'ar',
+      ),
+      'قناع سماوي',
     );
   });
 }

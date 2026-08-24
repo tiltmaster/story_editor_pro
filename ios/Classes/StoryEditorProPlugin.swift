@@ -34,7 +34,11 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         }
         let coordinator = FaceARCoordinator(
             modelPath: bundledAssetPath("assets/ar/models/face_landmarker.task"),
-            meshPath: bundledAssetPath("assets/ar/glasses_classic/runtime_mesh.json")
+            meshPaths: [
+                "glasses_classic": bundledAssetPath("assets/ar/glasses_classic/runtime_mesh.json"),
+                "glasses_aviator_gold": bundledAssetPath("assets/ar/glasses_aviator_gold/runtime_mesh.json"),
+                "glasses_visor_cyan": bundledAssetPath("assets/ar/glasses_visor_cyan/runtime_mesh.json")
+            ].compactMapValues { $0 }
         )
         let arHandler = FaceARMethodHandler(coordinator: coordinator)
         let eventHandler = FaceAREventStreamHandler(coordinator: coordinator)
@@ -282,6 +286,14 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
     }
 
     private func initializeCamera(facing: String, result: @escaping FlutterResult) {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            result(FlutterError(
+                code: "CAMERA_PERMISSION_DENIED",
+                message: "Camera permission must be granted before initialization",
+                details: nil
+            ))
+            return
+        }
         guard let textureRegistry = textureRegistry else {
             result(FlutterError(code: "NO_TEXTURE_REGISTRY", message: "Texture registry not available", details: nil))
             return
@@ -547,7 +559,10 @@ class CameraManager: NSObject {
                 }
                 if connection.isVideoMirroringSupported {
                     connection.automaticallyAdjustsVideoMirroring = false
-                    connection.isVideoMirrored = currentPosition == .front
+                    // Keep the native frame graph and saved media unmirrored.
+                    // Flutter mirrors only the visible front-camera texture,
+                    // so tracking and the rendered lens share one coordinate space.
+                    connection.isVideoMirrored = false
                 }
             }
 
@@ -696,7 +711,7 @@ class CameraManager: NSObject {
             updateVideoOrientationIfNeeded(connection)
             if connection.isVideoMirroringSupported {
                 connection.automaticallyAdjustsVideoMirroring = false
-                connection.isVideoMirrored = currentPosition == .front
+                connection.isVideoMirrored = false
             }
         }
 
@@ -831,7 +846,7 @@ class CameraManager: NSObject {
                     }
                     if connection.isVideoMirroringSupported {
                         connection.automaticallyAdjustsVideoMirroring = false
-                        connection.isVideoMirrored = self.currentPosition == .front
+                        connection.isVideoMirrored = false
                     }
                 }
 

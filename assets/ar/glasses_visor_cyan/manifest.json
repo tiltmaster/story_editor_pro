@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "asset_id": "ar_glasses_visor_cyan",
+  "display_name": "Cyan Shield Visor",
+  "license": "Original procedural geometry authored for this repository; no external models, textures, or paid dependencies",
+  "units": "meters",
+  "coordinate_system": {
+    "right": "+X",
+    "up": "+Y",
+    "forward": "-Z",
+    "face_depth": "+Z",
+    "gltf_conversion": "+Y up"
+  },
+  "origin": {
+    "position_m": [
+      0,
+      0,
+      0
+    ],
+    "definition": "midpoint_between_eyes"
+  },
+  "dimensions_m": {
+    "width": 0.1440141722559929,
+    "height": 0.05468538962304592,
+    "depth": 0.06293835677206516
+  },
+  "anchor": {
+    "type": "eye_midpoint",
+    "nominal_ipd_m": 0.064,
+    "nominal_frame_width_m": 0.1440141722559929,
+    "position_offset_m": [
+      0,
+      0,
+      0
+    ],
+    "rotation_offset_euler_deg": [
+      0,
+      0,
+      0
+    ],
+    "scale_multiplier": 1,
+    "recommended_scale_formula": "tracked_ipd_m / 0.064",
+    "smoothing": {
+      "position_half_life_ms": 55,
+      "rotation_half_life_ms": 45,
+      "scale_half_life_ms": 80
+    }
+  },
+  "materials": [
+    {
+      "id": 0,
+      "name": "MAT_Frame_Titanium",
+      "base_color_rgba": [
+        0.075,
+        0.09,
+        0.115,
+        1.0
+      ]
+    },
+    {
+      "id": 1,
+      "name": "MAT_Lens_CyanSmoke",
+      "base_color_rgba": [
+        0.015,
+        0.2,
+        0.28,
+        0.38
+      ]
+    }
+  ],
+  "lods": [
+    {
+      "id": "LOD1",
+      "triangles": 860,
+      "vertices": 442,
+      "glb": "glasses_visor_cyan.glb",
+      "mesh_json": "runtime_mesh.json",
+      "target_triangle_range": [
+        500,
+        1200
+      ]
+    }
+  ],
+  "runtime_mesh": {
+    "file": "runtime_mesh.json",
+    "source_lod": "LOD1",
+    "units": "nominal_ipd",
+    "meters_per_unit": 0.064,
+    "maximum_triangles": 1200
+  },
+  "validation": {
+    "status": "PASS",
+    "checks": {
+      "runtime_triangles_under_1200": true,
+      "two_materials": true,
+      "object_naming": true,
+      "material_naming": true,
+      "identity_rotation": true,
+      "identity_scale": true,
+      "origin_at_eye_midpoint": true,
+      "frame_width": true,
+      "manifold": true,
+      "no_loose_vertices": true,
+      "has_uvs": true
+    },
+    "glb_roundtrip_triangles": 860
+  },
+  "source": {
+    "generator": "tool/blender_lenses/generate_lenses.py"
+  }
+}

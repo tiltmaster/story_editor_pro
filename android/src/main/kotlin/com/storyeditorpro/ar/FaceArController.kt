@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference
 internal class FaceArController(
     private val context: Context,
     private val modelAssetPath: String,
-    private val meshAssetPath: String,
+    private val meshAssetPaths: Map<String, String>,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler, AutoCloseable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val trackerExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -31,7 +31,10 @@ internal class FaceArController(
     }
     private val supported =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) &&
-            assetExists(modelAssetPath) && assetExists(meshAssetPath)
+            assetExists(modelAssetPath) &&
+            FaceArContract.glassesLensIds.all { lensId ->
+                meshAssetPaths[lensId]?.let(::assetExists) == true
+            }
     private val machine = FaceArStateMachine(supported)
     private val pose = AtomicReference<FacePose?>(null)
     private val smoother = FacePoseSmoother()
@@ -41,6 +44,7 @@ internal class FaceArController(
 
     @Volatile private var settings = FaceArSettings(FaceArContract.LENS_NONE, 1f)
     @Volatile private var tracker: MediaPipeFaceTracker? = null
+    @Volatile private var meshes: Map<String, RuntimeMesh> = emptyMap()
     @Volatile private var eventSink: EventChannel.EventSink? = null
     @Volatile private var overlayEffect: OverlayEffect? = null
     @Volatile private var glThread: HandlerThread? = null
@@ -56,6 +60,10 @@ internal class FaceArController(
                     "maxFaces" to 1,
                     "supports3D" to supported,
                     "supportsRecording" to supported,
+                    "faceTracking" to supported,
+                    "preview" to supported,
+                    "recording" to supported,
+                    "lensIds" to if (supported) FaceArContract.glassesLensIds.toList() else emptyList<String>(),
                 ),
             )
             "prepare" -> {
@@ -84,6 +92,7 @@ internal class FaceArController(
                 } else {
                     try {
                         settings = FaceArSettings.validated(lensId, intensity)
+                        renderer.mesh = meshes[settings.lensId]
                         if (settings.lensId == FaceArContract.LENS_NONE) clearTracking()
                         result.success(null)
                     } catch (_: IllegalArgumentException) {
@@ -154,7 +163,7 @@ internal class FaceArController(
                 val localSettings = settings
                 if (
                     machine.isActive() &&
-                    localSettings.lensId == FaceArContract.LENS_GLASSES_CLASSIC &&
+                    localSettings.lensId in FaceArContract.glassesLensIds &&
                     localPose != null
                 ) {
                     renderer.draw(frame, localPose, localSettings.intensity)
@@ -174,7 +183,9 @@ internal class FaceArController(
                 return@execute
             }
             try {
-                val localMesh = RuntimeMesh.load(context, meshAssetPath)
+                val localMeshes = meshAssetPaths.mapValues { (_, path) ->
+                    RuntimeMesh.load(context, path)
+                }
                 val localTracker = MediaPipeFaceTracker.create(
                     context,
                     modelAssetPath,
@@ -187,7 +198,8 @@ internal class FaceArController(
                     localTracker.close()
                     return@execute
                 }
-                renderer.mesh = localMesh
+                meshes = localMeshes
+                renderer.mesh = localMeshes[settings.lensId]
                 tracker = localTracker
                 emitState(machine.markReady())
             } catch (error: Throwable) {
@@ -227,6 +239,7 @@ internal class FaceArController(
         emitState(machine.reset())
         clearTracking()
         renderer.mesh = null
+        meshes = emptyMap()
         val staleTracker = tracker
         tracker = null
         if (staleTracker != null) {
@@ -287,6 +300,7 @@ internal class FaceArController(
         machine.dispose()
         pose.set(null)
         renderer.mesh = null
+        meshes = emptyMap()
         overlayEffect?.clearOnDrawListener()
         overlayEffect?.close()
         overlayEffect = null

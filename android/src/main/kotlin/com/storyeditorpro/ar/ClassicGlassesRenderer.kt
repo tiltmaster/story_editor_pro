@@ -42,15 +42,12 @@ internal class ClassicGlassesRenderer {
         val roll = atan2(rightY - leftY, rightX - leftX)
         val cosRoll = cos(roll)
         val sinRoll = sin(roll)
-        val cosYaw = cos(pose.yawRadians)
-        val sinYaw = sin(pose.yawRadians)
 
         for (index in localMesh.vertices.indices) {
             val vertex = localMesh.vertices[index]
-            val rotatedX = vertex.x * cosYaw + vertex.z * sinYaw
-            val rotatedZ = -vertex.x * sinYaw + vertex.z * cosYaw
-            val perspective = 3.8f / (3.8f - rotatedZ * 0.34f).coerceAtLeast(1.25f)
-            val x = rotatedX * scale * perspective
+            val rotated = GlassesYawProjection.rotate(vertex, pose.yawRadians)
+            val perspective = 3.8f / (3.8f - rotated.z * 0.34f).coerceAtLeast(1.25f)
+            val x = rotated.x * scale * perspective
             val y = -vertex.y * scale * perspective
             projectedX[index] = centerX + x * cosRoll - y * sinRoll
             projectedY[index] = centerY + x * sinRoll + y * cosRoll

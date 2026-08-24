@@ -196,7 +196,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   bool _nativeBackendSelected = false;
   bool _nativeCameraSuspended = false;
   bool _nativeArPrepared = false;
-  bool _supportsClassicGlasses = false;
+  Set<String> _supportedNativeLensIds = const <String>{};
   int _nativeArSelectionRevision = 0;
 
   bool get _usingNativeCamera =>
@@ -228,7 +228,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   List<StoryFilterPreset> get _cameraPresets =>
       StoryEditorFilters.cameraPresetsFor(
-        supportsClassicGlasses: _supportsClassicGlasses,
+        supportedNativeLensIds: _supportedNativeLensIds,
       );
 
   int get _combinedFilterCount => _cameraPresets.length;
@@ -265,19 +265,31 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Requests all required permissions when story editor is opened
   Future<void> _requestPermissionsAndInitialize() async {
-    final cameraStatus = await Permission.camera.status;
-    final resolvedCameraStatus = cameraStatus.isGranted
-        ? cameraStatus
-        : await Permission.camera.request();
+    PermissionStatus resolvedCameraStatus;
+    try {
+      final cameraStatus = await Permission.camera.status;
+      resolvedCameraStatus = cameraStatus.isGranted
+          ? cameraStatus
+          : await Permission.camera.request();
+    } catch (error) {
+      debugPrint('Camera permission request failed: $error');
+      resolvedCameraStatus = PermissionStatus.denied;
+    }
     if (!mounted) return;
     _hasPermission = resolvedCameraStatus.isGranted;
 
     if (!_hasPermission) {
-      // Inform user if camera permission is denied
-      if (mounted) {
-        setState(() => _isLoading = false);
-        _showPermissionDeniedDialog();
-      }
+      setState(() => _isLoading = false);
+      await CameraPrewarm.discard();
+      if (!mounted) return;
+      // A denied camera can never produce useful content. Leave a pushed
+      // camera route immediately instead of exposing a dead/black preview.
+      // When embedded as a root widget, the inline permission UI remains as a
+      // retry path because there is no route to pop.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _hasPermission) return;
+        Navigator.of(context).maybePop();
+      });
       return;
     }
 
@@ -286,43 +298,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     // Permissions granted, initialize camera
     await _initializeCamera();
-  }
-
-  /// Dialog to show when permission is denied
-  void _showPermissionDeniedDialog() {
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.grey.shade900,
-        title: const Text(
-          'Permission Required',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'We need camera and gallery permissions to create stories. Please grant permission from settings.',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.pop(context);
-            },
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              openAppSettings();
-            },
-            child: const Text('Open Settings'),
-          ),
-        ],
-      ),
-    );
   }
 
   /// Load settings from config
@@ -365,10 +340,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _cameraController = null;
       await Future.wait<void>(<Future<void>>[
         if (flutterController != null)
-          _settleCameraDisposal(
-            'Flutter camera',
-            flutterController.dispose(),
-          ),
+          _settleCameraDisposal('Flutter camera', flutterController.dispose()),
         _settleCameraDisposal('Native AR', _nativeArController.dispose()),
         _settleCameraDisposal(
           'Native camera',
@@ -380,7 +352,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  Future<void> _settleCameraDisposal(String backend, Future<void> future) async {
+  Future<void> _settleCameraDisposal(
+    String backend,
+    Future<void> future,
+  ) async {
     try {
       await future;
     } catch (error) {
@@ -608,9 +583,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Future<void> _resumeNativeCamera() async {
-    if (_routeDisposing ||
-        !_nativeBackendSelected ||
-        !_nativeCameraSuspended) {
+    if (_routeDisposing || !_nativeBackendSelected || !_nativeCameraSuspended) {
       return;
     }
     final facing = _nativeCameraController.facing;
@@ -729,9 +702,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         _activeFilterIndex < _cameraPresets.length &&
         StoryEditorFilters.isNativeLens(_cameraPresets[_activeFilterIndex].id);
     _nativeArPrepared = false;
-    if (!_supportsClassicGlasses && !selectedNativeLens) return;
+    if (_supportedNativeLensIds.isEmpty && !selectedNativeLens) return;
     void update() {
-      _supportsClassicGlasses = false;
+      _supportedNativeLensIds = const <String>{};
       if (selectedNativeLens) _activeFilterIndex = 0;
     }
 
@@ -754,11 +727,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final capabilities = await _nativeArController.getCapabilities();
     if (!mounted || !capabilities.available) return;
 
-    final supportsGlasses = capabilities.supportsLens(
-      NativeArLensIds.classicGlasses,
-    );
-    if (supportsGlasses != _supportsClassicGlasses && mounted) {
-      setState(() => _supportsClassicGlasses = supportsGlasses);
+    final supportedLenses = NativeArLensIds.glasses
+        .where(capabilities.supportsLens)
+        .toSet();
+    final capabilitiesChanged =
+        supportedLenses.length != _supportedNativeLensIds.length ||
+        !supportedLenses.containsAll(_supportedNativeLensIds);
+    if (capabilitiesChanged && mounted) {
+      setState(() => _supportedNativeLensIds = supportedLenses);
     }
 
     // Native prepare is quick and completes its heavy work asynchronously.
@@ -774,7 +750,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final isGlasses = StoryEditorFilters.isNativeLens(_activeFilterId);
     if (isGlasses) {
       final selected = await _nativeArController.setLens(
-        NativeArLensIds.classicGlasses,
+        _activeFilterId,
         intensity: _activeFilterStrength,
       );
       if (revision != _nativeArSelectionRevision || !mounted) return;
@@ -1149,7 +1125,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 builder: (context) => StoryEditorScreen(
                   imagePath: imagePath,
                   primaryColor: widget.primaryColor,
-                  flipHorizontally: _isFrontCameraActive,
+                  // The live selfie preview is mirrored for interaction only;
+                  // native and package-camera captures remain unmirrored.
+                  flipHorizontally: false,
                   initialFilterPreset: _activeFilterId,
                   initialFilterStrength: _activeFilterStrength,
                   initialTextOverlay: pendingOverlay,
@@ -1699,7 +1677,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: videoPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
-                flipHorizontally: _isFrontCameraActive,
+                flipHorizontally: false,
                 initialFilterPreset: _activeFilterId,
                 initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
@@ -1899,7 +1877,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: finalPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
-                flipHorizontally: _isFrontCameraActive,
+                flipHorizontally: false,
                 initialFilterPreset: _activeFilterId,
                 initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
@@ -2150,7 +2128,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: videoPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
-                flipHorizontally: _isFrontCameraActive,
+                flipHorizontally: false,
                 initialFilterPreset: _activeFilterId,
                 initialFilterStrength: _activeFilterStrength,
                 closeFriendsList: widget.closeFriendsList,
@@ -2887,7 +2865,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               scale: scale,
               alignment: Alignment.center,
               child: Center(
-                child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+                child: (isFrontCamera && config.mirrorFrontCameraPreview)
                     ? Transform(
                         alignment: Alignment.center,
                         transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
@@ -2932,7 +2910,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
             const SizedBox(height: 32),
             ElevatedButton(
-              onPressed: _initializeCamera,
+              onPressed: _requestPermissionsAndInitialize,
               style: ElevatedButton.styleFrom(
                 backgroundColor: widget.primaryColor ?? Colors.blue,
                 padding: const EdgeInsets.symmetric(
@@ -3236,7 +3214,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             scale: scale,
             alignment: Alignment.center,
             child: Center(
-              child: (isFrontCamera && !config.mirrorFrontCameraPreview)
+              child: (isFrontCamera && config.mirrorFrontCameraPreview)
                   ? Transform(
                       alignment: Alignment.center,
                       transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),

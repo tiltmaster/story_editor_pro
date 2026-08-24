@@ -7,6 +7,14 @@ import 'package:flutter/services.dart';
 abstract final class NativeArLensIds {
   static const String none = 'none';
   static const String classicGlasses = 'glasses_classic';
+  static const String aviatorGold = 'glasses_aviator_gold';
+  static const String visorCyan = 'glasses_visor_cyan';
+
+  static const Set<String> glasses = <String>{
+    classicGlasses,
+    aviatorGold,
+    visorCyan,
+  };
 }
 
 enum NativeArRuntimeState { disabled, preparing, ready, active, unavailable }
@@ -152,7 +160,7 @@ class NativeArController {
           faceTracking: true,
           preview: true,
           recording: true,
-          lensIds: <String>{NativeArLensIds.classicGlasses},
+          lensIds: NativeArLensIds.glasses,
         );
       } else {
         _capabilities = const NativeArCapabilities.unavailable();

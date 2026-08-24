@@ -6,7 +6,14 @@ internal object FaceArContract {
     const val BACKEND = "mediapipe_camerax_overlay"
     const val LENS_NONE = "none"
     const val LENS_GLASSES_CLASSIC = "glasses_classic"
-    val lensIds = setOf(LENS_NONE, LENS_GLASSES_CLASSIC)
+    const val LENS_GLASSES_AVIATOR_GOLD = "glasses_aviator_gold"
+    const val LENS_GLASSES_VISOR_CYAN = "glasses_visor_cyan"
+    val glassesLensIds = setOf(
+        LENS_GLASSES_CLASSIC,
+        LENS_GLASSES_AVIATOR_GOLD,
+        LENS_GLASSES_VISOR_CYAN,
+    )
+    val lensIds = glassesLensIds + LENS_NONE
 }
 
 internal enum class FaceArState(val wire: String) {

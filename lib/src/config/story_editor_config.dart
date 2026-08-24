@@ -128,7 +128,7 @@ class StoryEditorConfig {
     this.enableHandsFree = true,
     this.enableGradientTextEditor = true,
     this.showGalleryButton = false,
-    this.mirrorFrontCameraPreview = false,
+    this.mirrorFrontCameraPreview = true,
     this.handsFreeDelayOptions = const [3, 5, 10, 15],
     this.defaultHandsFreeDelay = 3,
     this.maxHandsFreeRecordingSeconds = 60,
@@ -198,29 +198,42 @@ class StoryEditorConfig {
       enableBoomerang: enableBoomerang ?? this.enableBoomerang,
       enableCollage: enableCollage ?? this.enableCollage,
       enableHandsFree: enableHandsFree ?? this.enableHandsFree,
-      enableGradientTextEditor: enableGradientTextEditor ?? this.enableGradientTextEditor,
+      enableGradientTextEditor:
+          enableGradientTextEditor ?? this.enableGradientTextEditor,
       showGalleryButton: showGalleryButton ?? this.showGalleryButton,
-      mirrorFrontCameraPreview: mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
-      handsFreeDelayOptions: handsFreeDelayOptions ?? this.handsFreeDelayOptions,
-      defaultHandsFreeDelay: defaultHandsFreeDelay ?? this.defaultHandsFreeDelay,
-      maxHandsFreeRecordingSeconds: maxHandsFreeRecordingSeconds ?? this.maxHandsFreeRecordingSeconds,
-      maxVideoRecordingSeconds: maxVideoRecordingSeconds ?? this.maxVideoRecordingSeconds,
+      mirrorFrontCameraPreview:
+          mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
+      handsFreeDelayOptions:
+          handsFreeDelayOptions ?? this.handsFreeDelayOptions,
+      defaultHandsFreeDelay:
+          defaultHandsFreeDelay ?? this.defaultHandsFreeDelay,
+      maxHandsFreeRecordingSeconds:
+          maxHandsFreeRecordingSeconds ?? this.maxHandsFreeRecordingSeconds,
+      maxVideoRecordingSeconds:
+          maxVideoRecordingSeconds ?? this.maxVideoRecordingSeconds,
       maxBoomerangSeconds: maxBoomerangSeconds ?? this.maxBoomerangSeconds,
       boomerangFps: boomerangFps ?? this.boomerangFps,
       boomerangLoopCount: boomerangLoopCount ?? this.boomerangLoopCount,
-      defaultGradientBalance: defaultGradientBalance ?? this.defaultGradientBalance,
+      defaultGradientBalance:
+          defaultGradientBalance ?? this.defaultGradientBalance,
       // High Priority UI Config
-      recordingIndicatorColor: recordingIndicatorColor ?? this.recordingIndicatorColor,
-      boomerangGradientColors: boomerangGradientColors ?? this.boomerangGradientColors,
+      recordingIndicatorColor:
+          recordingIndicatorColor ?? this.recordingIndicatorColor,
+      boomerangGradientColors:
+          boomerangGradientColors ?? this.boomerangGradientColors,
       storyCanvasWidth: storyCanvasWidth ?? this.storyCanvasWidth,
       storyCanvasHeight: storyCanvasHeight ?? this.storyCanvasHeight,
-      smallScreenBreakpoint: smallScreenBreakpoint ?? this.smallScreenBreakpoint,
-      shutterButtonSizeLarge: shutterButtonSizeLarge ?? this.shutterButtonSizeLarge,
-      shutterButtonSizeSmall: shutterButtonSizeSmall ?? this.shutterButtonSizeSmall,
+      smallScreenBreakpoint:
+          smallScreenBreakpoint ?? this.smallScreenBreakpoint,
+      shutterButtonSizeLarge:
+          shutterButtonSizeLarge ?? this.shutterButtonSizeLarge,
+      shutterButtonSizeSmall:
+          shutterButtonSizeSmall ?? this.shutterButtonSizeSmall,
       galleryPageSize: galleryPageSize ?? this.galleryPageSize,
       // Medium Priority Animation Config
       animationDuration: animationDuration ?? this.animationDuration,
-      savedModalAutoCloseDelay: savedModalAutoCloseDelay ?? this.savedModalAutoCloseDelay,
+      savedModalAutoCloseDelay:
+          savedModalAutoCloseDelay ?? this.savedModalAutoCloseDelay,
       thumbnailSize: thumbnailSize ?? this.thumbnailSize,
       thumbnailQuality: thumbnailQuality ?? this.thumbnailQuality,
       pulseAnimationScale: pulseAnimationScale ?? this.pulseAnimationScale,
@@ -241,13 +254,15 @@ class StoryEditorConfigProvider extends InheritedWidget {
 
   /// Get the config from context
   static StoryEditorConfig of(BuildContext context) {
-    final provider = context.dependOnInheritedWidgetOfExactType<StoryEditorConfigProvider>();
+    final provider = context
+        .dependOnInheritedWidgetOfExactType<StoryEditorConfigProvider>();
     return provider?.config ?? const StoryEditorConfig();
   }
 
   /// Get the config from context without listening to changes
   static StoryEditorConfig read(BuildContext context) {
-    final provider = context.getInheritedWidgetOfExactType<StoryEditorConfigProvider>();
+    final provider = context
+        .getInheritedWidgetOfExactType<StoryEditorConfigProvider>();
     return provider?.config ?? const StoryEditorConfig();
   }
 

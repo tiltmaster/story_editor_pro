@@ -39,6 +39,8 @@ class StoryFilterParams {
 class StoryEditorFilters {
   static const String none = 'none';
   static const String glassesLensId = 'glasses_classic';
+  static const String aviatorGoldLensId = 'glasses_aviator_gold';
+  static const String visorCyanLensId = 'glasses_visor_cyan';
 
   static const List<StoryFilterPreset> presets = [
     StoryFilterPreset(id: 'none', name: 'Normal'),
@@ -69,7 +71,7 @@ class StoryEditorFilters {
     StoryFilterPreset(id: 'velvet', name: 'Velvet'),
   ];
 
-  /// The original color presets plus the single native glasses lens.
+  /// The original color presets plus the authored native glasses lenses.
   ///
   /// The native lens is appended so every existing preset keeps its index and
   /// the camera's slider geometry and snapping behavior remain unchanged.
@@ -78,16 +80,44 @@ class StoryEditorFilters {
     name: 'Classic Glasses',
   );
 
+  static const StoryFilterPreset aviatorGoldLens = StoryFilterPreset(
+    id: aviatorGoldLensId,
+    name: 'Aviator Gold',
+  );
+
+  static const StoryFilterPreset visorCyanLens = StoryFilterPreset(
+    id: visorCyanLensId,
+    name: 'Cyan Visor',
+  );
+
+  static const List<StoryFilterPreset> nativeLensPresets = <StoryFilterPreset>[
+    classicGlassesLens,
+    aviatorGoldLens,
+    visorCyanLens,
+  ];
+
   static const List<StoryFilterPreset> cameraPresets = <StoryFilterPreset>[
     ...presets,
-    classicGlassesLens,
+    ...nativeLensPresets,
   ];
 
   static List<StoryFilterPreset> cameraPresetsFor({
-    required bool supportsClassicGlasses,
-  }) => supportsClassicGlasses ? cameraPresets : presets;
+    bool supportsClassicGlasses = false,
+    Set<String> supportedNativeLensIds = const <String>{},
+  }) {
+    final supported = <String>{
+      ...supportedNativeLensIds,
+      if (supportsClassicGlasses) glassesLensId,
+    };
+    if (supported.isEmpty) return presets;
+    return <StoryFilterPreset>[
+      ...presets,
+      ...nativeLensPresets.where((preset) => supported.contains(preset.id)),
+    ];
+  }
 
-  static bool isNativeLens(String presetId) => presetId == glassesLensId;
+  static bool isNativeLens(String presetId) =>
+      nativeLensPresets.any((preset) => preset.id == presetId);
 
   static StoryFilterParams resolve(String presetId, double strength) {
     final s = strength.clamp(0.0, 1.0);

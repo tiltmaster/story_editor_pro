@@ -25,7 +25,7 @@ void main() {
           'faceTracking': true,
           'preview': true,
           'recording': true,
-          'lensIds': <String>[NativeArLensIds.classicGlasses],
+          'lensIds': NativeArLensIds.glasses.toList(),
         };
       }
       return null;
@@ -36,6 +36,8 @@ void main() {
     final capabilities = await controller.getCapabilities();
     expect(capabilities.available, isTrue);
     expect(capabilities.supportsLens(NativeArLensIds.classicGlasses), isTrue);
+    expect(capabilities.supportsLens(NativeArLensIds.aviatorGold), isTrue);
+    expect(capabilities.supportsLens(NativeArLensIds.visorCyan), isTrue);
 
     await controller.prepare();
     expect(controller.state, NativeArRuntimeState.preparing);

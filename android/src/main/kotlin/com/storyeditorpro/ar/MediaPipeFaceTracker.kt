@@ -3,6 +3,7 @@ package com.storyeditorpro.ar
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.os.SystemClock
 import androidx.camera.core.ImageProxy
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
@@ -14,8 +15,6 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.atan
-import kotlin.math.hypot
 
 internal class MediaPipeFaceTracker private constructor(
     context: Context,
@@ -143,15 +142,12 @@ internal class MediaPipeFaceTracker private constructor(
         val left = average(raw(33), raw(133))
         val right = average(raw(362), raw(263))
         val nose = raw(1)
-        val dx = right.x - left.x
-        val dy = right.y - left.y
-        val eyeDistance = hypot(dx, dy).coerceAtLeast(0.0001f)
-        val midX = (left.x + right.x) * 0.5f
-        val midY = (left.y + right.y) * 0.5f
-        val alongEyeAxis = ((nose.x - midX) * dx + (nose.y - midY) * dy) /
-            (eyeDistance * eyeDistance)
-        val yaw = atan((alongEyeAxis * 2.2f).toDouble()).toFloat().coerceIn(-0.85f, 0.85f)
-        return FacePose(left, right, yaw)
+        return FacePoseEstimator.estimate(
+            left,
+            right,
+            nose,
+            SystemClock.elapsedRealtime(),
+        )
     }
 
     override fun close() {

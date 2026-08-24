@@ -34,6 +34,10 @@ class FaceArSettingsTest {
 
     @Test
     fun acceptsEveryContractLensAtBounds() {
+        assertEquals(
+            setOf("glasses_classic", "glasses_aviator_gold", "glasses_visor_cyan"),
+            FaceArContract.glassesLensIds,
+        )
         for (lens in FaceArContract.lensIds) {
             assertEquals(0f, FaceArSettings.validated(lens, 0).intensity)
             assertEquals(1f, FaceArSettings.validated(lens, 1).intensity)

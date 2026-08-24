@@ -48,6 +48,30 @@ final class FaceARPipelineTests: XCTestCase {
         XCTAssertEqual(result.yawNormalized, -0.2, accuracy: 0.0001)
     }
 
+    func testPoseGeometryIsStableWhenDetectorEyeLabelsReverse() {
+        let left = CGPoint(x: 0.25, y: 0.40)
+        let right = CGPoint(x: 0.75, y: 0.48)
+        let nose = CGPoint(x: 0.53, y: 0.60)
+        let forward = FaceARPoseGeometry.make(firstEye: left, secondEye: right, nose: nose)
+        let reversed = FaceARPoseGeometry.make(firstEye: right, secondEye: left, nose: nose)
+
+        XCTAssertNotNil(forward)
+        XCTAssertEqual(forward, reversed)
+        XCTAssertLessThan(abs(forward!.rollRadians), .pi / 2)
+    }
+
+    func testPoseGeometryProjectsYawAlongRolledEyeAxis() {
+        let pose = FaceARPoseGeometry.make(
+            firstEye: CGPoint(x: 0.30, y: 0.35),
+            secondEye: CGPoint(x: 0.70, y: 0.55),
+            nose: CGPoint(x: 0.54, y: 0.56)
+        )
+
+        XCTAssertNotNil(pose)
+        XCTAssertGreaterThan(pose!.yawNormalized, 0)
+        XCTAssertLessThanOrEqual(abs(pose!.yawNormalized), 1)
+    }
+
     func testPoseSmoothingUsesShortestAngleAcrossPiBoundary() {
         let previous = FaceARPose(center: .zero, eyeDistance: 0.1, rollRadians: .pi - 0.1)
         let next = FaceARPose(center: .zero, eyeDistance: 0.1, rollRadians: -.pi + 0.1)
@@ -76,6 +100,24 @@ final class FaceARPipelineTests: XCTestCase {
         XCTAssertEqual(FaceARCoordinator.operationalState(
             enabled: true, lensId: "glasses_classic", trackerAvailable: true
         ), .active)
+    }
+
+    func testAllAuthoredLensIdentifiersAreAcceptedAndAdvertised() throws {
+        let paths = [
+            "glasses_classic": "/classic.json",
+            "glasses_aviator_gold": "/aviator.json",
+            "glasses_visor_cyan": "/visor.json"
+        ]
+        let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: paths)
+
+        for lensId in paths.keys {
+            XCTAssertNoThrow(try coordinator.setLens(id: lensId, intensity: 1))
+        }
+        XCTAssertThrowsError(try coordinator.setLens(id: "fake_color_preset", intensity: 1))
+        XCTAssertEqual(
+            coordinator.capabilities["lensIds"] as? [String],
+            paths.keys.sorted()
+        )
     }
 
     func testRecordingEncodingContract() {

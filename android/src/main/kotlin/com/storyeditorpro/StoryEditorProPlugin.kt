@@ -48,6 +48,7 @@ class StoryEditorProPlugin :
     private lateinit var context: Context
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
+    private var pendingCameraPermissionResult: Result? = null
     private var pendingAudioPermissionResult: Result? = null
     private lateinit var textureRegistry: TextureRegistry
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -85,11 +86,21 @@ class StoryEditorProPlugin :
             flutterAssets,
             "assets/ar/models/face_landmarker.task",
         )
-        val meshAssetPath = resolveFlutterAsset(
-            flutterAssets,
-            "assets/ar/glasses_classic/runtime_mesh.json",
+        val meshAssetPaths = mapOf(
+            FaceArContract.LENS_GLASSES_CLASSIC to resolveFlutterAsset(
+                flutterAssets,
+                "assets/ar/glasses_classic/runtime_mesh.json",
+            ),
+            FaceArContract.LENS_GLASSES_AVIATOR_GOLD to resolveFlutterAsset(
+                flutterAssets,
+                "assets/ar/glasses_aviator_gold/runtime_mesh.json",
+            ),
+            FaceArContract.LENS_GLASSES_VISOR_CYAN to resolveFlutterAsset(
+                flutterAssets,
+                "assets/ar/glasses_visor_cyan/runtime_mesh.json",
+            ),
         )
-        arController = FaceArController(context, modelAssetPath, meshAssetPath)
+        arController = FaceArController(context, modelAssetPath, meshAssetPaths)
         arMethodChannel = MethodChannel(
             flutterPluginBinding.binaryMessenger,
             FaceArContract.METHOD_CHANNEL,
@@ -255,13 +266,30 @@ class StoryEditorProPlugin :
     }
 
     private fun requestPermission(result: Result) {
+        if (
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.CAMERA,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true)
+            return
+        }
+        if (pendingCameraPermissionResult != null) {
+            result.error(
+                "PERMISSION_REQUEST_IN_PROGRESS",
+                "A camera permission request is already in progress",
+                null,
+            )
+            return
+        }
         activity?.let {
+            pendingCameraPermissionResult = result
             ActivityCompat.requestPermissions(
                 it,
                 arrayOf(android.Manifest.permission.CAMERA),
                 CAMERA_PERMISSION_REQUEST_CODE
             )
-            result.success(true)
         } ?: result.error("NO_ACTIVITY", "Activity not available", null)
     }
 
@@ -307,6 +335,14 @@ class StoryEditorProPlugin :
         permissions: Array<out String>,
         grantResults: IntArray,
     ): Boolean {
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            val pending = pendingCameraPermissionResult ?: return false
+            pendingCameraPermissionResult = null
+            val granted = grantResults.isNotEmpty() &&
+                grantResults.first() == PackageManager.PERMISSION_GRANTED
+            pending.success(granted)
+            return true
+        }
         if (requestCode != AUDIO_PERMISSION_REQUEST_CODE) return false
         val pending = pendingAudioPermissionResult ?: return false
         pendingAudioPermissionResult = null
@@ -348,6 +384,19 @@ class StoryEditorProPlugin :
     }
 
     private fun initializeCamera(call: MethodCall, result: Result) {
+        if (
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.CAMERA,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            result.error(
+                "CAMERA_PERMISSION_DENIED",
+                "Camera permission must be granted before initialization",
+                null,
+            )
+            return
+        }
         val facing = call.argument<String>("facing") ?: "back"
         val requestedLensFacing = if (facing == "front") {
             CameraSelector.LENS_FACING_FRONT
@@ -546,10 +595,6 @@ class StoryEditorProPlugin :
                 ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
                 ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
                 ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
-            }
-
-            if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                matrix.preScale(-1f, 1f)
             }
 
             val rotatedBitmap = Bitmap.createBitmap(
@@ -866,6 +911,12 @@ class StoryEditorProPlugin :
             null,
         )
         pendingAudioPermissionResult = null
+        pendingCameraPermissionResult?.error(
+            "PLUGIN_DETACHED",
+            "Plugin detached while camera permission was pending",
+            null,
+        )
+        pendingCameraPermissionResult = null
         arController.close()
     }
 
@@ -891,6 +942,12 @@ class StoryEditorProPlugin :
         activityBinding?.removeRequestPermissionsResultListener(this)
         activityBinding = null
         activity = null
+        pendingCameraPermissionResult?.error(
+            "NO_ACTIVITY",
+            "Activity detached while camera permission was pending",
+            null,
+        )
+        pendingCameraPermissionResult = null
         pendingAudioPermissionResult?.error(
             "NO_ACTIVITY",
             "Activity detached while microphone permission was pending",

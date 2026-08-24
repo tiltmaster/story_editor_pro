@@ -60,6 +60,8 @@ flutter:
     - assets/props/
     - assets/word_art/
     - assets/ar/glasses_classic/
+    - assets/ar/glasses_aviator_gold/
+    - assets/ar/glasses_visor_cyan/
     - assets/ar/models/
 
   shaders:
