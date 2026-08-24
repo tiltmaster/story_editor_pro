@@ -70,6 +70,19 @@ class StoryEditorStrings {
   final String cameraLensClassicGlasses;
   final String cameraLensClassicGlassesArabic;
 
+  // Legacy host-app localization inputs retained for source compatibility.
+  // These labels do not add presets; the only native AR lens exposed by the
+  // editor remains [cameraLensClassicGlasses].
+  final String cameraFilterArGolden;
+  final String cameraFilterArFrost;
+  final String cameraFilterArNeon;
+  final String cameraFilterArNoir;
+  final String cameraFilterArPrism;
+  final String cameraFilterArRetro;
+  final String cameraFilterArStargaze;
+  final String cameraFilterArGlasses;
+  final String cameraGlassesPhotoOnly;
+
   // ============ Gradient Text Editor ============
   final String gradientBalance;
   final String gradientWriteSomething;
@@ -194,6 +207,15 @@ class StoryEditorStrings {
     this.cameraFilterPastelMist = 'Pastel Mist',
     this.cameraLensClassicGlasses = 'Classic Glasses',
     this.cameraLensClassicGlassesArabic = 'نظارات كلاسيكية',
+    this.cameraFilterArGolden = 'Golden',
+    this.cameraFilterArFrost = 'Frost',
+    this.cameraFilterArNeon = 'Neon',
+    this.cameraFilterArNoir = 'Noir',
+    this.cameraFilterArPrism = 'Prism',
+    this.cameraFilterArRetro = 'Retro',
+    this.cameraFilterArStargaze = 'Stargaze',
+    this.cameraFilterArGlasses = 'Glasses',
+    this.cameraGlassesPhotoOnly = 'Available for photos only',
 
     // ─────────────────────────────────────────────────────────────
     // Gradient Text Editor
