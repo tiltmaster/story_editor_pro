@@ -69,6 +69,10 @@ class StoryEditorFilters {
     StoryFilterPreset(id: 'moody', name: 'Moody'),
     StoryFilterPreset(id: 'bleach', name: 'Bleach'),
     StoryFilterPreset(id: 'velvet', name: 'Velvet'),
+    StoryFilterPreset(id: 'softbeauty', name: 'Soft Beauty'),
+    StoryFilterPreset(id: 'cleanglow', name: 'Clean Glow'),
+    StoryFilterPreset(id: 'vhs1993', name: 'VHS 1993'),
+    StoryFilterPreset(id: 'kuwaitgold', name: 'Kuwait Gold'),
   ];
 
   /// The original color presets plus the authored native glasses lenses.
@@ -374,6 +378,46 @@ class StoryEditorFilters {
           blue: 1.14,
         );
         break;
+      case 'softbeauty':
+        target = const StoryFilterParams(
+          brightness: 0.045,
+          contrast: 0.96,
+          saturation: 1.04,
+          red: 1.06,
+          green: 1.015,
+          blue: 0.985,
+        );
+        break;
+      case 'cleanglow':
+        target = const StoryFilterParams(
+          brightness: 0.065,
+          contrast: 1.02,
+          saturation: 1.08,
+          red: 1.035,
+          green: 1.02,
+          blue: 1.0,
+        );
+        break;
+      case 'vhs1993':
+        target = const StoryFilterParams(
+          brightness: 0.025,
+          contrast: 1.08,
+          saturation: 0.78,
+          red: 1.08,
+          green: 1.0,
+          blue: 0.88,
+        );
+        break;
+      case 'kuwaitgold':
+        target = const StoryFilterParams(
+          brightness: 0.045,
+          contrast: 1.10,
+          saturation: 1.16,
+          red: 1.18,
+          green: 1.065,
+          blue: 0.82,
+        );
+        break;
       case 'none':
       default:
         target = StoryFilterParams.neutral;
@@ -451,6 +495,12 @@ class StoryEditorFilters {
       case 'velvet':
         target = 0.16;
         break;
+      case 'vhs1993':
+        target = 0.24;
+        break;
+      case 'kuwaitgold':
+        target = 0.12;
+        break;
       default:
         return 0.0;
     }
@@ -521,6 +571,15 @@ class StoryEditorFilters {
       case 'velvet':
         target = 0.40;
         break;
+      case 'cleanglow':
+        target = 0.12;
+        break;
+      case 'vhs1993':
+        target = 0.18;
+        break;
+      case 'kuwaitgold':
+        target = 0.22;
+        break;
       default:
         return 0.0; // fade, dream, pastelmist, arctic, rosegold, bleach, none
     }
@@ -579,6 +638,14 @@ class StoryEditorFilters {
         return const Color(0xFFE8E8E8);
       case 'velvet':
         return const Color(0xFFC77DFF);
+      case 'softbeauty':
+        return const Color(0xFFFFD9CC);
+      case 'cleanglow':
+        return const Color(0xFFFFEEE7);
+      case 'vhs1993':
+        return const Color(0xFFC8A888);
+      case 'kuwaitgold':
+        return const Color(0xFFD5A33D);
       case 'none':
       default:
         return const Color(0xFFFFFFFF);
@@ -643,6 +710,28 @@ class StoryEditorFilters {
       0,
     ];
   }
+
+  /// Skin-aware smoothing strength used by the GPU preview and native export.
+  /// This is intentionally conservative: pores remain visible and only
+  /// skin-like chroma is blended with a small bilateral neighbourhood.
+  static double beautyStrength(String presetId, double strength) {
+    final s = strength.clamp(0.0, 1.0);
+    switch (presetId) {
+      case 'softbeauty':
+        return 0.42 * s;
+      case 'cleanglow':
+        return 0.24 * s;
+      default:
+        return 0.0;
+    }
+  }
+
+  /// VHS treatment strength. A dedicated shader path adds scanlines, subtle
+  /// chroma displacement, and deterministic grain without network assets.
+  static double vhsStrength(String presetId, double strength) =>
+      presetId == 'vhs1993' ? 0.72 * strength.clamp(0.0, 1.0) : 0.0;
+
+  static bool addsVhsTimestamp(String presetId) => presetId == 'vhs1993';
 
   static double _lerp(double a, double b, double t) => a + (b - a) * t;
 

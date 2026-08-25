@@ -24,6 +24,15 @@ class VideoOverlayExportService {
   /// The original (pre-filter) video path for use as an instant preview placeholder.
   static String? get pendingExportRawVideoPath => _pendingExportRawVideoPath;
 
+  static void validateTrimRange(int trimStartMs, int trimEndMs) {
+    if (trimStartMs < 0 || trimEndMs < 0) {
+      throw ArgumentError('Video trim values cannot be negative.');
+    }
+    if (trimEndMs > 0 && trimEndMs <= trimStartMs) {
+      throw ArgumentError('Video trim end must be after its start.');
+    }
+  }
+
   /// Export video with overlay PNG baked in.
   ///
   /// [videoPath]: Original video file path
@@ -42,7 +51,10 @@ class VideoOverlayExportService {
     String filterPreset = 'none',
     double filterStrength = 1.0,
     bool shouldMuteAudio = false,
+    int trimStartMs = 0,
+    int trimEndMs = 0,
   }) async {
+    validateTrimRange(trimStartMs, trimEndMs);
     _lastExportError = null;
     File? overlayFile;
     try {
@@ -72,6 +84,8 @@ class VideoOverlayExportService {
             'filterPreset': filterPreset,
             'filterStrength': filterStrength,
             'shouldMuteAudio': shouldMuteAudio,
+            'trimStartMs': trimStartMs,
+            'trimEndMs': trimEndMs,
           });
 
       if (result != null) {
@@ -100,8 +114,8 @@ class VideoOverlayExportService {
           : details;
       debugPrint('VideoOverlayProcessor: Platform error: $_lastExportError');
       return null;
-    } catch (e) {
-      _lastExportError = e.toString();
+    } catch (_) {
+      _lastExportError = 'Unexpected video export failure.';
       debugPrint('VideoOverlayProcessor: Error: $_lastExportError');
       return null;
     } finally {
@@ -124,7 +138,10 @@ class VideoOverlayExportService {
     String filterPreset = 'none',
     double filterStrength = 1.0,
     bool shouldMuteAudio = false,
+    int trimStartMs = 0,
+    int trimEndMs = 0,
   }) async {
+    validateTrimRange(trimStartMs, trimEndMs);
     _lastExportError = null;
     final tempDir = await getTemporaryDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -152,6 +169,8 @@ class VideoOverlayExportService {
       filterPreset: filterPreset,
       filterStrength: filterStrength,
       shouldMuteAudio: shouldMuteAudio,
+      trimStartMs: trimStartMs,
+      trimEndMs: trimEndMs,
     );
 
     return outputPath;
@@ -168,6 +187,8 @@ class VideoOverlayExportService {
     required String filterPreset,
     required double filterStrength,
     required bool shouldMuteAudio,
+    required int trimStartMs,
+    required int trimEndMs,
   }) async {
     try {
       final result = await _channel
@@ -182,6 +203,8 @@ class VideoOverlayExportService {
             'filterPreset': filterPreset,
             'filterStrength': filterStrength,
             'shouldMuteAudio': shouldMuteAudio,
+            'trimStartMs': trimStartMs,
+            'trimEndMs': trimEndMs,
           });
       if (result != null && await File(result).exists()) {
         debugPrint('VideoOverlayProcessor: Background export completed');
@@ -195,8 +218,8 @@ class VideoOverlayExportService {
         'VideoOverlayProcessor: Background export failed: $_lastExportError',
       );
       return null;
-    } catch (e) {
-      _lastExportError = e.toString();
+    } catch (_) {
+      _lastExportError = 'Unexpected video export failure.';
       debugPrint(
         'VideoOverlayProcessor: Background export error: $_lastExportError',
       );

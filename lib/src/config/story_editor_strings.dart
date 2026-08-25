@@ -67,6 +67,18 @@ class StoryEditorStrings {
   final String cameraFilterProductCrisp;
   final String cameraFilterFilmicFade;
   final String cameraFilterPastelMist;
+  final String cameraFilterGoldenHour;
+  final String cameraFilterArctic;
+  final String cameraFilterSepia;
+  final String cameraFilterEmerald;
+  final String cameraFilterRoseGold;
+  final String cameraFilterMoody;
+  final String cameraFilterBleach;
+  final String cameraFilterVelvet;
+  final String cameraFilterSoftBeauty;
+  final String cameraFilterCleanGlow;
+  final String cameraFilterVhs1993;
+  final String cameraFilterKuwaitGold;
   final String cameraLensClassicGlasses;
   final String cameraLensClassicGlassesArabic;
   final String cameraLensAviatorGold;
@@ -117,6 +129,10 @@ class StoryEditorStrings {
   final String editorDeleteLayer;
   final String editorDone;
   final String editorCancel;
+  final String editorApply;
+  final String editorTrimVideo;
+  final String editorAddMusic;
+  final String editorChangeMusic;
 
   // ============ Story Editor - Smart Tags ============
   final String editorSmartSection;
@@ -209,6 +225,18 @@ class StoryEditorStrings {
     this.cameraFilterProductCrisp = 'Product Crisp',
     this.cameraFilterFilmicFade = 'Filmic Fade',
     this.cameraFilterPastelMist = 'Pastel Mist',
+    this.cameraFilterGoldenHour = 'Golden Hour',
+    this.cameraFilterArctic = 'Arctic',
+    this.cameraFilterSepia = 'Sepia',
+    this.cameraFilterEmerald = 'Emerald',
+    this.cameraFilterRoseGold = 'Rose Gold',
+    this.cameraFilterMoody = 'Moody',
+    this.cameraFilterBleach = 'Bleach',
+    this.cameraFilterVelvet = 'Velvet',
+    this.cameraFilterSoftBeauty = 'Soft Beauty',
+    this.cameraFilterCleanGlow = 'Clean Glow',
+    this.cameraFilterVhs1993 = 'VHS 1993',
+    this.cameraFilterKuwaitGold = 'Kuwait Gold',
     this.cameraLensClassicGlasses = 'Classic Glasses',
     this.cameraLensClassicGlassesArabic = 'نظارات كلاسيكية',
     this.cameraLensAviatorGold = 'Aviator Gold',
@@ -259,6 +287,10 @@ class StoryEditorStrings {
     this.editorDeleteLayer = 'Delete layer',
     this.editorDone = 'Done',
     this.editorCancel = 'Cancel',
+    this.editorApply = 'Apply',
+    this.editorTrimVideo = 'Trim video',
+    this.editorAddMusic = 'Add music',
+    this.editorChangeMusic = 'Change music',
 
     // ─────────────────────────────────────────────────────────────
     // Story Editor - Smart Tags
@@ -352,6 +384,30 @@ class StoryEditorStrings {
         return cameraFilterFilmicFade;
       case 'pastelmist':
         return cameraFilterPastelMist;
+      case 'goldenhour':
+        return cameraFilterGoldenHour;
+      case 'arctic':
+        return cameraFilterArctic;
+      case 'sepia':
+        return cameraFilterSepia;
+      case 'emerald':
+        return cameraFilterEmerald;
+      case 'rosegold':
+        return cameraFilterRoseGold;
+      case 'moody':
+        return cameraFilterMoody;
+      case 'bleach':
+        return cameraFilterBleach;
+      case 'velvet':
+        return cameraFilterVelvet;
+      case 'softbeauty':
+        return cameraFilterSoftBeauty;
+      case 'cleanglow':
+        return cameraFilterCleanGlow;
+      case 'vhs1993':
+        return cameraFilterVhs1993;
+      case 'kuwaitgold':
+        return cameraFilterKuwaitGold;
       case 'none':
       default:
         return cameraFilterNormal;

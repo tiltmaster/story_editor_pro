@@ -4,6 +4,26 @@ import 'story_editor_theme.dart';
 import 'story_editor_fonts.dart';
 import 'story_editor_settings.dart';
 
+/// Host-owned music selection returned to the editor.
+///
+/// The package deliberately stores metadata only. Authentication, rights
+/// checks, uploads, and signed playback URLs stay inside the host app.
+class StoryEditorMusicSelection {
+  final String id;
+  final String title;
+  final String? artist;
+  final int startMs;
+  final int? durationMs;
+
+  const StoryEditorMusicSelection({
+    required this.id,
+    required this.title,
+    this.artist,
+    this.startMs = 0,
+    this.durationMs,
+  });
+}
+
 /// Main configuration class for Story Editor Pro
 /// Pass this to StoryEditorConfigProvider to customize the entire plugin
 class StoryEditorConfig {
@@ -38,6 +58,11 @@ class StoryEditorConfig {
 
   /// Mirror front camera preview like selfie camera (default: true)
   final bool mirrorFrontCameraPreview;
+
+  /// Opens the host application's authenticated, rights-gated music picker.
+  /// Null hides the editor music control.
+  final Future<StoryEditorMusicSelection?> Function(BuildContext context)?
+  onPickMusic;
 
   // ============ Hands-Free Configuration ============
 
@@ -129,6 +154,7 @@ class StoryEditorConfig {
     this.enableGradientTextEditor = true,
     this.showGalleryButton = false,
     this.mirrorFrontCameraPreview = true,
+    this.onPickMusic,
     this.handsFreeDelayOptions = const [3, 5, 10, 15],
     this.defaultHandsFreeDelay = 3,
     this.maxHandsFreeRecordingSeconds = 60,
@@ -166,6 +192,8 @@ class StoryEditorConfig {
     bool? enableGradientTextEditor,
     bool? showGalleryButton,
     bool? mirrorFrontCameraPreview,
+    Future<StoryEditorMusicSelection?> Function(BuildContext context)?
+    onPickMusic,
     List<int>? handsFreeDelayOptions,
     int? defaultHandsFreeDelay,
     int? maxHandsFreeRecordingSeconds,
@@ -203,6 +231,7 @@ class StoryEditorConfig {
       showGalleryButton: showGalleryButton ?? this.showGalleryButton,
       mirrorFrontCameraPreview:
           mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
+      onPickMusic: onPickMusic ?? this.onPickMusic,
       handsFreeDelayOptions:
           handsFreeDelayOptions ?? this.handsFreeDelayOptions,
       defaultHandsFreeDelay:

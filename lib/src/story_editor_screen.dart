@@ -19,19 +19,16 @@ import 'config/story_editor_config.dart';
 import 'config/story_editor_filters.dart';
 
 /// Media type - photo or video
-enum MediaType {
-  image,
-  video,
-}
+enum MediaType { image, video }
 
 /// Brush types
 enum BrushType {
-  normal,     // Normal straight line
-  arrow,      // Arrow tip
-  marker,     // Broken/marker tip
-  glow,       // Glow effect (neon)
-  eraser,     // Eraser
-  chalk,      // Chalk
+  normal, // Normal straight line
+  arrow, // Arrow tip
+  marker, // Broken/marker tip
+  glow, // Glow effect (neon)
+  eraser, // Eraser
+  chalk, // Chalk
 }
 
 class StoryEditorScreen extends StatefulWidget {
@@ -111,10 +108,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
   bool _isMuted = false;
+  int _trimStartMs = 0;
+  int _trimEndMs = 0;
+  bool _isEnforcingTrim = false;
   late MediaType _mediaType;
+  StoryEditorMusicSelection? _selectedMusic;
 
   // GPU filter shader — loaded once, used by BackdropFilter for pixel-accurate preview
-  ui.FragmentShader?  _filterShader;
+  ui.FragmentShader? _filterShader;
 
   // Close friends selection
   final Set<CloseFriend> _selectedCloseFriends = {};
@@ -155,6 +156,43 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }
 
     _loadFilterShader();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _installPresetOverlays();
+    });
+  }
+
+  Future<void> _installPresetOverlays() async {
+    if (!mounted) return;
+    if (StoryEditorFilters.addsVhsTimestamp(widget.initialFilterPreset)) {
+      final locale = Localizations.maybeLocaleOf(context)?.toString() ?? 'en';
+      final data = await captureStickerData(SmartStickerType.vhs, locale);
+      if (!mounted) return;
+      setState(() {
+        _smartStickers.add(
+          SmartStickerOverlay(
+            type: SmartStickerType.vhs,
+            data: data,
+            offset: const Offset(24, 92),
+            scale: 0.8,
+          ),
+        );
+      });
+    } else if (widget.initialFilterPreset == 'kuwaitgold') {
+      setState(() {
+        _smartStickers.add(
+          SmartStickerOverlay(
+            type: SmartStickerType.location,
+            skin: 2,
+            data: const {'name': 'KUWAIT'},
+            offset: Offset(
+              MediaQuery.of(context).size.width * 0.29,
+              MediaQuery.of(context).size.height * 0.72,
+            ),
+            scale: 0.9,
+          ),
+        );
+      });
+    }
   }
 
   /// Loads the GLSL fragment shader that applies colour matrix + S-curve + vignette.
@@ -167,7 +205,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _filterShader  = program.fragmentShader();
+        _filterShader = program.fragmentShader();
       });
     } catch (e) {
       debugPrint('StoryEditorScreen: shader load failed — $e');
@@ -178,27 +216,53 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// Uploads uniforms to the shader for the current preset/strength and canvas size.
   /// Called each build from within LayoutBuilder so the size is always up to date.
   void _applyShaderUniforms(Size size) {
-    final m    = StoryEditorFilters.matrix(
-        widget.initialFilterPreset, widget.initialFilterStrength);
+    final m = StoryEditorFilters.matrix(
+      widget.initialFilterPreset,
+      widget.initialFilterStrength,
+    );
     // m[4] is Flutter's bias in 0-255 space; shader operates in 0-1 space
     final bias = m[4] / 255.0;
     _filterShader!
-      ..setFloat(0,  size.width)
-      ..setFloat(1,  size.height)
-      ..setFloat(2,  m[0])   // uMatRow0.x = r0
-      ..setFloat(3,  m[1])   // uMatRow0.y = r1
-      ..setFloat(4,  m[2])   // uMatRow0.z = r2
-      ..setFloat(5,  m[5])   // uMatRow1.x = g0
-      ..setFloat(6,  m[6])   // uMatRow1.y = g1
-      ..setFloat(7,  m[7])   // uMatRow1.z = g2
-      ..setFloat(8,  m[10])  // uMatRow2.x = b0
-      ..setFloat(9,  m[11])  // uMatRow2.y = b1
-      ..setFloat(10, m[12])  // uMatRow2.z = b2
+      ..setFloat(0, size.width)
+      ..setFloat(1, size.height)
+      ..setFloat(2, m[0]) // uMatRow0.x = r0
+      ..setFloat(3, m[1]) // uMatRow0.y = r1
+      ..setFloat(4, m[2]) // uMatRow0.z = r2
+      ..setFloat(5, m[5]) // uMatRow1.x = g0
+      ..setFloat(6, m[6]) // uMatRow1.y = g1
+      ..setFloat(7, m[7]) // uMatRow1.z = g2
+      ..setFloat(8, m[10]) // uMatRow2.x = b0
+      ..setFloat(9, m[11]) // uMatRow2.y = b1
+      ..setFloat(10, m[12]) // uMatRow2.z = b2
       ..setFloat(11, bias)
-      ..setFloat(12, StoryEditorFilters.sCurveStrength(
-          widget.initialFilterPreset, widget.initialFilterStrength))
-      ..setFloat(13, StoryEditorFilters.vignetteStrength(
-          widget.initialFilterPreset, widget.initialFilterStrength));
+      ..setFloat(
+        12,
+        StoryEditorFilters.sCurveStrength(
+          widget.initialFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        13,
+        StoryEditorFilters.vignetteStrength(
+          widget.initialFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        14,
+        StoryEditorFilters.beautyStrength(
+          widget.initialFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        15,
+        StoryEditorFilters.vhsStrength(
+          widget.initialFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      );
   }
 
   /// Add initial text overlay positioned at the exact center of the screen
@@ -233,9 +297,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     final centerY = topOffset + (availableHeight - totalHeight) / 2;
 
     setState(() {
-      _textOverlays.add(overlay.copyWith(
-        offset: Offset(centerX, centerY),
-      ));
+      _textOverlays.add(overlay.copyWith(offset: Offset(centerX, centerY)));
     });
   }
 
@@ -253,6 +315,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     _videoController = VideoPlayerController.file(File(widget.mediaPath));
     try {
       await _videoController!.initialize();
+      _trimEndMs = _videoController!.value.duration.inMilliseconds;
+      _videoController!.addListener(_enforceTrimPlaybackRange);
       _videoController!.setLooping(true);
       _videoController!.play();
       _videoController!.setVolume(_isMuted ? 0.0 : 1.0);
@@ -263,6 +327,19 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       }
     } catch (e) {
       debugPrint('Video init error: $e');
+    }
+  }
+
+  void _enforceTrimPlaybackRange() {
+    final controller = _videoController;
+    if (controller == null || _trimEndMs <= _trimStartMs || _isEnforcingTrim) {
+      return;
+    }
+    if (controller.value.position.inMilliseconds >= _trimEndMs) {
+      _isEnforcingTrim = true;
+      controller.seekTo(Duration(milliseconds: _trimStartMs)).whenComplete(() {
+        _isEnforcingTrim = false;
+      });
     }
   }
 
@@ -287,7 +364,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   double _brushSize = 5.0;
   BrushType _currentBrushType = BrushType.normal;
   DrawingPath? _currentPath;
-  int _drawingCountBeforeSession = 0; // Drawing count before entering drawing mode
+  int _drawingCountBeforeSession =
+      0; // Drawing count before entering drawing mode
 
   // State variables for text overlay dragging and scaling
   int? _draggingTextIndex;
@@ -344,152 +422,160 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       child: Scaffold(
         backgroundColor: Colors.black,
         body: Column(
-        children: [
-          // Status bar area - black
-          Container(
-            height: statusBarHeight,
-            color: Colors.black,
-          ),
-          // Remaining area
-          Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Image area - rounded corners
-                ClipRRect(
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Black background
-                      Container(color: Colors.black),
-                      // RepaintBoundary - full frame capture (for image export)
-                      RepaintBoundary(
-                        key: _repaintKey,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            // Background media (photo or video)
-                            Transform.translate(
-                              offset: _bgImageOffset,
-                              child: Transform.scale(
-                                scale: _bgImageScale,
-                                child: _buildBackgroundMedia(),
+          children: [
+            // Status bar area - black
+            Container(height: statusBarHeight, color: Colors.black),
+            // Remaining area
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Image area - rounded corners
+                  ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Black background
+                        Container(color: Colors.black),
+                        // RepaintBoundary - full frame capture (for image export)
+                        RepaintBoundary(
+                          key: _repaintKey,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              // Background media (photo or video)
+                              Transform.translate(
+                                offset: _bgImageOffset,
+                                child: Transform.scale(
+                                  scale: _bgImageScale,
+                                  child: _buildBackgroundMedia(),
+                                ),
                               ),
-                            ),
-                            // Overlay-only RepaintBoundary (transparent, for video export)
-                            RepaintBoundary(
-                              key: _overlayRepaintKey,
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  // Image overlays + smart stickers rebuild via
-                                  // _overlayTick during drags (cheap, scoped) —
-                                  // see _bumpOverlays().
-                                  ValueListenableBuilder<int>(
-                                    valueListenable: _overlayTick,
-                                    builder: (_, __, ___) => Stack(
-                                      fit: StackFit.expand,
-                                      children: [
-                                        ..._buildImageOverlays(),
-                                        // Smart stickers (time/date/location/…)
-                                        // — gesture-enabled single copies inside
-                                        // the boundary so they bake into image
-                                        // AND video exports automatically.
-                                        ..._buildSmartStickers(),
-                                      ],
-                                    ),
-                                  ),
-                                  // Text overlays visual copy inside RepaintBoundary for export
-                                  if (!_isTextEditing) ..._buildTextOverlaysForExport(),
-                                  // Drawing on top of text/image overlays.
-                                  // IgnorePointer is CRITICAL: a CustomPaint
-                                  // with a painter hit-tests as opaque over its
-                                  // whole area (CustomPainter.hitTest defaults
-                                  // to "hit"), and a Stack stops at the first
-                                  // child that claims a touch — without this,
-                                  // the full-canvas drawing layer swallows every
-                                  // gesture before it reaches the sticker/image
-                                  // overlays below.
-                                  IgnorePointer(
-                                    child: ClipRect(
-                                      child: CustomPaint(
-                                        painter: DrawingPainter(paths: _drawings),
-                                        size: Size.infinite,
-                                        isComplex: true,
-                                        willChange: true,
+                              // Overlay-only RepaintBoundary (transparent, for video export)
+                              RepaintBoundary(
+                                key: _overlayRepaintKey,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    // Image overlays + smart stickers rebuild via
+                                    // _overlayTick during drags (cheap, scoped) —
+                                    // see _bumpOverlays().
+                                    ValueListenableBuilder<int>(
+                                      valueListenable: _overlayTick,
+                                      builder: (_, __, ___) => Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          ..._buildImageOverlays(),
+                                          // Smart stickers (time/date/location/…)
+                                          // — gesture-enabled single copies inside
+                                          // the boundary so they bake into image
+                                          // AND video exports automatically.
+                                          ..._buildSmartStickers(),
+                                        ],
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    // Text overlays visual copy inside RepaintBoundary for export
+                                    if (!_isTextEditing)
+                                      ..._buildTextOverlaysForExport(),
+                                    // Drawing on top of text/image overlays.
+                                    // IgnorePointer is CRITICAL: a CustomPaint
+                                    // with a painter hit-tests as opaque over its
+                                    // whole area (CustomPainter.hitTest defaults
+                                    // to "hit"), and a Stack stops at the first
+                                    // child that claims a touch — without this,
+                                    // the full-canvas drawing layer swallows every
+                                    // gesture before it reaches the sticker/image
+                                    // overlays below.
+                                    IgnorePointer(
+                                      child: ClipRect(
+                                        child: CustomPaint(
+                                          painter: DrawingPainter(
+                                            paths: _drawings,
+                                          ),
+                                          size: Size.infinite,
+                                          isComplex: true,
+                                          willChange: true,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // All interactive layers disabled during save/share
+                  if (!_isSaving) ...[
+                    // Background image gesture handler - always active (works with two fingers)
+                    _buildBackgroundImageGesture(),
+                    // Text overlays - interactive (with gestures)
+                    if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
+                    // Drawing always rendered on top of text overlays (visual only, no gestures)
+                    if (!_isDrawing && _drawings.isNotEmpty)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: ClipRect(
+                            child: CustomPaint(
+                              painter: DrawingPainter(paths: _drawings),
+                              size: Size.infinite,
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                // All interactive layers disabled during save/share
-                if (!_isSaving) ...[
-                  // Background image gesture handler - always active (works with two fingers)
-                  _buildBackgroundImageGesture(),
-                  // Text overlays - interactive (with gestures)
-                  if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
-                  // Drawing always rendered on top of text overlays (visual only, no gestures)
-                  if (!_isDrawing && _drawings.isNotEmpty)
+                    // Drawing layer with gesture input (drawing mode only)
+                    if (_isDrawing) _buildDrawingLayer(),
+                    if (!_isTextEditing && !_isDrawing) _buildTopControls(),
+                    if (!_isTextEditing && !_isDrawing) _buildBottomControls(),
+                    if (_isDrawing) _buildDrawingTools(),
+                    if (_isDrawing) _buildDrawingTopBar(),
+                    if (_isDrawing && _isSliding) _buildBrushSizePreview(),
+                  ],
+                  // Saving/Sharing indicator overlay
+                  if (_isSaving)
                     Positioned.fill(
-                      child: IgnorePointer(
-                        child: ClipRect(
-                          child: CustomPaint(
-                            painter: DrawingPainter(paths: _drawings),
-                            size: Size.infinite,
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const CircularProgressIndicator(
+                                color: Colors.white,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _isSharing
+                                    ? context
+                                          .storyEditorConfig
+                                          .strings
+                                          .editorSharing
+                                    : context
+                                          .storyEditorConfig
+                                          .strings
+                                          .editorSaving,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                  // Drawing layer with gesture input (drawing mode only)
-                  if (_isDrawing) _buildDrawingLayer(),
-                  if (!_isTextEditing && !_isDrawing) _buildTopControls(),
-                  if (!_isTextEditing && !_isDrawing) _buildBottomControls(),
-                  if (_isDrawing) _buildDrawingTools(),
-                  if (_isDrawing) _buildDrawingTopBar(),
-                  if (_isDrawing && _isSliding) _buildBrushSizePreview(),
                 ],
-                // Saving/Sharing indicator overlay
-                if (_isSaving)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const CircularProgressIndicator(color: Colors.white),
-                            const SizedBox(height: 16),
-                            Text(
-                              _isSharing
-                                  ? context.storyEditorConfig.strings.editorSharing
-                                  : context.storyEditorConfig.strings.editorSaving,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -644,7 +730,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       onPanStart: (details) {
         setState(() {
           _currentPath = DrawingPath(
-            color: _currentBrushType == BrushType.eraser ? Colors.transparent : _currentColor,
+            color: _currentBrushType == BrushType.eraser
+                ? Colors.transparent
+                : _currentColor,
             strokeWidth: _brushSize,
             brushType: _currentBrushType,
           );
@@ -704,7 +792,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             final screenWidth = MediaQuery.of(context).size.width;
             final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
             final trashZone = Rect.fromCenter(
-              center: Offset(screenWidth / 2, screenHeight - bottomPadding - 24 - 28),
+              center: Offset(
+                screenWidth / 2,
+                screenHeight - bottomPadding - 24 - 28,
+              ),
               width: 80,
               height: 80,
             );
@@ -737,12 +828,18 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             _imageDragStartFocal = null;
           },
           child: AnimatedScale(
-            scale: (_isOverTrash && _draggingOverlayIndex == index && _draggingOverlayType == 'image')
+            scale:
+                (_isOverTrash &&
+                    _draggingOverlayIndex == index &&
+                    _draggingOverlayType == 'image')
                 ? 0.5
                 : 1.0,
             duration: const Duration(milliseconds: 150),
             child: AnimatedOpacity(
-              opacity: (_isOverTrash && _draggingOverlayIndex == index && _draggingOverlayType == 'image')
+              opacity:
+                  (_isOverTrash &&
+                      _draggingOverlayIndex == index &&
+                      _draggingOverlayType == 'image')
                   ? 0.5
                   : 1.0,
               duration: const Duration(milliseconds: 150),
@@ -796,7 +893,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         context,
         onComplete: (newText, newGradient) async {
           // Create new image
-          final newImagePath = await _createGradientTextImage(newText, newGradient);
+          final newImagePath = await _createGradientTextImage(
+            newText,
+            newGradient,
+          );
           if (newImagePath != null) {
             setState(() {
               _imageOverlays[index] = overlay.copyWith(
@@ -875,8 +975,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// overlay boundary, top-left origin.
   Future<List<Map<String, dynamic>>> _collectAnimatedStickers() async {
     if (_imageOverlays.isEmpty) return const [];
-    final boundary = _overlayRepaintKey.currentContext?.findRenderObject()
-        as RenderRepaintBoundary?;
+    final boundary =
+        _overlayRepaintKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
     final boundarySize = boundary?.size;
     if (boundarySize == null ||
         boundarySize.width <= 0 ||
@@ -922,12 +1023,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// are hidden for the snapshot frame (so they aren't double-drawn) and
   /// returned separately for native animated compositing.
   Future<(Uint8List?, List<Map<String, dynamic>>)>
-      _captureVideoExportLayers() async {
+  _captureVideoExportLayers() async {
     final animated = await _collectAnimatedStickers();
     if (animated.isNotEmpty && mounted) {
-      setState(() => _hiddenAnimatedPaths = {
-            for (final a in animated) a['path'] as String,
-          });
+      setState(
+        () => _hiddenAnimatedPaths = {
+          for (final a in animated) a['path'] as String,
+        },
+      );
       // Let the hide actually render before snapshotting.
       await WidgetsBinding.instance.endOfFrame;
     }
@@ -942,8 +1045,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// Uses optimal pixelRatio based on video resolution to avoid huge images
   Future<Uint8List?> _captureOverlayAsPng() async {
     try {
-      final boundary = _overlayRepaintKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
+      final boundary =
+          _overlayRepaintKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
       if (boundary == null) return null;
 
       // Match overlay capture to configured story canvas (e.g. 1080x1920).
@@ -963,13 +1067,24 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   bool _requiresVideoExport() {
-    final hasOverlay = _textOverlays.isNotEmpty || _drawings.isNotEmpty || _imageOverlays.isNotEmpty;
-    final hasFilter = widget.initialFilterPreset != StoryEditorFilters.none && widget.initialFilterStrength > 0.01;
-    return hasOverlay || hasFilter || widget.flipHorizontally;
+    final hasOverlay =
+        _textOverlays.isNotEmpty ||
+        _drawings.isNotEmpty ||
+        _imageOverlays.isNotEmpty;
+    final hasFilter =
+        widget.initialFilterPreset != StoryEditorFilters.none &&
+        widget.initialFilterStrength > 0.01;
+    final durationMs = _videoController?.value.duration.inMilliseconds ?? 0;
+    final hasTrim =
+        _trimStartMs > 0 ||
+        (_trimEndMs > 0 && durationMs > 0 && _trimEndMs < durationMs);
+    return hasOverlay || hasFilter || widget.flipHorizontally || hasTrim;
   }
 
   Future<Uint8List> _captureImageAtStoryCanvas() async {
-    final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    final boundary =
+        _repaintKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
     if (boundary == null) {
       throw Exception('Render boundary not found');
     }
@@ -987,13 +1102,25 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-    final dstRect = Rect.fromLTWH(0, 0, canvasWidth.toDouble(), canvasHeight.toDouble());
+    final srcRect = Rect.fromLTWH(
+      0,
+      0,
+      image.width.toDouble(),
+      image.height.toDouble(),
+    );
+    final dstRect = Rect.fromLTWH(
+      0,
+      0,
+      canvasWidth.toDouble(),
+      canvasHeight.toDouble(),
+    );
     canvas.drawImageRect(image, srcRect, dstRect, Paint());
 
     final picture = recorder.endRecording();
     final outputImage = await picture.toImage(canvasWidth, canvasHeight);
-    final byteData = await outputImage.toByteData(format: ui.ImageByteFormat.png);
+    final byteData = await outputImage.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
     if (byteData == null) {
       throw Exception('Failed to convert image');
     }
@@ -1001,7 +1128,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   /// Create PNG image with gradient background + centered text
-  Future<String?> _createGradientTextImage(String text, LinearGradient gradient) async {
+  Future<String?> _createGradientTextImage(
+    String text,
+    LinearGradient gradient,
+  ) async {
     try {
       // Canvas size from config (story format)
       final config = context.storyEditorConfig;
@@ -1035,14 +1165,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         ],
       );
 
-      final paragraphBuilder = ui.ParagraphBuilder(
-        ui.ParagraphStyle(
-          textAlign: TextAlign.center,
-          maxLines: null,
-        ),
-      )
-        ..pushStyle(textStyle)
-        ..addText(text);
+      final paragraphBuilder =
+          ui.ParagraphBuilder(
+              ui.ParagraphStyle(textAlign: TextAlign.center, maxLines: null),
+            )
+            ..pushStyle(textStyle)
+            ..addText(text);
 
       final paragraph = paragraphBuilder.build();
       paragraph.layout(ui.ParagraphConstraints(width: canvasWidth - 100));
@@ -1072,12 +1200,46 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   /// Text overlays for export (no gestures, inside RepaintBoundary)
+  Widget _buildTextOverlayVisual(TextOverlay overlay) {
+    final hasBackground =
+        overlay.backgroundColor != null || overlay.backgroundGradient != null;
+    final shadows = overlay.backgroundGradient != null
+        ? const [
+            Shadow(color: Colors.black38, offset: Offset(1, 1), blurRadius: 4),
+          ]
+        : null;
+    return Container(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width - 56,
+      ),
+      padding: hasBackground
+          ? const EdgeInsets.symmetric(horizontal: 18, vertical: 11)
+          : EdgeInsets.zero,
+      decoration: hasBackground
+          ? BoxDecoration(
+              color: overlay.backgroundGradient == null
+                  ? overlay.backgroundColor
+                  : null,
+              gradient: overlay.backgroundGradient,
+              borderRadius: BorderRadius.circular(16),
+            )
+          : null,
+      child: Text(
+        overlay.text,
+        textAlign: overlay.textAlign,
+        style: overlay.toTextStyle(shadows: shadows).copyWith(height: 1.12),
+      ),
+    );
+  }
+
   List<Widget> _buildTextOverlaysForExport() {
     return _textOverlays.asMap().entries.map((entry) {
       final index = entry.key;
       final overlay = entry.value;
-      final bool hasGradient = overlay.backgroundGradient != null;
-      final bool isDraggingThis = _isOverTrash && _draggingOverlayIndex == index && _draggingOverlayType == 'text';
+      final bool isDraggingThis =
+          _isOverTrash &&
+          _draggingOverlayIndex == index &&
+          _draggingOverlayType == 'text';
 
       return Positioned(
         left: overlay.offset.dx,
@@ -1089,69 +1251,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             child: AnimatedOpacity(
               opacity: isDraggingThis ? 0.5 : 1.0,
               duration: const Duration(milliseconds: 150),
-            child: hasGradient
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                    decoration: BoxDecoration(
-                      gradient: overlay.backgroundGradient,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Text(
-                      overlay.text,
-                      style: overlay.toTextStyle(
-                        shadows: [
-                          const Shadow(
-                            color: Colors.black38,
-                            offset: Offset(1, 1),
-                            blurRadius: 4,
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : Builder(
-                    builder: (context) {
-                      final textStyle = overlay.toTextStyle();
-                      final maxWidth = MediaQuery.of(context).size.width - 80 - 56.0;
-                      final lines = _calculateTextLines(overlay.text, textStyle, maxWidth);
-                      if (lines.isEmpty) {
-                        lines.add(overlay.text);
-                      }
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: lines.asMap().entries.map((lineEntry) {
-                          final lineIndex = lineEntry.key;
-                          final line = lineEntry.value;
-                          return Transform.translate(
-                            offset: Offset(0, lineIndex * -6.0),
-                            child: IntrinsicWidth(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-                                decoration: overlay.backgroundColor != null
-                                    ? BoxDecoration(
-                                        color: overlay.backgroundColor,
-                                        borderRadius: BorderRadius.circular(25),
-                                      )
-                                    : null,
-                                child: Text(
-                                  line.isEmpty ? ' ' : line,
-                                  style: textStyle.copyWith(height: 1.1),
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      );
-                    },
-                  ),
+              child: _buildTextOverlayVisual(overlay),
             ),
           ),
         ),
@@ -1163,9 +1263,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     return _textOverlays.asMap().entries.map((entry) {
       final index = entry.key;
       final overlay = entry.value;
-
-      // Gradient or solid color background
-      final bool hasGradient = overlay.backgroundGradient != null;
 
       return Positioned(
         left: overlay.offset.dx,
@@ -1199,7 +1296,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               final screenWidth = MediaQuery.of(context).size.width;
               final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
               final trashZone = Rect.fromCenter(
-                center: Offset(screenWidth / 2, screenHeight - bottomPadding - 24 - 28),
+                center: Offset(
+                  screenWidth / 2,
+                  screenHeight - bottomPadding - 24 - 28,
+                ),
                 width: 80,
                 height: 80,
               );
@@ -1233,87 +1333,22 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             _textScaleStart = null;
           },
           child: AnimatedScale(
-            scale: (_isOverTrash && _draggingOverlayIndex == index && _draggingOverlayType == 'text')
+            scale:
+                (_isOverTrash &&
+                    _draggingOverlayIndex == index &&
+                    _draggingOverlayType == 'text')
                 ? overlay.scale * 0.5
                 : overlay.scale,
             duration: const Duration(milliseconds: 150),
             child: AnimatedOpacity(
-              opacity: (_isOverTrash && _draggingOverlayIndex == index && _draggingOverlayType == 'text')
+              opacity:
+                  (_isOverTrash &&
+                      _draggingOverlayIndex == index &&
+                      _draggingOverlayType == 'text')
                   ? 0.5
                   : 1.0,
               duration: const Duration(milliseconds: 150),
-              child: hasGradient
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                    decoration: BoxDecoration(
-                      gradient: overlay.backgroundGradient,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    overlay.text,
-                    style: overlay.toTextStyle(
-                      shadows: [
-                        const Shadow(
-                          color: Colors.black38,
-                          offset: Offset(1, 1),
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              // Each line as separate box - including soft wrap lines
-              : Builder(
-                  builder: (context) {
-                    final textStyle = overlay.toTextStyle();
-
-                    // Maximum width (screen width - padding, always includes horizontal padding)
-                    final maxWidth = MediaQuery.of(context).size.width - 80 - 56.0;
-
-                    // Calculate lines
-                    final lines = _calculateTextLines(overlay.text, textStyle, maxWidth);
-
-                    // If lines couldn't be calculated, use original text
-                    if (lines.isEmpty) {
-                      lines.add(overlay.text);
-                    }
-
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: lines.asMap().entries.map((lineEntry) {
-                        final lineIndex = lineEntry.key;
-                        final line = lineEntry.value;
-
-                        return Transform.translate(
-                          offset: Offset(0, lineIndex * -6.0), // Each line shifts 6px up
-                          child: IntrinsicWidth(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-                              decoration: overlay.backgroundColor != null
-                                  ? BoxDecoration(
-                                      color: overlay.backgroundColor,
-                                      borderRadius: BorderRadius.circular(25),
-                                    )
-                                  : null,
-                              child: Text(
-                                line.isEmpty ? ' ' : line,
-                                style: textStyle.copyWith(height: 1.1),
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    );
-                  },
-                ),
+              child: _buildTextOverlayVisual(overlay),
             ),
           ),
         ),
@@ -1337,10 +1372,23 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 'packages/story_editor_pro/assets/icons/xmark.svg',
                 width: 24,
                 height: 24,
-                colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+                colorFilter: const ColorFilter.mode(
+                  Colors.white,
+                  BlendMode.srcIn,
+                ),
               ),
               onTap: () => Navigator.pop(context),
             ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: context.storyEditorConfig.onPickMusic == null
+                    ? const SizedBox.shrink()
+                    : _buildMusicPill(),
+              ),
+            ),
+            const SizedBox(width: 12),
             // Snapchat-style vertical rail on the right
             Column(
               mainAxisSize: MainAxisSize.min,
@@ -1357,11 +1405,22 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     isActive: _isMuted,
                   ),
                   const SizedBox(height: 12),
+                  _buildControlButton(
+                    icon: Icons.content_cut_rounded,
+                    onTap: _openVideoTrimmer,
+                    isActive:
+                        _trimStartMs > 0 ||
+                        (_trimEndMs > 0 &&
+                            _trimEndMs <
+                                (_videoController
+                                        ?.value
+                                        .duration
+                                        .inMilliseconds ??
+                                    0)),
+                  ),
+                  const SizedBox(height: 12),
                 ],
-                _buildControlButton(
-                  icon: Icons.undo,
-                  onTap: _undo,
-                ),
+                _buildControlButton(icon: Icons.undo, onTap: _undo),
                 const SizedBox(height: 12),
                 _buildControlButton(
                   icon: _isDrawing ? Icons.edit_off : Icons.edit,
@@ -1375,10 +1434,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   isActive: _isDrawing,
                 ),
                 const SizedBox(height: 12),
-                _buildControlButton(
-                  icon: Icons.text_fields,
-                  onTap: _addText,
-                ),
+                _buildControlButton(icon: Icons.text_fields, onTap: _addText),
                 const SizedBox(height: 12),
                 _buildControlButton(
                   icon: Icons.auto_awesome,
@@ -1395,6 +1451,182 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildMusicPill() {
+    final selected = _selectedMusic;
+    return Semantics(
+      button: true,
+      label: selected == null
+          ? context.storyEditorConfig.strings.editorAddMusic
+          : context.storyEditorConfig.strings.editorChangeMusic,
+      child: GestureDetector(
+        onTap: _pickMusic,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 220),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.music_note_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  selected?.title ??
+                      context.storyEditorConfig.strings.editorAddMusic,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 3),
+              const Icon(Icons.add, color: Colors.white70, size: 17),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickMusic() async {
+    final picker = context.storyEditorConfig.onPickMusic;
+    if (picker == null || _isSaving) return;
+    final selected = await picker(context);
+    if (!mounted || selected == null) return;
+    setState(() => _selectedMusic = selected);
+  }
+
+  String _formatTrimTime(int milliseconds) {
+    final totalSeconds = (milliseconds / 1000).round();
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _openVideoTrimmer() async {
+    final controller = _videoController;
+    if (controller == null || !controller.value.isInitialized) return;
+    await controller.pause();
+    if (!mounted) return;
+    final durationMs = controller.value.duration.inMilliseconds;
+    if (durationMs < 500) {
+      await controller.play();
+      return;
+    }
+    var startMs = _trimStartMs.clamp(0, durationMs - 250).toInt();
+    var endMs = (_trimEndMs <= startMs ? durationMs : _trimEndMs)
+        .clamp(startMs + 250, durationMs)
+        .toInt();
+
+    final applied = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: const Color(0xFF151515),
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  const Icon(Icons.content_cut_rounded, color: Colors.white),
+                  const SizedBox(width: 10),
+                  Text(
+                    context.storyEditorConfig.strings.editorTrimVideo,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${_formatTrimTime(startMs)} – ${_formatTrimTime(endMs)}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              RangeSlider(
+                values: RangeValues(startMs.toDouble(), endMs.toDouble()),
+                min: 0,
+                max: durationMs.toDouble(),
+                labels: RangeLabels(
+                  _formatTrimTime(startMs),
+                  _formatTrimTime(endMs),
+                ),
+                onChanged: (values) {
+                  final nextStart = values.start.round();
+                  final nextEnd = values.end.round();
+                  if (nextEnd - nextStart < 250) return;
+                  setSheetState(() {
+                    startMs = nextStart;
+                    endMs = nextEnd;
+                  });
+                  controller.seekTo(Duration(milliseconds: nextStart));
+                },
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(sheetContext, false),
+                      child: Text(
+                        context.storyEditorConfig.strings.editorCancel,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(sheetContext, true),
+                      child: Text(
+                        context.storyEditorConfig.strings.editorApply,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (applied == true) {
+      setState(() {
+        _trimStartMs = startMs;
+        _trimEndMs = endMs;
+      });
+      await controller.seekTo(Duration(milliseconds: startMs));
+    }
+    await controller.play();
   }
 
   Widget _buildBottomControls() {
@@ -1490,11 +1722,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   void _showShareSheet() {
     // If close friends is disabled, share directly to story
     if (!widget.closeFriendsEnabled) {
-      _saveAndComplete(
-        toStory: true,
-        closeFriends: false,
-        selectedFriends: [],
-      );
+      _saveAndComplete(toStory: true, closeFriends: false, selectedFriends: []);
       return;
     }
 
@@ -1569,10 +1797,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           height: 56,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.blue,
-                              width: 2,
-                            ),
+                            border: Border.all(color: Colors.blue, width: 2),
                           ),
                           child: Padding(
                             padding: const EdgeInsets.all(2),
@@ -1583,8 +1808,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                       width: 48,
                                       height: 48,
                                       fit: BoxFit.cover,
-                                      errorBuilder: (context, error, stackTrace) =>
-                                          _buildDefaultProfileIcon(),
+                                      errorBuilder:
+                                          (context, error, stackTrace) =>
+                                              _buildDefaultProfileIcon(),
                                     ),
                                   )
                                 : _buildDefaultProfileIcon(),
@@ -1597,7 +1823,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                context.storyEditorConfig.strings.editorYourStory,
+                                context
+                                    .storyEditorConfig
+                                    .strings
+                                    .editorYourStory,
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -1606,7 +1835,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                context.storyEditorConfig.strings.editorFacebookStory,
+                                context
+                                    .storyEditorConfig
+                                    .strings
+                                    .editorFacebookStory,
                                 style: const TextStyle(
                                   color: Colors.grey,
                                   fontSize: 14,
@@ -1684,7 +1916,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                context.storyEditorConfig.strings.editorCloseFriends,
+                                context
+                                    .storyEditorConfig
+                                    .strings
+                                    .editorCloseFriends,
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -1693,7 +1928,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                context.storyEditorConfig.strings.formatPeopleCount(widget.closeFriendsList.length),
+                                context.storyEditorConfig.strings
+                                    .formatPeopleCount(
+                                      widget.closeFriendsList.length,
+                                    ),
                                 style: const TextStyle(
                                   color: Colors.grey,
                                   fontSize: 14,
@@ -1709,7 +1947,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: _shareToCloseFriends ? Colors.white : Colors.grey,
+                              color: _shareToCloseFriends
+                                  ? Colors.white
+                                  : Colors.grey,
                               width: 2,
                             ),
                           ),
@@ -1732,16 +1972,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
 
                 // Close friends list (when close friends is selected)
-                if (_shareToCloseFriends && widget.closeFriendsList.isNotEmpty) ...[
+                if (_shareToCloseFriends &&
+                    widget.closeFriendsList.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
                       'Select friends to share with:',
-                      style: TextStyle(
-                        color: Colors.grey,
-                        fontSize: 14,
-                      ),
+                      style: TextStyle(color: Colors.grey, fontSize: 14),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -1751,7 +1989,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                       itemCount: widget.closeFriendsList.length,
                       itemBuilder: (context, index) {
                         final friend = widget.closeFriendsList[index];
-                        final isSelected = _selectedCloseFriends.contains(friend);
+                        final isSelected = _selectedCloseFriends.contains(
+                          friend,
+                        );
                         return GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () {
@@ -1780,18 +2020,21 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                           child: Image.network(
                                             friend.avatarUrl!,
                                             fit: BoxFit.cover,
-                                            errorBuilder: (_, __, ___) => Center(
-                                              child: Text(
-                                                friend.name.isNotEmpty
-                                                    ? friend.name[0].toUpperCase()
-                                                    : '?',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.bold,
+                                            errorBuilder: (_, __, ___) =>
+                                                Center(
+                                                  child: Text(
+                                                    friend.name.isNotEmpty
+                                                        ? friend.name[0]
+                                                              .toUpperCase()
+                                                        : '?',
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 18,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
                                                 ),
-                                              ),
-                                            ),
                                           ),
                                         )
                                       : Center(
@@ -1824,9 +2067,13 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                   height: 24,
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: isSelected ? const Color(0xFF0095F6) : Colors.transparent,
+                                    color: isSelected
+                                        ? const Color(0xFF0095F6)
+                                        : Colors.transparent,
                                     border: Border.all(
-                                      color: isSelected ? const Color(0xFF0095F6) : Colors.grey,
+                                      color: isSelected
+                                          ? const Color(0xFF0095F6)
+                                          : Colors.grey,
                                       width: 2,
                                     ),
                                   ),
@@ -1875,7 +2122,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         ),
                         child: Center(
                           child: Text(
-                            _shareToCloseFriends && _selectedCloseFriends.isNotEmpty
+                            _shareToCloseFriends &&
+                                    _selectedCloseFriends.isNotEmpty
                                 ? 'Share to ${_selectedCloseFriends.length} friends'
                                 : 'Share',
                             style: const TextStyle(
@@ -1936,12 +2184,16 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                       child: SliderTheme(
                         data: SliderTheme.of(context).copyWith(
                           trackHeight: 2,
-                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 8,
+                          ),
                           activeTrackColor: Colors.white,
                           inactiveTrackColor: Colors.white38,
                           thumbColor: Colors.white,
                           overlayColor: Colors.white24,
-                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 14,
+                          ),
                         ),
                         child: Slider(
                           value: _brushSize,
@@ -1978,21 +2230,27 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: _colors.map((color) => GestureDetector(
-                      onTap: () => setState(() => _currentColor = color),
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: _currentColor == color ? Colors.white : Colors.transparent,
-                            width: 3,
+                    children: _colors
+                        .map(
+                          (color) => GestureDetector(
+                            onTap: () => setState(() => _currentColor = color),
+                            child: Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: color,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: _currentColor == color
+                                      ? Colors.white
+                                      : Colors.transparent,
+                                  width: 3,
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    )).toList(),
+                        )
+                        .toList(),
                   ),
                 ),
               if (_currentBrushType != BrushType.eraser)
@@ -2007,7 +2265,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     _buildBrushTypeButton(BrushType.arrow, Icons.arrow_upward),
                     _buildBrushTypeButton(BrushType.marker, Icons.highlight),
                     _buildBrushTypeButton(BrushType.glow, Icons.auto_awesome),
-                    _buildBrushTypeButton(BrushType.eraser, Icons.auto_fix_normal),
+                    _buildBrushTypeButton(
+                      BrushType.eraser,
+                      Icons.auto_fix_normal,
+                    ),
                     _buildBrushTypeButton(BrushType.chalk, Icons.gesture),
                   ],
                 ),
@@ -2029,7 +2290,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         height: 44,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.15),
+          color: isSelected
+              ? Colors.white
+              : Colors.white.withValues(alpha: 0.15),
           border: Border.all(
             color: isSelected ? Colors.white : Colors.transparent,
             width: 2,
@@ -2049,7 +2312,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// Brush size preview - shown just above the slider while sliding
   Widget _buildBrushSizePreview() {
     // Above the slider, above the colors
-    final bottomPadding = MediaQuery.of(context).viewPadding.bottom + 16 + 32 + 12 + 50 + 20;
+    final bottomPadding =
+        MediaQuery.of(context).viewPadding.bottom + 16 + 32 + 12 + 50 + 20;
     // viewPadding + container bottom + color height + margin + slider height + gap
 
     return Positioned(
@@ -2063,10 +2327,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: Colors.transparent,
-            border: Border.all(
-              color: Colors.white,
-              width: 2,
-            ),
+            border: Border.all(color: Colors.white, width: 2),
           ),
           child: Center(
             child: Container(
@@ -2106,11 +2367,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           ),
         ),
         child: Center(
-          child: iconWidget ?? Icon(
-            icon,
-            color: Colors.white,
-            size: 24,
-          ),
+          child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
         ),
       ),
     );
@@ -2159,11 +2416,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                       color: Colors.white.withValues(alpha: 0.15),
                     ),
                     child: const Center(
-                      child: Icon(
-                        Icons.close,
-                        color: Colors.white,
-                        size: 24,
-                      ),
+                      child: Icon(Icons.close, color: Colors.white, size: 24),
                     ),
                   ),
                 ),
@@ -2184,11 +2437,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         color: Colors.white.withValues(alpha: 0.15),
                       ),
                       child: const Center(
-                        child: Icon(
-                          Icons.undo,
-                          color: Colors.white,
-                          size: 24,
-                        ),
+                        child: Icon(Icons.undo, color: Colors.white, size: 24),
                       ),
                     ),
                   ),
@@ -2226,7 +2475,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   /// Split text into lines - consistent results using getLineBoundary
-  List<String> _calculateTextLines(String text, TextStyle style, double maxWidth) {
+  List<String> _calculateTextLines(
+    String text,
+    TextStyle style,
+    double maxWidth,
+  ) {
     if (text.isEmpty) return [];
 
     final List<String> result = [];
@@ -2346,21 +2599,24 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     // Decorative stickers (bundled word-art OR downloaded KLIPY sticker) →
     // normal ImageOverlay (drag/pinch/trash like any image)
-    final stickerPath = result.imageFilePath ??
+    final stickerPath =
+        result.imageFilePath ??
         (result.imageAssetPath != null
             ? await materializeStickerAsset(result.imageAssetPath!)
             : null);
     if (stickerPath != null) {
       if (!mounted) return;
       setState(() {
-        _imageOverlays.add(ImageOverlay(
-          imagePath: stickerPath,
-          offset: Offset(
-            MediaQuery.of(context).size.width * 0.30,
-            MediaQuery.of(context).size.height * 0.34,
+        _imageOverlays.add(
+          ImageOverlay(
+            imagePath: stickerPath,
+            offset: Offset(
+              MediaQuery.of(context).size.width * 0.30,
+              MediaQuery.of(context).size.height * 0.34,
+            ),
+            scale: 0.45,
           ),
-          scale: 0.45,
-        ));
+        );
       });
       return;
     }
@@ -2396,7 +2652,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     return _smartStickers.asMap().entries.map((entry) {
       final index = entry.key;
       final s = entry.value;
-      final overTrash = _isOverTrash &&
+      final overTrash =
+          _isOverTrash &&
           _draggingOverlayIndex == index &&
           _draggingOverlayType == 'sticker';
       return Positioned(
@@ -2421,14 +2678,17 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             final screenWidth = MediaQuery.of(context).size.width;
             final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
             final trashZone = Rect.fromCenter(
-              center:
-                  Offset(screenWidth / 2, screenHeight - bottomPadding - 24 - 28),
+              center: Offset(
+                screenWidth / 2,
+                screenHeight - bottomPadding - 24 - 28,
+              ),
               width: 80,
               height: 80,
             );
             if (_stickerDragStartOffset != null &&
                 _stickerDragStartFocal != null) {
-              s.offset = _stickerDragStartOffset! +
+              s.offset =
+                  _stickerDragStartOffset! +
                   (details.focalPoint - _stickerDragStartFocal!);
             }
             s.scale = (_stickerScaleStart * details.scale).clamp(0.4, 3.5);
@@ -2487,7 +2747,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     final fontsConfig = context.storyFonts;
     final fontStyles = fontsConfig.fontStyles;
 
-    final existing = existingIndex != null ? _textOverlays[existingIndex] : null;
+    final existing = existingIndex != null
+        ? _textOverlays[existingIndex]
+        : null;
     final controller = TextEditingController(text: existing?.text ?? '');
     // Stable key so the field's element + keyboard connection survive the
     // empty<->text layout swap; without it the first typed char gets dropped.
@@ -2495,7 +2757,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     Color selectedColor = existing?.color ?? Colors.white;
     Color backgroundColor = existing?.backgroundColor ?? Colors.black;
     double fontSize = existing?.fontSize ?? fontsConfig.defaultFontSize;
-    TextAlign textAlign = TextAlign.center;
+    TextAlign textAlign = existing?.textAlign ?? TextAlign.center;
     int selectedFontIndex = existing?.fontIndex ?? fontsConfig.defaultFontIndex;
     bool hasBackground = existing?.backgroundColor != null;
     bool isItalic = existing?.isItalic ?? false;
@@ -2529,339 +2791,336 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   backgroundColor: Colors.black.withValues(alpha: 0.4),
                   resizeToAvoidBottomInset: true,
                   body: SafeArea(
-                  bottom: false,
-                  child: Column(
-                    children: [
-                      // Top bar - Close and Done buttons
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            // Close button (X) - cancel and go back to editor
-                            GestureDetector(
-                              onTap: () {
-                                Navigator.of(context).pop();
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.3),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.close,
-                                  color: Colors.white,
-                                  size: 24,
+                    bottom: false,
+                    child: Column(
+                      children: [
+                        // Top bar - Close and Done buttons
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // Close button (X) - cancel and go back to editor
+                              GestureDetector(
+                                onTap: () {
+                                  Navigator.of(context).pop();
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.3),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.close,
+                                    color: Colors.white,
+                                    size: 24,
+                                  ),
                                 ),
                               ),
-                            ),
-                            // Done button - save text
-                            GestureDetector(
-                              onTap: () {
-                                if (controller.text.isNotEmpty) {
-                                  setState(() {
-                                    _isTextEditing = false;
+                              // Done button - save text
+                              GestureDetector(
+                                onTap: () {
+                                  if (controller.text.isNotEmpty) {
+                                    setState(() {
+                                      _isTextEditing = false;
 
-                                    final selectedFont = fontsConfig.getFontStyle(selectedFontIndex);
-                                    // If isItalic, add italic to textStyle
-                                    final finalTextStyle = isItalic
-                                        ? selectedFont.textStyle.copyWith(fontStyle: FontStyle.italic)
-                                        : selectedFont.textStyle;
+                                      final selectedFont = fontsConfig
+                                          .getFontStyle(selectedFontIndex);
+                                      // If isItalic, add italic to textStyle
+                                      final finalTextStyle = isItalic
+                                          ? selectedFont.textStyle.copyWith(
+                                              fontStyle: FontStyle.italic,
+                                            )
+                                          : selectedFont.textStyle;
 
-                                    // Calculate text size with actual font style
-                                    final actualTextStyle = finalTextStyle.copyWith(
-                                      fontSize: fontSize,
-                                      color: selectedColor,
-                                    );
-                                    final screenWidth = MediaQuery.of(context).size.width;
-                                    final screenHeight = MediaQuery.of(context).size.height;
+                                      // Calculate text size with actual font style
+                                      final actualTextStyle = finalTextStyle
+                                          .copyWith(
+                                            fontSize: fontSize,
+                                            color: selectedColor,
+                                          );
+                                      final screenWidth = MediaQuery.of(
+                                        context,
+                                      ).size.width;
+                                      final screenHeight = MediaQuery.of(
+                                        context,
+                                      ).size.height;
 
-                                    // Use same padding/maxWidth as overlay rendering (always same padding)
-                                    const hPad = 28.0;
-                                    const vPad = 16.0;
-                                    const bgPadCalc = 56.0;
-                                    final maxWidth = screenWidth - 80 - bgPadCalc;
+                                      // Use same padding/maxWidth as overlay rendering (always same padding)
+                                      const hPad = 28.0;
+                                      const vPad = 16.0;
+                                      const bgPadCalc = 56.0;
+                                      final maxWidth =
+                                          screenWidth - 80 - bgPadCalc;
 
-                                    // Calculate lines exactly as overlay renders them
-                                    final lines = _calculateTextLines(controller.text, actualTextStyle.copyWith(height: 1.1), maxWidth);
-                                    if (lines.isEmpty) {
-                                      lines.add(controller.text);
-                                    }
-
-                                    // Measure each line to find widest
-                                    double maxLineWidth = 0;
-                                    double totalTextHeight = 0;
-                                    for (final line in lines) {
-                                      final lp = TextPainter(
-                                        text: TextSpan(text: line.isEmpty ? ' ' : line, style: actualTextStyle.copyWith(height: 1.1)),
-                                        textDirection: TextDirection.ltr,
-                                        maxLines: 1,
+                                      // Calculate lines exactly as overlay renders them
+                                      final lines = _calculateTextLines(
+                                        controller.text,
+                                        actualTextStyle.copyWith(height: 1.1),
+                                        maxWidth,
                                       );
-                                      lp.layout();
-                                      if (lp.width > maxLineWidth) {
-                                        maxLineWidth = lp.width;
+                                      if (lines.isEmpty) {
+                                        lines.add(controller.text);
                                       }
-                                      totalTextHeight += lp.height + vPad * 2;
-                                    }
-                                    // Each line shifts -6px up (except first)
-                                    final lineOverlap = (lines.length - 1) * 6.0;
-                                    final totalHeight = totalTextHeight - lineOverlap;
-                                    final totalWidth = maxLineWidth + hPad * 2;
 
-                                    // Position at exact center of screen
-                                    final overlay = TextOverlay(
-                                      text: controller.text,
-                                      color: selectedColor,
-                                      backgroundColor: hasBackground ? backgroundColor : null,
-                                      fontSize: fontSize,
-                                      textStyle: finalTextStyle,
-                                      fontIndex: selectedFontIndex,
-                                      isItalic: isItalic,
-                                      offset: existing?.offset ?? Offset(
-                                        (screenWidth - totalWidth) / 2,
-                                        (screenHeight - totalHeight) / 2,
+                                      // Measure each line to find widest
+                                      double maxLineWidth = 0;
+                                      double totalTextHeight = 0;
+                                      for (final line in lines) {
+                                        final lp = TextPainter(
+                                          text: TextSpan(
+                                            text: line.isEmpty ? ' ' : line,
+                                            style: actualTextStyle.copyWith(
+                                              height: 1.1,
+                                            ),
+                                          ),
+                                          textDirection: TextDirection.ltr,
+                                          maxLines: 1,
+                                        );
+                                        lp.layout();
+                                        if (lp.width > maxLineWidth) {
+                                          maxLineWidth = lp.width;
+                                        }
+                                        totalTextHeight += lp.height + vPad * 2;
+                                      }
+                                      // Each line shifts -6px up (except first)
+                                      final lineOverlap =
+                                          (lines.length - 1) * 6.0;
+                                      final totalHeight =
+                                          totalTextHeight - lineOverlap;
+                                      final totalWidth =
+                                          maxLineWidth + hPad * 2;
+
+                                      // Position at exact center of screen
+                                      final overlay = TextOverlay(
+                                        text: controller.text,
+                                        color: selectedColor,
+                                        backgroundColor: hasBackground
+                                            ? backgroundColor
+                                            : null,
+                                        fontSize: fontSize,
+                                        textStyle: finalTextStyle,
+                                        fontIndex: selectedFontIndex,
+                                        isItalic: isItalic,
+                                        textAlign: textAlign,
+                                        offset:
+                                            existing?.offset ??
+                                            Offset(
+                                              (screenWidth - totalWidth) / 2,
+                                              (screenHeight - totalHeight) / 2,
+                                            ),
+                                      );
+
+                                      if (existingIndex != null) {
+                                        _textOverlays[existingIndex] = overlay;
+                                      } else {
+                                        _textOverlays.add(overlay);
+                                      }
+                                    });
+                                  } else {
+                                    setState(() => _isTextEditing = false);
+                                  }
+                                  Navigator.pop(context);
+                                },
+                                child: Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.white.withValues(alpha: 0.15),
+                                  ),
+                                  child: Center(
+                                    child: SvgPicture.asset(
+                                      'packages/story_editor_pro/assets/icons/check.svg',
+                                      width: 24,
+                                      height: 24,
+                                      colorFilter: const ColorFilter.mode(
+                                        Colors.white,
+                                        BlendMode.srcIn,
                                       ),
-                                    );
-
-                                    if (existingIndex != null) {
-                                      _textOverlays[existingIndex] = overlay;
-                                    } else {
-                                      _textOverlays.add(overlay);
-                                    }
-                                  });
-                                } else {
-                                  setState(() => _isTextEditing = false);
-                                }
-                                Navigator.pop(context);
-                              },
-                              child: Container(
-                                width: 44,
-                                height: 44,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.white.withValues(alpha: 0.15),
-                                ),
-                                child: Center(
-                                  child: SvgPicture.asset(
-                                    'packages/story_editor_pro/assets/icons/check.svg',
-                                    width: 24,
-                                    height: 24,
-                                    colorFilter: const ColorFilter.mode(
-                                      Colors.white,
-                                      BlendMode.srcIn,
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
 
-                      // Center area - Text input
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          // Text area - each line as separate box (invisible TextField + visible lines)
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.translucent,
-                            onTap: () {
-                              // TextField'a focus ver
-                              FocusScope.of(context).requestFocus(FocusNode());
-                            },
+                        // Center area - Text input
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            // One real field remains visible throughout editing.
+                            // This avoids the old invisible-field/per-line pill
+                            // swap that looked like broken underlines and could
+                            // drop the first character when the element changed.
                             child: Center(
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  // Always use same padding for consistent layout
-                                  final maxWidth = constraints.maxWidth - 40 - 56.0;
-                                  final text = controller.text;
-
-                                  // Calculate lines - use the same method
-                                  List<String> lines = _calculateTextLines(text, getTextStyle(), maxWidth);
-
-                                  // If no text or empty, show TextField
-                                  if (lines.isEmpty) {
-                                    return IntrinsicWidth(
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                                        decoration: hasBackground
-                                            ? BoxDecoration(
-                                                color: backgroundColor,
-                                                borderRadius: BorderRadius.circular(25),
-                                              )
-                                            : null,
-                                        child: TextField(
-                                          key: textFieldKey,
-                                          controller: controller,
-                                          autofocus: true,
-                                          style: getTextStyle(),
-                                          textAlign: textAlign,
-                                          maxLines: null,
-                                          decoration: InputDecoration(
-                                            hintText: context.storyEditorConfig.strings.editorEnterText,
-                                            hintStyle: TextStyle(
-                                              color: Colors.white38,
-                                              fontSize: fontSize,
-                                            ),
-                                            border: InputBorder.none,
-                                            isDense: true,
-                                            contentPadding: EdgeInsets.zero,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 520,
+                                ),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 22,
+                                    vertical: 12,
+                                  ),
+                                  decoration: hasBackground
+                                      ? BoxDecoration(
+                                          color: backgroundColor,
+                                          borderRadius: BorderRadius.circular(
+                                            18,
                                           ),
+                                        )
+                                      : null,
+                                  child: TextField(
+                                    key: textFieldKey,
+                                    controller: controller,
+                                    autofocus: true,
+                                    style: getTextStyle().copyWith(
+                                      height: 1.12,
+                                    ),
+                                    cursorColor: selectedColor,
+                                    textAlign: textAlign,
+                                    minLines: 1,
+                                    maxLines: null,
+                                    keyboardType: TextInputType.multiline,
+                                    textInputAction: TextInputAction.newline,
+                                    decoration: InputDecoration(
+                                      hintText: context
+                                          .storyEditorConfig
+                                          .strings
+                                          .editorEnterText,
+                                      hintStyle: TextStyle(
+                                        color: Colors.white38,
+                                        fontSize: fontSize,
+                                      ),
+                                      border: InputBorder.none,
+                                      enabledBorder: InputBorder.none,
+                                      focusedBorder: InputBorder.none,
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                    onChanged: (_) => setDialogState(() {}),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        // Bottom section - Instagram style (fixed above keyboard)
+                        Padding(
+                          padding: EdgeInsets.only(
+                            bottom: MediaQuery.of(context).viewInsets.bottom > 0
+                                ? 8
+                                : MediaQuery.of(context).viewPadding.bottom + 8,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Font size slider (horizontal)
+                              Container(
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 4,
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.text_fields,
+                                      color: Colors.white54,
+                                      size: 18,
+                                    ),
+                                    Expanded(
+                                      child: SliderTheme(
+                                        data: SliderTheme.of(context).copyWith(
+                                          trackHeight: 2,
+                                          thumbShape:
+                                              const RoundSliderThumbShape(
+                                                enabledThumbRadius: 6,
+                                              ),
+                                          activeTrackColor: Colors.white,
+                                          inactiveTrackColor: Colors.white38,
+                                          thumbColor: Colors.white,
+                                          overlayColor: Colors.white24,
+                                          overlayShape:
+                                              const RoundSliderOverlayShape(
+                                                overlayRadius: 12,
+                                              ),
+                                        ),
+                                        child: Slider(
+                                          value: fontSize,
+                                          min: 16,
+                                          max: 64,
                                           onChanged: (value) {
-                                            setDialogState(() {});
+                                            setDialogState(
+                                              () => fontSize = value,
+                                            );
                                           },
                                         ),
                                       ),
-                                    );
-                                  }
+                                    ),
+                                    const Icon(
+                                      Icons.text_fields,
+                                      color: Colors.white,
+                                      size: 24,
+                                    ),
+                                  ],
+                                ),
+                              ),
 
-                                  // Calculate maximum line count based on screen height
-                                  final availableHeight = constraints.maxHeight;
-                                  final lineHeight = fontSize + 12; // Font size + padding
-                                  final maxVisibleLines = (availableHeight / lineHeight).floor().clamp(3, 15);
-
-                                  // If line count exceeds limit, only show last lines
-                                  final visibleLines = lines.length > maxVisibleLines
-                                      ? lines.sublist(lines.length - maxVisibleLines)
-                                      : lines;
-
-                                  // If text exists, show each line as separate box
-                                  return Stack(
-                                    children: [
-                                      // Visible lines
-                                      Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment: CrossAxisAlignment.center,
-                                        children: visibleLines.asMap().entries.map((entry) {
-                                          final idx = entry.key;
-                                          final line = entry.value;
-                                          return Transform.translate(
-                                            offset: Offset(0, idx * -6.0),
-                                            child: IntrinsicWidth(
-                                              child: Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                                                decoration: hasBackground
-                                                    ? BoxDecoration(
-                                                        color: backgroundColor,
-                                                        borderRadius: BorderRadius.circular(25),
-                                                      )
-                                                    : null,
-                                                child: Text(
-                                                  line.isEmpty ? ' ' : line,
-                                                  style: getTextStyle().copyWith(height: 1.1),
-                                                  textAlign: textAlign,
+                              // Tab bar area - Font styles OR Colors
+                              SizedBox(
+                                height: 44,
+                                child: openPicker == 'color'
+                                    // Text color picker
+                                    ? ListView(
+                                        scrollDirection: Axis.horizontal,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                        ),
+                                        children: _colors
+                                            .map(
+                                              (color) => GestureDetector(
+                                                onTap: () {
+                                                  setDialogState(() {
+                                                    selectedColor = color;
+                                                  });
+                                                },
+                                                child: Container(
+                                                  width: 36,
+                                                  height: 36,
+                                                  margin:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 4,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: color,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(
+                                                      color:
+                                                          selectedColor == color
+                                                          ? Colors.white
+                                                          : Colors.transparent,
+                                                      width: 3,
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                          );
-                                        }).toList(),
-                                      ),
-                                      // Invisible TextField (for keyboard)
-                                      Positioned.fill(
-                                        child: Opacity(
-                                          opacity: 0,
-                                          child: TextField(
-                                            key: textFieldKey,
-                                            controller: controller,
-                                            autofocus: true,
-                                            style: getTextStyle(),
-                                            textAlign: textAlign,
-                                            maxLines: null,
-                                            decoration: const InputDecoration(
-                                              border: InputBorder.none,
-                                            ),
-                                            onChanged: (value) {
-                                              setDialogState(() {});
-                                            },
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Bottom section - Instagram style (fixed above keyboard)
-                      Padding(
-                        padding: EdgeInsets.only(
-                          bottom: MediaQuery.of(context).viewInsets.bottom > 0
-                              ? 8
-                              : MediaQuery.of(context).viewPadding.bottom + 8,
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Font size slider (horizontal)
-                            Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.text_fields, color: Colors.white54, size: 18),
-                                Expanded(
-                                  child: SliderTheme(
-                                    data: SliderTheme.of(context).copyWith(
-                                      trackHeight: 2,
-                                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                      activeTrackColor: Colors.white,
-                                      inactiveTrackColor: Colors.white38,
-                                      thumbColor: Colors.white,
-                                      overlayColor: Colors.white24,
-                                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                                    ),
-                                    child: Slider(
-                                      value: fontSize,
-                                      min: 16,
-                                      max: 64,
-                                      onChanged: (value) {
-                                        setDialogState(() => fontSize = value);
-                                      },
-                                    ),
-                                  ),
-                                ),
-                                const Icon(Icons.text_fields, color: Colors.white, size: 24),
-                              ],
-                            ),
-                          ),
-
-                          // Tab bar area - Font styles OR Colors
-                          SizedBox(
-                            height: 44,
-                            child: openPicker == 'color'
-                                // Text color picker
-                                ? ListView(
-                                    scrollDirection: Axis.horizontal,
-                                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                                    children: _colors.map((color) => GestureDetector(
-                                      onTap: () {
-                                        setDialogState(() {
-                                          selectedColor = color;
-                                        });
-                                      },
-                                      child: Container(
-                                        width: 36,
-                                        height: 36,
-                                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                                        decoration: BoxDecoration(
-                                          color: color,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: selectedColor == color ? Colors.white : Colors.transparent,
-                                            width: 3,
-                                          ),
-                                        ),
-                                      ),
-                                    )).toList(),
-                                  )
-                                : openPicker == 'bgColor'
+                                            )
+                                            .toList(),
+                                      )
+                                    : openPicker == 'bgColor'
                                     // Background color picker
                                     ? ListView(
                                         scrollDirection: Axis.horizontal,
-                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                        ),
                                         children: [
                                           // Remove background button
                                           GestureDetector(
@@ -2874,11 +3133,16 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                             child: Container(
                                               width: 36,
                                               height: 36,
-                                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                                              margin:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 4,
+                                                  ),
                                               decoration: BoxDecoration(
                                                 shape: BoxShape.circle,
                                                 border: Border.all(
-                                                  color: !hasBackground ? Colors.white : Colors.white54,
+                                                  color: !hasBackground
+                                                      ? Colors.white
+                                                      : Colors.white54,
                                                   width: 2,
                                                 ),
                                               ),
@@ -2890,207 +3154,284 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                             ),
                                           ),
                                           // Color options
-                                          ..._colors.map((color) => GestureDetector(
-                                            onTap: () {
-                                              setDialogState(() {
-                                                backgroundColor = color;
-                                                hasBackground = true;
-                                              });
-                                            },
-                                            child: Container(
-                                              width: 36,
-                                              height: 36,
-                                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                                              decoration: BoxDecoration(
-                                                color: color,
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                  color: hasBackground && backgroundColor == color ? Colors.white : Colors.transparent,
-                                                  width: 3,
+                                          ..._colors.map(
+                                            (color) => GestureDetector(
+                                              onTap: () {
+                                                setDialogState(() {
+                                                  backgroundColor = color;
+                                                  hasBackground = true;
+                                                });
+                                              },
+                                              child: Container(
+                                                width: 36,
+                                                height: 36,
+                                                margin:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: color,
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(
+                                                    color:
+                                                        hasBackground &&
+                                                            backgroundColor ==
+                                                                color
+                                                        ? Colors.white
+                                                        : Colors.transparent,
+                                                    width: 3,
+                                                  ),
                                                 ),
                                               ),
                                             ),
-                                          )),
+                                          ),
                                         ],
                                       )
                                     // Font styles (from config)
                                     : ListView.builder(
                                         scrollDirection: Axis.horizontal,
-                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                        ),
                                         itemCount: fontStyles.length,
                                         itemBuilder: (context, index) {
-                                          final isSelected = selectedFontIndex == index;
+                                          final isSelected =
+                                              selectedFontIndex == index;
                                           final fontConfig = fontStyles[index];
                                           return GestureDetector(
                                             onTap: () {
-                                              setDialogState(() => selectedFontIndex = index);
+                                              setDialogState(
+                                                () => selectedFontIndex = index,
+                                              );
                                             },
                                             child: Container(
-                                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                              margin:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 4,
+                                                  ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 20,
+                                                    vertical: 10,
+                                                  ),
                                               decoration: BoxDecoration(
-                                                color: isSelected ? Colors.white : Colors.transparent,
-                                                borderRadius: BorderRadius.circular(20),
+                                                color: isSelected
+                                                    ? Colors.white
+                                                    : Colors.transparent,
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
                                               ),
                                               child: Text(
                                                 fontConfig.name,
                                                 style: fontConfig.toTextStyle(
                                                   fontSize: 14,
-                                                  color: isSelected ? Colors.black : Colors.white,
+                                                  color: isSelected
+                                                      ? Colors.black
+                                                      : Colors.white,
                                                 ),
                                               ),
                                             ),
                                           );
                                         },
                                       ),
-                          ),
-                          const SizedBox(height: 8),
+                              ),
+                              const SizedBox(height: 8),
 
-                          // Toolbar - at bottom
-                          Container(
-                            margin: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                // Aa - Font button
-                                GestureDetector(
-                                  onTap: () {
-                                    setDialogState(() {
-                                      openPicker = null; // Return to font tab
-                                    });
-                                  },
-                                  child: Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: openPicker == null ? Colors.white : Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        'Aa',
-                                        style: TextStyle(
-                                          color: openPicker == null ? Colors.black : Colors.white,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                              // Toolbar - at bottom
+                              Container(
+                                margin: const EdgeInsets.only(
+                                  left: 16,
+                                  right: 16,
+                                  bottom: 8,
                                 ),
-
-                                // Color picker
-                                GestureDetector(
-                                  onTap: () {
-                                    setDialogState(() {
-                                      openPicker = openPicker == 'color' ? null : 'color';
-                                    });
-                                  },
-                                  child: Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: openPicker == 'color' ? Colors.white : Colors.transparent,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Center(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceEvenly,
+                                  children: [
+                                    // Aa - Font button
+                                    GestureDetector(
+                                      onTap: () {
+                                        setDialogState(() {
+                                          openPicker =
+                                              null; // Return to font tab
+                                        });
+                                      },
                                       child: Container(
-                                        width: 28,
-                                        height: 28,
+                                        width: 44,
+                                        height: 44,
                                         decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          gradient: const LinearGradient(
-                                            colors: [Colors.red, Colors.orange, Colors.yellow, Colors.green, Colors.blue, Colors.purple],
+                                          color: openPicker == null
+                                              ? Colors.white
+                                              : Colors.white.withValues(
+                                                  alpha: 0.2,
+                                                ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
                                           ),
-                                          border: Border.all(color: openPicker == 'color' ? Colors.black : Colors.white, width: 2),
                                         ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-
-                                // Italic //A
-                                GestureDetector(
-                                  onTap: () {
-                                    setDialogState(() => isItalic = !isItalic);
-                                  },
-                                  child: Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: isItalic ? Colors.white : Colors.transparent,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        '//A',
-                                        style: TextStyle(
-                                          color: isItalic ? Colors.black : Colors.white,
-                                          fontSize: 16,
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-
-                                // Background A (dotted border)
-                                GestureDetector(
-                                  onTap: () {
-                                    setDialogState(() {
-                                      if (openPicker == 'bgColor') {
-                                        // If color picker is open, close it and disable background
-                                        openPicker = null;
-                                        hasBackground = false;
-                                      } else if (hasBackground) {
-                                        // If background exists, open color picker
-                                        openPicker = 'bgColor';
-                                      } else {
-                                        // If no background, enable it and show color picker
-                                        hasBackground = true;
-                                        openPicker = 'bgColor';
-                                      }
-                                    });
-                                  },
-                                  child: Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: openPicker == 'bgColor' ? Colors.white : Colors.transparent,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: CustomPaint(
-                                      painter: DottedBorderPainter(
-                                        color: openPicker == 'bgColor' ? Colors.black : Colors.white,
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          'A',
-                                          style: TextStyle(
-                                            color: openPicker == 'bgColor' ? Colors.black : Colors.white,
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
+                                        child: Center(
+                                          child: Text(
+                                            'Aa',
+                                            style: TextStyle(
+                                              color: openPicker == null
+                                                  ? Colors.black
+                                                  : Colors.white,
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
 
-                              ],
-                            ),
+                                    // Color picker
+                                    GestureDetector(
+                                      onTap: () {
+                                        setDialogState(() {
+                                          openPicker = openPicker == 'color'
+                                              ? null
+                                              : 'color';
+                                        });
+                                      },
+                                      child: Container(
+                                        width: 44,
+                                        height: 44,
+                                        decoration: BoxDecoration(
+                                          color: openPicker == 'color'
+                                              ? Colors.white
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Center(
+                                          child: Container(
+                                            width: 28,
+                                            height: 28,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              gradient: const LinearGradient(
+                                                colors: [
+                                                  Colors.red,
+                                                  Colors.orange,
+                                                  Colors.yellow,
+                                                  Colors.green,
+                                                  Colors.blue,
+                                                  Colors.purple,
+                                                ],
+                                              ),
+                                              border: Border.all(
+                                                color: openPicker == 'color'
+                                                    ? Colors.black
+                                                    : Colors.white,
+                                                width: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+
+                                    // Italic //A
+                                    GestureDetector(
+                                      onTap: () {
+                                        setDialogState(
+                                          () => isItalic = !isItalic,
+                                        );
+                                      },
+                                      child: Container(
+                                        width: 44,
+                                        height: 44,
+                                        decoration: BoxDecoration(
+                                          color: isItalic
+                                              ? Colors.white
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Center(
+                                          child: Text(
+                                            '//A',
+                                            style: TextStyle(
+                                              color: isItalic
+                                                  ? Colors.black
+                                                  : Colors.white,
+                                              fontSize: 16,
+                                              fontStyle: FontStyle.italic,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+
+                                    // Background A (dotted border)
+                                    GestureDetector(
+                                      onTap: () {
+                                        setDialogState(() {
+                                          if (openPicker == 'bgColor') {
+                                            // If color picker is open, close it and disable background
+                                            openPicker = null;
+                                            hasBackground = false;
+                                          } else if (hasBackground) {
+                                            // If background exists, open color picker
+                                            openPicker = 'bgColor';
+                                          } else {
+                                            // If no background, enable it and show color picker
+                                            hasBackground = true;
+                                            openPicker = 'bgColor';
+                                          }
+                                        });
+                                      },
+                                      child: Container(
+                                        width: 44,
+                                        height: 44,
+                                        decoration: BoxDecoration(
+                                          color: openPicker == 'bgColor'
+                                              ? Colors.white
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: CustomPaint(
+                                          painter: DottedBorderPainter(
+                                            color: openPicker == 'bgColor'
+                                                ? Colors.black
+                                                : Colors.white,
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              'A',
+                                              style: TextStyle(
+                                                color: openPicker == 'bgColor'
+                                                    ? Colors.black
+                                                    : Colors.white,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    ],
                   ),
-                ),
                 ),
               );
             },
@@ -3113,7 +3454,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     try {
       if (_mediaType == MediaType.video) {
         if (!_requiresVideoExport()) {
-          debugPrint('VideoOverlayProcessor: No video edits detected, skipping export and using original file');
+          debugPrint(
+            'VideoOverlayProcessor: No video edits detected, skipping export and using original file',
+          );
           await PhotoManager.editor.saveVideo(
             File(widget.mediaPath),
             title: 'story_edited_${DateTime.now().millisecondsSinceEpoch}.mp4',
@@ -3131,27 +3474,37 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         // VIDEO: Briefly pause to capture overlay, then resume playback
         final stopwatch = Stopwatch()..start();
         _videoController?.pause();
-        final (overlayPng, animatedStickers) = await _captureVideoExportLayers();
-        debugPrint('VideoOverlayProcessor: Overlay capture: ${stopwatch.elapsedMilliseconds}ms');
+        final (overlayPng, animatedStickers) =
+            await _captureVideoExportLayers();
+        debugPrint(
+          'VideoOverlayProcessor: Overlay capture: ${stopwatch.elapsedMilliseconds}ms',
+        );
         _videoController?.play(); // Resume immediately after capture
 
         if (overlayPng == null) throw Exception('Failed to capture overlay');
 
         // Export runs in background on native side
-        final exportedPath = await VideoOverlayExportService.exportVideoWithOverlay(
-          videoPath: widget.mediaPath,
-          overlayPngBytes: overlayPng,
-          animatedStickers: animatedStickers,
-          mirrorHorizontally: widget.flipHorizontally,
-          outputWidth: context.storyEditorConfig.storyCanvasWidth,
-          outputHeight: context.storyEditorConfig.storyCanvasHeight,
-          filterPreset: widget.initialFilterPreset,
-          filterStrength: widget.initialFilterStrength,
-          shouldMuteAudio: _isMuted,
+        final exportedPath =
+            await VideoOverlayExportService.exportVideoWithOverlay(
+              videoPath: widget.mediaPath,
+              overlayPngBytes: overlayPng,
+              animatedStickers: animatedStickers,
+              mirrorHorizontally: widget.flipHorizontally,
+              outputWidth: context.storyEditorConfig.storyCanvasWidth,
+              outputHeight: context.storyEditorConfig.storyCanvasHeight,
+              filterPreset: widget.initialFilterPreset,
+              filterStrength: widget.initialFilterStrength,
+              shouldMuteAudio: _isMuted,
+              trimStartMs: _trimStartMs,
+              trimEndMs: _trimEndMs,
+            );
+        debugPrint(
+          'VideoOverlayProcessor: Total export: ${stopwatch.elapsedMilliseconds}ms',
         );
-        debugPrint('VideoOverlayProcessor: Total export: ${stopwatch.elapsedMilliseconds}ms');
         if (exportedPath == null) {
-          final details = VideoOverlayExportService.lastExportError ?? 'unknown native error';
+          final details =
+              VideoOverlayExportService.lastExportError ??
+              'unknown native error';
           throw Exception('Video export failed: $details');
         }
 
@@ -3165,14 +3518,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         final Uint8List pngBytes = await _captureImageAtStoryCanvas();
 
         final tempDir = Directory.systemTemp;
-        final fileName = 'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
+        final fileName =
+            'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
         final file = File('${tempDir.path}/$fileName');
         await file.writeAsBytes(pngBytes);
 
-        await PhotoManager.editor.saveImageWithPath(
-          file.path,
-          title: fileName,
-        );
+        await PhotoManager.editor.saveImageWithPath(file.path, title: fileName);
       }
 
       if (mounted) {
@@ -3208,10 +3559,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           'packages/story_editor_pro/assets/icons/profile-circle.svg',
           width: 32,
           height: 32,
-          colorFilter: const ColorFilter.mode(
-            Colors.white54,
-            BlendMode.srcIn,
-          ),
+          colorFilter: const ColorFilter.mode(Colors.white54, BlendMode.srcIn),
         ),
       ),
     );
@@ -3282,37 +3630,45 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
       if (_mediaType == MediaType.video) {
         {
-        // VIDEO: Always export to ensure proper compression (raw camera footage can be 100+ MB).
-        // For no-edit videos, the transparent overlay is a no-op and the export just recompresses.
-        final stopwatch = Stopwatch()..start();
-        _videoController?.pause();
+          // VIDEO: Always export to ensure proper compression (raw camera footage can be 100+ MB).
+          // For no-edit videos, the transparent overlay is a no-op and the export just recompresses.
+          final stopwatch = Stopwatch()..start();
+          _videoController?.pause();
 
-        final (overlayPng, animatedStickers) = await _captureVideoExportLayers();
-        debugPrint('VideoOverlayProcessor: Overlay capture: ${stopwatch.elapsedMilliseconds}ms');
-        _videoController?.play(); // Resume immediately after capture
+          final (overlayPng, animatedStickers) =
+              await _captureVideoExportLayers();
+          debugPrint(
+            'VideoOverlayProcessor: Overlay capture: ${stopwatch.elapsedMilliseconds}ms',
+          );
+          _videoController?.play(); // Resume immediately after capture
 
-        if (overlayPng == null) throw Exception('Failed to capture overlay');
+          if (overlayPng == null) throw Exception('Failed to capture overlay');
 
-        // Start export in background — returns predetermined output path immediately (~10ms)
-        filePath = await VideoOverlayExportService.startExportInBackground(
-          videoPath: widget.mediaPath,
-          overlayPngBytes: overlayPng,
-          animatedStickers: animatedStickers,
-          mirrorHorizontally: widget.flipHorizontally,
-          outputWidth: context.storyEditorConfig.storyCanvasWidth,
-          outputHeight: context.storyEditorConfig.storyCanvasHeight,
-          filterPreset: widget.initialFilterPreset,
-          filterStrength: widget.initialFilterStrength,
-          shouldMuteAudio: _isMuted,
-        );
-        debugPrint('VideoOverlayProcessor: Background export started in ${stopwatch.elapsedMilliseconds}ms, navigating immediately');
-        resultMediaType = StoryMediaType.video;
+          // Start export in background — returns predetermined output path immediately (~10ms)
+          filePath = await VideoOverlayExportService.startExportInBackground(
+            videoPath: widget.mediaPath,
+            overlayPngBytes: overlayPng,
+            animatedStickers: animatedStickers,
+            mirrorHorizontally: widget.flipHorizontally,
+            outputWidth: context.storyEditorConfig.storyCanvasWidth,
+            outputHeight: context.storyEditorConfig.storyCanvasHeight,
+            filterPreset: widget.initialFilterPreset,
+            filterStrength: widget.initialFilterStrength,
+            shouldMuteAudio: _isMuted,
+            trimStartMs: _trimStartMs,
+            trimEndMs: _trimEndMs,
+          );
+          debugPrint(
+            'VideoOverlayProcessor: Background export started in ${stopwatch.elapsedMilliseconds}ms, navigating immediately',
+          );
+          resultMediaType = StoryMediaType.video;
         }
       } else {
         // IMAGE: Export on fixed story canvas (e.g. 1080x1920)
         final pngBytes = await _captureImageAtStoryCanvas();
         final tempDir = Directory.systemTemp;
-        final fileName = 'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
+        final fileName =
+            'story_edited_${DateTime.now().millisecondsSinceEpoch}.png';
         final file = File('${tempDir.path}/$fileName');
         await file.writeAsBytes(pngBytes);
 
@@ -3329,13 +3685,16 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           fileSize: 0,
           createdAt: DateTime.now(),
           durationMs: _mediaType == MediaType.video
-              ? _videoController?.value.duration.inMilliseconds
+              ? (_trimEndMs - _trimStartMs)
               : null,
+          music: _selectedMusic,
         );
 
         final shareResult = StoryShareResult(
           story: storyResult,
-          shareTarget: closeFriends ? ShareTarget.closeFriends : ShareTarget.story,
+          shareTarget: closeFriends
+              ? ShareTarget.closeFriends
+              : ShareTarget.story,
           selectedFriends: selectedFriends,
         );
 
@@ -3354,7 +3713,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       if (mounted) {
         if (_mediaType == MediaType.video) _videoController?.play();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${context.storyEditorConfig.strings.editorCouldNotSave}: $e')),
+          SnackBar(
+            content: Text(
+              '${context.storyEditorConfig.strings.editorCouldNotSave}: $e',
+            ),
+          ),
         );
       }
     }
@@ -3429,26 +3792,38 @@ class TriangleSliderPainter extends CustomPainter {
     final shadowPaint = Paint()
       ..color = Colors.black.withValues(alpha: 0.4)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-    canvas.drawCircle(Offset(indicatorX + 1, indicatorY + 2), indicatorRadius, shadowPaint);
+    canvas.drawCircle(
+      Offset(indicatorX + 1, indicatorY + 2),
+      indicatorRadius,
+      shadowPaint,
+    );
 
     // White outer ring (thicker)
     final outerBorderPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(indicatorX, indicatorY), indicatorRadius + 3, outerBorderPaint);
+    canvas.drawCircle(
+      Offset(indicatorX, indicatorY),
+      indicatorRadius + 3,
+      outerBorderPaint,
+    );
 
     // Active color circle
     final indicatorPaint = Paint()
       ..color = activeColor
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(indicatorX, indicatorY), indicatorRadius, indicatorPaint);
+    canvas.drawCircle(
+      Offset(indicatorX, indicatorY),
+      indicatorRadius,
+      indicatorPaint,
+    );
   }
 
   @override
   bool shouldRepaint(covariant TriangleSliderPainter oldDelegate) {
     return oldDelegate.value != value ||
-           oldDelegate.activeColor != activeColor ||
-           oldDelegate.brushSize != brushSize;
+        oldDelegate.activeColor != activeColor ||
+        oldDelegate.brushSize != brushSize;
   }
 }
 
@@ -3486,7 +3861,8 @@ class DottedBorderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant DottedBorderPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(covariant DottedBorderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class TextOverlay {
@@ -3500,6 +3876,7 @@ class TextOverlay {
   final double scale;
   final int fontIndex;
   final bool isItalic;
+  final TextAlign textAlign;
 
   TextOverlay({
     required this.text,
@@ -3512,6 +3889,7 @@ class TextOverlay {
     this.scale = 1.0,
     this.fontIndex = 0,
     this.isItalic = false,
+    this.textAlign = TextAlign.center,
   });
 
   TextOverlay copyWith({
@@ -3525,6 +3903,7 @@ class TextOverlay {
     double? scale,
     int? fontIndex,
     bool? isItalic,
+    TextAlign? textAlign,
   }) {
     return TextOverlay(
       text: text ?? this.text,
@@ -3537,6 +3916,7 @@ class TextOverlay {
       scale: scale ?? this.scale,
       fontIndex: fontIndex ?? this.fontIndex,
       isItalic: isItalic ?? this.isItalic,
+      textAlign: textAlign ?? this.textAlign,
     );
   }
 
@@ -3650,7 +4030,8 @@ class DrawingPainter extends CustomPainter {
 
     // Draw arrow head
     final lastPoint = path.points.last;
-    final secondLast = path.points[path.points.length > 5 ? path.points.length - 5 : 0];
+    final secondLast =
+        path.points[path.points.length > 5 ? path.points.length - 5 : 0];
     final angle = (lastPoint - secondLast).direction;
     final arrowSize = path.strokeWidth * 2.5;
 
@@ -3673,13 +4054,19 @@ class DrawingPainter extends CustomPainter {
     final paint = Paint()
       ..color = path.color.withValues(alpha: 0.5)
       ..strokeWidth = path.strokeWidth * 2
-      ..strokeCap = StrokeCap.square // Square tip
-      ..strokeJoin = StrokeJoin.bevel // Broken corner
+      ..strokeCap = StrokeCap
+          .square // Square tip
+      ..strokeJoin = StrokeJoin
+          .bevel // Broken corner
       ..style = PaintingStyle.stroke;
 
     if (path.points.length == 1) {
       canvas.drawRect(
-        Rect.fromCenter(center: path.points.first, width: path.strokeWidth * 2, height: path.strokeWidth),
+        Rect.fromCenter(
+          center: path.points.first,
+          width: path.strokeWidth * 2,
+          height: path.strokeWidth,
+        ),
         paint..style = PaintingStyle.fill,
       );
     } else {
@@ -3707,7 +4094,11 @@ class DrawingPainter extends CustomPainter {
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, i * 4.0);
 
       if (path.points.length == 1) {
-        canvas.drawCircle(path.points.first, (path.strokeWidth + i * 8) / 2, glowPaint);
+        canvas.drawCircle(
+          path.points.first,
+          (path.strokeWidth + i * 8) / 2,
+          glowPaint,
+        );
       } else {
         final drawPath = Path();
         drawPath.moveTo(path.points.first.dx, path.points.first.dy);

@@ -114,7 +114,16 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let filterPreset = args["filterPreset"] as? String ?? "none"
         let filterStrength = args["filterStrength"] as? Double ?? 1.0
         let shouldMuteAudio = args["shouldMuteAudio"] as? Bool ?? false
+        let trimStartMs = (args["trimStartMs"] as? NSNumber)?.int64Value ?? 0
+        let trimEndMs = (args["trimEndMs"] as? NSNumber)?.int64Value ?? 0
         let animatedStickers = args["animatedStickers"] as? [[String: Any]] ?? []
+
+        guard trimStartMs >= 0, trimEndMs >= 0,
+              trimEndMs == 0 || trimEndMs > trimStartMs else {
+            result(FlutterError(code: "INVALID_TRIM",
+                   message: "The video trim range is invalid", details: nil))
+            return
+        }
 
         if videoOverlayProcessor == nil {
             videoOverlayProcessor = VideoOverlayProcessor()
@@ -130,19 +139,16 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             outputHeight: outputHeight,
             filterPreset: filterPreset,
             filterStrength: filterStrength,
-            shouldMuteAudio: shouldMuteAudio
+            shouldMuteAudio: shouldMuteAudio,
+            trimStartMs: trimStartMs,
+            trimEndMs: trimEndMs
         ) { output, errorMessage in
             if let output = output {
                 result(output)
             } else {
                 result(FlutterError(code: "EXPORT_FAILED",
                        message: errorMessage ?? "Failed to export video with overlay",
-                       details: [
-                            "videoPath": videoPath,
-                            "overlayImagePath": overlayImagePath,
-                            "outputPath": outputPath,
-                            "nativeError": errorMessage ?? "unknown"
-                       ]))
+                       details: ["nativeError": errorMessage ?? "unknown"]))
             }
         }
     }

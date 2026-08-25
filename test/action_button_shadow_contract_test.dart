@@ -70,10 +70,10 @@ void main() {
     expect(
       _section(
         editorSource,
-        'List<Widget> _buildTextOverlaysForExport()',
+        'Widget _buildTextOverlayVisual(',
         'List<Widget> _buildTextOverlays()',
       ),
-      contains('boxShadow:'),
+      contains('Shadow('),
     );
     expect(smartTagSource, contains('boxShadow:'));
   });

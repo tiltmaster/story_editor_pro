@@ -22,6 +22,10 @@ uniform float uSCurve;
 // Radial darkening — IDENTICAL to the Android GLSL export shader.
 uniform float uVignette;
 
+// Conservative skin-aware bilateral smoothing and VHS styling.
+uniform float uBeauty;
+uniform float uVhs;
+
 // Input backdrop image.
 // When used with BackdropFilter, Flutter auto-binds the backdrop pixels here.
 // Do NOT call setImageSampler() from Dart — the framework handles it.
@@ -32,12 +36,41 @@ out vec4 fragColor;
 void main() {
     vec2 uv  = FlutterFragCoord().xy / uSize;
     vec4 tex = texture(uTexture, uv);
+    vec3 source = tex.rgb;
+
+    if (uBeauty > 0.001) {
+        vec2 px = 1.35 / max(uSize, vec2(1.0));
+        vec3 neighborhood =
+            source * 4.0 +
+            texture(uTexture, uv + vec2(px.x, 0.0)).rgb +
+            texture(uTexture, uv - vec2(px.x, 0.0)).rgb +
+            texture(uTexture, uv + vec2(0.0, px.y)).rgb +
+            texture(uTexture, uv - vec2(0.0, px.y)).rgb;
+        vec3 softened = neighborhood / 8.0;
+        float luma = dot(source, vec3(0.2126, 0.7152, 0.0722));
+        float warm = smoothstep(0.015, 0.18, source.r - source.g + 0.035);
+        float notBlue = 1.0 - smoothstep(0.0, 0.16, source.b - source.g);
+        float skin = warm * notBlue * smoothstep(0.08, 0.28, luma) *
+                     (1.0 - smoothstep(0.86, 1.0, luma));
+        source = mix(source, softened, skin * uBeauty);
+        source += vec3(0.012, 0.006, 0.003) * skin * uBeauty;
+    }
+
+    if (uVhs > 0.001) {
+        vec2 shift = vec2(1.6 / max(uSize.x, 1.0), 0.0) * uVhs;
+        source.r = texture(uTexture, uv + shift).r;
+        source.b = texture(uTexture, uv - shift).b;
+        float scan = sin(uv.y * uSize.y * 1.52) * 0.018 * uVhs;
+        float grain = fract(sin(dot(floor(FlutterFragCoord().xy),
+            vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        source += vec3(scan + grain * 0.035 * uVhs);
+    }
 
     // Colour matrix (same formula as Android GLSL + iOS CIColorMatrix)
     vec3 color = vec3(
-        dot(uMatRow0, tex.rgb) + uBias,
-        dot(uMatRow1, tex.rgb) + uBias,
-        dot(uMatRow2, tex.rgb) + uBias
+        dot(uMatRow0, source) + uBias,
+        dot(uMatRow1, source) + uBias,
+        dot(uMatRow2, source) + uBias
     );
 
     // S-curve: smoothstep blend — identical to Android GLSL

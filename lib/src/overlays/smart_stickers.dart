@@ -30,6 +30,7 @@ enum SmartStickerType {
   location,
   emoji,
   greeting,
+  vhs,
 }
 
 class SmartStickerOverlay {
@@ -69,6 +70,8 @@ int smartStickerSkinCount(SmartStickerType type) {
     case SmartStickerType.emoji:
       return 2;
     case SmartStickerType.greeting:
+      return 2;
+    case SmartStickerType.vhs:
       return 2;
   }
 }
@@ -237,6 +240,8 @@ Widget buildSmartStickerContent(SmartStickerOverlay o) {
       return _emojiSticker(o);
     case SmartStickerType.greeting:
       return _greetingSticker(o);
+    case SmartStickerType.vhs:
+      return _vhsSticker(o);
   }
 }
 
@@ -659,6 +664,33 @@ Widget _emojiSticker(SmartStickerOverlay o) {
   return Text(e, style: const TextStyle(fontSize: 72));
 }
 
+Widget _vhsSticker(SmartStickerOverlay o) {
+  final time = o.data['time'] ?? '';
+  final date = o.data['date'] ?? '';
+  final source = o.data['source'] ?? 'MOBILE';
+  final style = TextStyle(
+    color: Colors.white,
+    fontSize: o.skin == 0 ? 25 : 20,
+    height: 1.05,
+    fontWeight: FontWeight.w500,
+    fontFamily: 'monospace',
+    letterSpacing: 1.1,
+    shadows: const [
+      Shadow(color: Color(0xFF42D7E8), offset: Offset(-1.2, 0)),
+      Shadow(color: Color(0xFFFF5A72), offset: Offset(1.2, 0)),
+      Shadow(color: Colors.black87, blurRadius: 4, offset: Offset(0, 2)),
+    ],
+  );
+  if (o.skin == 1) {
+    return Text('$time\n$date', style: style, textAlign: TextAlign.left);
+  }
+  return Text(
+    'CAMERA 1\nPLAY  ▶\n$time\n$date  $source',
+    style: style,
+    textAlign: TextAlign.left,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Data capture (frozen at add-time)
 // ---------------------------------------------------------------------------
@@ -721,6 +753,12 @@ Future<Map<String, String>> captureStickerData(
           : (morning ? 'Good Morning' : 'Good Evening');
       final emoji = morning ? '☀️' : '🌙';
       return {'greeting': text, 'emoji': emoji};
+    case SmartStickerType.vhs:
+      return {
+        'time': DateFormat('HH:mm:ss', locale).format(now),
+        'date': DateFormat('dd.MM.yyyy EEE', locale).format(now).toUpperCase(),
+        'source': 'MOBILE',
+      };
   }
 }
 

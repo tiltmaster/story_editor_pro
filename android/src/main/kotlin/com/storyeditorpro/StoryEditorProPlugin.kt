@@ -737,12 +737,19 @@ class StoryEditorProPlugin :
         val filterPreset = call.argument<String>("filterPreset") ?: "none"
         val filterStrength = call.argument<Double>("filterStrength") ?: 1.0
         val shouldMuteAudio = call.argument<Boolean>("shouldMuteAudio") ?: false
+        val trimStartMs = call.argument<Number>("trimStartMs")?.toLong() ?: 0L
+        val trimEndMs = call.argument<Number>("trimEndMs")?.toLong() ?: 0L
         val animatedStickers =
             call.argument<List<Map<String, Any?>>>("animatedStickers") ?: emptyList()
 
         if (videoPath == null || overlayImagePath == null || outputPath == null) {
             result.error("INVALID_ARGS",
                 "videoPath, overlayImagePath and outputPath are required", null)
+            return
+        }
+        if (trimStartMs < 0L || trimEndMs < 0L ||
+            (trimEndMs > 0L && trimEndMs <= trimStartMs)) {
+            result.error("INVALID_TRIM", "The video trim range is invalid", null)
             return
         }
 
@@ -760,22 +767,18 @@ class StoryEditorProPlugin :
                     outputHeight = outputHeight,
                     filterPreset = filterPreset,
                     filterStrength = filterStrength,
-                    shouldMuteAudio = shouldMuteAudio
+                    shouldMuteAudio = shouldMuteAudio,
+                    trimStartMs = trimStartMs,
+                    trimEndMs = trimEndMs
                 )
 
                 activity?.runOnUiThread {
                     if (output != null) {
                         result.success(output)
                     } else {
-                        val details = mapOf(
-                            "videoPath" to videoPath,
-                            "overlayImagePath" to overlayImagePath,
-                            "outputPath" to outputPath,
-                            "processorError" to processor.lastError
-                        )
                         result.error("EXPORT_FAILED",
                             processor.lastError ?: "Failed to export video with overlay",
-                            details)
+                            mapOf("processorError" to processor.lastError))
                     }
                 }
             } catch (e: Exception) {

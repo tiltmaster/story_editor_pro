@@ -19,6 +19,8 @@ class VideoOverlayProcessor {
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
         shouldMuteAudio: Bool = false,
+        trimStartMs: Int64 = 0,
+        trimEndMs: Int64 = 0,
         completion: @escaping (String?, String?) -> Void
     ) {
         print("VideoOverlayProcessor: BuildMarker=\(buildMarker)")
@@ -41,6 +43,8 @@ class VideoOverlayProcessor {
                 filterPreset: filterPreset,
                 filterStrength: filterStrength,
                 shouldMuteAudio: shouldMuteAudio,
+                trimStartMs: trimStartMs,
+                trimEndMs: trimEndMs,
                 completion: completion
             )
         }
@@ -147,11 +151,13 @@ class VideoOverlayProcessor {
         filterPreset: String,
         filterStrength: Double,
         shouldMuteAudio: Bool = false,
+        trimStartMs: Int64 = 0,
+        trimEndMs: Int64 = 0,
         completion: @escaping (String?, String?) -> Void
     ) {
         guard let overlayUIImage = UIImage(contentsOfFile: overlayImagePath),
               let overlayCGImage = overlayUIImage.cgImage else {
-            DispatchQueue.main.async { completion(nil, "Failed to load overlay image from path: \(overlayImagePath)") }
+            DispatchQueue.main.async { completion(nil, "Failed to load the overlay image.") }
             return
         }
 
@@ -164,6 +170,15 @@ class VideoOverlayProcessor {
 
         guard let videoTrack = asset.tracks(withMediaType: .video).first else {
             DispatchQueue.main.async { completion(nil, "No video track found in input file.") }
+            return
+        }
+        let trimStartSeconds = max(0, Double(trimStartMs) / 1000.0)
+        let requestedTrimEndSeconds = trimEndMs > 0
+            ? Double(trimEndMs) / 1000.0
+            : inputDuration
+        let trimEndSeconds = min(inputDuration, requestedTrimEndSeconds)
+        guard trimStartSeconds < trimEndSeconds else {
+            DispatchQueue.main.async { completion(nil, "The video trim range is outside the input duration.") }
             return
         }
 
@@ -231,7 +246,7 @@ class VideoOverlayProcessor {
 
             // Animated GIF stickers on top, advanced to this frame's timestamp
             if !animatedLayers.isEmpty {
-                let seconds = request.compositionTime.seconds
+                let seconds = max(0, request.compositionTime.seconds - trimStartSeconds)
                 for layer in animatedLayers {
                     let frame = self.stickerFrame(layer, at: seconds)
                     let extent = frame.extent
@@ -266,6 +281,13 @@ class VideoOverlayProcessor {
         exporter.outputURL = outputURL
         exporter.outputFileType = .mp4
         exporter.shouldOptimizeForNetworkUse = true
+        exporter.timeRange = CMTimeRange(
+            start: CMTime(seconds: trimStartSeconds, preferredTimescale: 600),
+            duration: CMTime(
+                seconds: trimEndSeconds - trimStartSeconds,
+                preferredTimescale: 600
+            )
+        )
 
         // Mute: silence the audio track in the exported file.
         if shouldMuteAudio, let audioTrack = asset.tracks(withMediaType: .audio).first {
@@ -297,9 +319,9 @@ class VideoOverlayProcessor {
                     print("VideoOverlayProcessor: SinglePass export completed successfully")
                     completion(outputPath, nil)
                 } else {
-                    let msg = exporter.error?.localizedDescription ?? "unknown"
-                    print("VideoOverlayProcessor: SinglePass export failed: \(msg)")
-                    completion(nil, "AVAssetExportSession (filter+overlay) failed: \(msg)")
+                    let code = (exporter.error as NSError?)?.code ?? -1
+                    print("VideoOverlayProcessor: SinglePass export failed (code=\(code))")
+                    completion(nil, "AVAssetExportSession failed (code=\(code)).")
                 }
             }
         }
@@ -406,10 +428,29 @@ class VideoOverlayProcessor {
             if let result = vignette.outputImage { output = result }
         }
 
+        if p.beauty > 0.001,
+           let smoothing = CIFilter(name: "CINoiseReduction") {
+            smoothing.setValue(output, forKey: kCIInputImageKey)
+            smoothing.setValue(0.015 + p.beauty * 0.025, forKey: "inputNoiseLevel")
+            smoothing.setValue(0.35 + p.beauty * 0.20, forKey: "inputSharpness")
+            if let result = smoothing.outputImage { output = result }
+        }
+
+        if p.vhs > 0.001,
+           let stripes = CIFilter(name: "CIStripesGenerator") {
+            stripes.setValue(CIColor(red: 1, green: 1, blue: 1, alpha: 0), forKey: "inputColor0")
+            stripes.setValue(CIColor(red: 0, green: 0, blue: 0, alpha: 0.055 * p.vhs), forKey: "inputColor1")
+            stripes.setValue(1.0, forKey: "inputWidth")
+            stripes.setValue(0.35, forKey: "inputSharpness")
+            if let scanlines = stripes.outputImage?.cropped(to: output.extent) {
+                output = scanlines.composited(over: output)
+            }
+        }
+
         return output
     }
 
-    private func resolveFilterParams(preset: String, strength: Double) -> (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double) {
+    private func resolveFilterParams(preset: String, strength: Double) -> (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double, beauty: Double, vhs: Double) {
         let neutral = (brightness: 0.0, contrast: 1.0, saturation: 1.0, red: 1.0, green: 1.0, blue: 1.0, vignette: 0.0, sCurve: 0.0, warpMode: 0, warpAmount: 0.0)
         let target: (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double)
 
@@ -434,12 +475,26 @@ class VideoOverlayProcessor {
         case "productcrisp":target = (0.01,  1.28, 1.22, 1.04, 1.04, 1.04, 0.08, 0.45, 0, 0.0)
         case "filmicfade":  target = (0.02,  1.05, 0.72, 1.06, 1.01, 0.90, 0.52, 0.25, 0, 0.0)
         case "pastelmist":  target = (0.06,  0.88, 0.88, 1.06, 1.02, 1.08, 0.22, 0.0,  0, 0.0)
+        case "goldenhour":  target = (0.05,  1.08, 1.22, 1.22, 1.08, 0.72, 0.25, 0.20, 0, 0.0)
+        case "arctic":      target = (0.06,  1.12, 0.85, 0.86, 1.00, 1.30, 0.0,  0.0,  0, 0.0)
+        case "sepia":       target = (0.03,  1.05, 0.35, 1.22, 1.05, 0.78, 0.21, 0.35, 0, 0.0)
+        case "emerald":     target = (0.0,   1.12, 1.12, 0.85, 1.20, 0.95, 0.0,  0.25, 0, 0.0)
+        case "rosegold":    target = (0.05,  1.02, 1.10, 1.20, 0.98, 1.02, 0.0,  0.0,  0, 0.0)
+        case "moody":       target = (-0.06, 1.28, 0.82, 0.98, 0.98, 1.06, 0.36, 0.55, 0, 0.0)
+        case "bleach":      target = (0.08,  1.35, 0.55, 1.02, 1.02, 1.00, 0.43, 0.0,  0, 0.0)
+        case "velvet":      target = (-0.02, 1.15, 1.30, 1.10, 0.88, 1.14, 0.28, 0.40, 0, 0.0)
+        case "softbeauty":  target = (0.045, 0.96, 1.04, 1.06, 1.015,0.985,0.0,  0.0,  0, 0.0)
+        case "cleanglow":   target = (0.065, 1.02, 1.08, 1.035,1.02, 1.0,  0.0,  0.12, 0, 0.0)
+        case "vhs1993":     target = (0.025, 1.08, 0.78, 1.08, 1.0,  0.88, 0.43, 0.18, 0, 0.0)
+        case "kuwaitgold":  target = (0.045, 1.10, 1.16, 1.18, 1.065,0.82, 0.21, 0.22, 0, 0.0)
         default:            target = neutral
         }
 
         func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double {
             a + (b - a) * t
         }
+        let beautyTarget = preset == "softbeauty" ? 0.42 : (preset == "cleanglow" ? 0.24 : 0.0)
+        let vhsTarget = preset == "vhs1993" ? 0.72 : 0.0
 
         return (
             brightness: lerp(neutral.brightness, target.brightness, strength),
@@ -451,7 +506,9 @@ class VideoOverlayProcessor {
             vignette:   lerp(neutral.vignette,   target.vignette,   strength),
             sCurve:     lerp(neutral.sCurve,     target.sCurve,     strength),
             warpMode:   target.warpMode,
-            warpAmount: lerp(neutral.warpAmount, target.warpAmount, strength)
+            warpAmount: lerp(neutral.warpAmount, target.warpAmount, strength),
+            beauty:     beautyTarget * strength,
+            vhs:        vhsTarget * strength
         )
     }
 

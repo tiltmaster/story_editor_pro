@@ -46,10 +46,38 @@ class TextureRenderer {
             uniform vec3 uColorBias;
             uniform float uVignette;
             uniform float uSCurve;
+            uniform vec2 uOutputSize;
+            uniform float uBeauty;
+            uniform float uVhs;
             void main() {
                 vec2 uv = vTexCoord;
                 vec4 tex = texture2D(uTexture, uv);
-                vec3 color = uColorMatrix * tex.rgb + uColorBias;
+                vec3 source = tex.rgb;
+                if (uBeauty > 0.001) {
+                    vec2 px = vec2(1.35) / max(uOutputSize, vec2(1.0));
+                    vec3 softened = (source * 4.0
+                        + texture2D(uTexture, uv + vec2(px.x, 0.0)).rgb
+                        + texture2D(uTexture, uv - vec2(px.x, 0.0)).rgb
+                        + texture2D(uTexture, uv + vec2(0.0, px.y)).rgb
+                        + texture2D(uTexture, uv - vec2(0.0, px.y)).rgb) / 8.0;
+                    float luma = dot(source, vec3(0.2126, 0.7152, 0.0722));
+                    float warm = smoothstep(0.015, 0.18, source.r - source.g + 0.035);
+                    float notBlue = 1.0 - smoothstep(0.0, 0.16, source.b - source.g);
+                    float skin = warm * notBlue * smoothstep(0.08, 0.28, luma)
+                        * (1.0 - smoothstep(0.86, 1.0, luma));
+                    source = mix(source, softened, skin * uBeauty);
+                    source += vec3(0.012, 0.006, 0.003) * skin * uBeauty;
+                }
+                if (uVhs > 0.001) {
+                    vec2 shift = vec2(1.6 / max(uOutputSize.x, 1.0), 0.0) * uVhs;
+                    source.r = texture2D(uTexture, uv + shift).r;
+                    source.b = texture2D(uTexture, uv - shift).b;
+                    float scan = sin(uv.y * uOutputSize.y * 1.52) * 0.018 * uVhs;
+                    float grain = fract(sin(dot(floor(uv * uOutputSize),
+                        vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+                    source += vec3(scan + grain * 0.035 * uVhs);
+                }
+                vec3 color = uColorMatrix * source + uColorBias;
                 if (uSCurve > 0.001) {
                     vec3 curved = color * color * (3.0 - 2.0 * color);
                     color = mix(color, curved, uSCurve);
@@ -129,6 +157,8 @@ class TextureRenderer {
     private var colorBias = floatArrayOf(0f, 0f, 0f)
     private var filterVignette = 0f
     private var filterSCurve = 0f
+    private var filterBeauty = 0f
+    private var filterVhs = 0f
 
     init {
         vertexBuffer = createFloatBuffer(QUAD_VERTICES)
@@ -283,6 +313,8 @@ class TextureRenderer {
         warpMode: Float = 0f,
         warpAmount: Float = 0f,
         sCurve: Float = 0f,
+        beauty: Float = 0f,
+        vhs: Float = 0f,
     ) {
         // Compute the identical 5×4 colour matrix that Flutter's ColorFilter.matrix()
         // produces, so the exported video matches the editor preview pixel-for-pixel.
@@ -316,6 +348,8 @@ class TextureRenderer {
         colorBias = floatArrayOf(bias, bias, bias)
         filterVignette = vignette
         filterSCurve = sCurve
+        filterBeauty = beauty
+        filterVhs = vhs
     }
 
     /**
@@ -410,6 +444,14 @@ class TextureRenderer {
         if (vignetteLoc >= 0) GLES20.glUniform1f(vignetteLoc, filterVignette)
         val sCurveLoc = GLES20.glGetUniformLocation(program, "uSCurve")
         if (sCurveLoc >= 0) GLES20.glUniform1f(sCurveLoc, filterSCurve)
+        val outputSizeLoc = GLES20.glGetUniformLocation(program, "uOutputSize")
+        if (outputSizeLoc >= 0) {
+            GLES20.glUniform2f(outputSizeLoc, outputWidth.toFloat(), outputHeight.toFloat())
+        }
+        val beautyLoc = GLES20.glGetUniformLocation(program, "uBeauty")
+        if (beautyLoc >= 0) GLES20.glUniform1f(beautyLoc, filterBeauty)
+        val vhsLoc = GLES20.glGetUniformLocation(program, "uVhs")
+        if (vhsLoc >= 0) GLES20.glUniform1f(vhsLoc, filterVhs)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 

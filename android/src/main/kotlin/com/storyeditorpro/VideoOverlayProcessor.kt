@@ -40,18 +40,18 @@ class VideoOverlayProcessor {
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
         shouldMuteAudio: Boolean = false,
+        trimStartMs: Long = 0L,
+        trimEndMs: Long = 0L,
         onProgress: ((Double) -> Unit)? = null
     ): String? {
         lastError = null
         Log.d(TAG, "========================================")
         Log.d(TAG, "Starting GPU-accelerated video overlay export")
-        Log.d(TAG, "Video: $videoPath")
-        Log.d(TAG, "Overlay: $overlayImagePath")
-        Log.d(TAG, "Output: $outputPath")
+        Log.d(TAG, "Inputs validated; preparing private app-cache export")
         Log.d(TAG, "========================================")
 
         if (!File(videoPath).exists()) {
-            lastError = "Video file does not exist: $videoPath"
+            lastError = "The input video file is unavailable."
             Log.e(TAG, lastError!!)
             return null
         }
@@ -59,7 +59,7 @@ class VideoOverlayProcessor {
         val overlayDecodeStart = System.currentTimeMillis()
         val overlayBitmap = BitmapFactory.decodeFile(overlayImagePath)
         if (overlayBitmap == null) {
-            lastError = "Failed to decode overlay image: $overlayImagePath"
+            lastError = "The overlay image could not be decoded."
             Log.e(TAG, lastError!!)
             return null
         }
@@ -103,12 +103,32 @@ class VideoOverlayProcessor {
             val rotation = if (inputFormat.containsKey(MediaFormat.KEY_ROTATION)) {
                 inputFormat.getInteger(MediaFormat.KEY_ROTATION)
             } else 0
-            val durationUs = if (inputFormat.containsKey(MediaFormat.KEY_DURATION)) {
+            val trackDurationUs = if (inputFormat.containsKey(MediaFormat.KEY_DURATION)) {
                 inputFormat.getLong(MediaFormat.KEY_DURATION)
             } else 0L
+            val durationUs = if (trackDurationUs > 0L) trackDurationUs else {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(videoPath)
+                    (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull() ?: 0L) * 1000L
+                } finally {
+                    retriever.release()
+                }
+            }
             val frameRate = if (inputFormat.containsKey(MediaFormat.KEY_FRAME_RATE)) {
                 inputFormat.getInteger(MediaFormat.KEY_FRAME_RATE)
             } else 30
+            val trimStartUs = (trimStartMs * 1000L).coerceIn(0L, durationUs)
+            val requestedEndUs = if (trimEndMs > 0L) trimEndMs * 1000L else durationUs
+            val trimEndUs = requestedEndUs.coerceIn(0L, durationUs)
+            if (trimEndUs <= trimStartUs) {
+                lastError = "The video trim range is outside the input duration."
+                overlayBitmap.recycle()
+                return null
+            }
+            val exportDurationUs = trimEndUs - trimStartUs
+            videoExtractor.seekTo(trimStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
 
             // Output dimensions:
             // 1) Use requested target size if provided (e.g. 1080x1920),
@@ -170,6 +190,8 @@ class VideoOverlayProcessor {
                 warpMode   = filter.warpMode,
                 warpAmount = filter.warpAmount,
                 sCurve     = filter.sCurve,
+                beauty     = filter.beauty,
+                vhs        = filter.vhs,
             )
             scaledOverlay.recycle()
 
@@ -202,6 +224,7 @@ class VideoOverlayProcessor {
             var audioFormat: MediaFormat? = null
             if (audioTrackIndex >= 0 && !shouldMuteAudio) {
                 audioExtractor.selectTrack(audioTrackIndex)
+                audioExtractor.seekTo(trimStartUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                 audioFormat = audioExtractor.getTrackFormat(audioTrackIndex)
                 hasAudio = true
                 Log.d(TAG, "Audio track found, will mux in single pass")
@@ -213,7 +236,7 @@ class VideoOverlayProcessor {
             var inputDone = false
             var decoderDone = false
             var frameCount = 0
-            val totalFrames = if (durationUs > 0) (durationUs * frameRate / 1_000_000).toInt() else 100
+            val totalFrames = if (exportDurationUs > 0) (exportDurationUs * frameRate / 1_000_000).toInt() else 100
 
             // Frame available synchronization
             val frameSyncObject = Object()
@@ -239,14 +262,15 @@ class VideoOverlayProcessor {
                         if (inputBufIndex >= 0) {
                             val inputBuf = decoder.getInputBuffer(inputBufIndex)!!
                             val sampleSize = videoExtractor.readSampleData(inputBuf, 0)
-                            if (sampleSize < 0) {
+                            val sampleTimeUs = videoExtractor.sampleTime
+                            if (sampleSize < 0 || sampleTimeUs < 0 || sampleTimeUs >= trimEndUs) {
                                 decoder.queueInputBuffer(inputBufIndex, 0, 0, 0,
                                     MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputDone = true
                                 feedMore = false
                             } else {
                                 decoder.queueInputBuffer(inputBufIndex, 0, sampleSize,
-                                    videoExtractor.sampleTime, 0)
+                                    sampleTimeUs, 0)
                                 videoExtractor.advance()
                             }
                         } else {
@@ -271,7 +295,9 @@ class VideoOverlayProcessor {
                     }
                     decoderStatus >= 0 -> {
                         val isEos = (decoderBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                        val doRender = decoderBufferInfo.size > 0
+                        val hasFrame = decoderBufferInfo.size > 0
+                        val frameTimeUs = decoderBufferInfo.presentationTimeUs
+                        val doRender = hasFrame && frameTimeUs >= trimStartUs && frameTimeUs < trimEndUs
 
                         // Release output buffer to Surface (renders to SurfaceTexture on GPU)
                         decoder.releaseOutputBuffer(decoderStatus, doRender)
@@ -291,7 +317,7 @@ class VideoOverlayProcessor {
 
                             // Advance animated GIF stickers to this video timestamp
                             if (animatedLayers.isNotEmpty()) {
-                                val videoMs = decoderBufferInfo.presentationTimeUs / 1000L
+                                val videoMs = (frameTimeUs - trimStartUs) / 1000L
                                 for (layer in animatedLayers) {
                                     val movie = layer.movie ?: continue
                                     @Suppress("DEPRECATION")
@@ -304,7 +330,7 @@ class VideoOverlayProcessor {
                             }
 
                             // GPU render: video texture + overlay texture → encoder surface
-                            val presentationTimeNs = decoderBufferInfo.presentationTimeUs * 1000L
+                            val presentationTimeNs = (frameTimeUs - trimStartUs).coerceAtLeast(0L) * 1000L
                             renderer.drawFrame(decoderSurfaceTexture, presentationTimeNs)
 
                             frameCount++
@@ -343,9 +369,15 @@ class VideoOverlayProcessor {
                 while (true) {
                     val size = audioExtractor.readSampleData(audioBuf, 0)
                     if (size < 0) break
+                    val sampleTimeUs = audioExtractor.sampleTime
+                    if (sampleTimeUs < trimStartUs) {
+                        audioExtractor.advance()
+                        continue
+                    }
+                    if (sampleTimeUs >= trimEndUs) break
                     audioInfo.offset = 0
                     audioInfo.size = size
-                    audioInfo.presentationTimeUs = audioExtractor.sampleTime
+                    audioInfo.presentationTimeUs = sampleTimeUs - trimStartUs
                     audioInfo.flags = audioExtractor.sampleFlags
                     muxer.writeSampleData(audioMuxTrackIndex, audioBuf, audioInfo)
                     audioExtractor.advance()
@@ -374,7 +406,7 @@ class VideoOverlayProcessor {
 
         } catch (e: Exception) {
             Log.e(TAG, "Export failed", e)
-            lastError = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+            lastError = "${e.javaClass.simpleName}: video export failed."
             return null
         } finally {
             try { for (layer in animatedLayers) layer.bitmap.recycle() } catch (_: Exception) {}
@@ -496,6 +528,8 @@ class VideoOverlayProcessor {
         val warpMode: Float,
         val warpAmount: Float,
         val sCurve: Float = 0f,
+        val beauty: Float = 0f,
+        val vhs: Float = 0f,
     )
 
     private fun resolveFilterSettings(preset: String, strengthRaw: Double): FilterSettings {
@@ -521,6 +555,18 @@ class VideoOverlayProcessor {
             "productcrisp"-> FilterSettings(0.01f,  1.28f, 1.22f, 1.04f, 1.04f, 1.04f, 0.08f, 0f, 0f, 0.45f)
             "filmicfade"  -> FilterSettings(0.02f,  1.05f, 0.72f, 1.06f, 1.01f, 0.90f, 0.52f, 0f, 0f, 0.25f)
             "pastelmist"  -> FilterSettings(0.06f,  0.88f, 0.88f, 1.06f, 1.02f, 1.08f, 0.22f, 0f, 0f, 0.0f)
+            "goldenhour"  -> FilterSettings(0.05f,  1.08f, 1.22f, 1.22f, 1.08f, 0.72f, 0.14f, 0f, 0f, 0.20f)
+            "arctic"      -> FilterSettings(0.06f,  1.12f, 0.85f, 0.86f, 1.00f, 1.30f, 0f,    0f, 0f, 0.0f)
+            "sepia"       -> FilterSettings(0.03f,  1.05f, 0.35f, 1.22f, 1.05f, 0.78f, 0.12f, 0f, 0f, 0.35f)
+            "emerald"     -> FilterSettings(0.0f,   1.12f, 1.12f, 0.85f, 1.20f, 0.95f, 0f,    0f, 0f, 0.25f)
+            "rosegold"    -> FilterSettings(0.05f,  1.02f, 1.10f, 1.20f, 0.98f, 1.02f, 0f,    0f, 0f, 0.0f)
+            "moody"       -> FilterSettings(-0.06f, 1.28f, 0.82f, 0.98f, 0.98f, 1.06f, 0.20f, 0f, 0f, 0.55f)
+            "bleach"      -> FilterSettings(0.08f,  1.35f, 0.55f, 1.02f, 1.02f, 1.00f, 0.24f, 0f, 0f, 0.0f)
+            "velvet"      -> FilterSettings(-0.02f, 1.15f, 1.30f, 1.10f, 0.88f, 1.14f, 0.16f, 0f, 0f, 0.40f)
+            "softbeauty"  -> FilterSettings(0.045f, 0.96f, 1.04f, 1.06f, 1.015f,0.985f,0f,    0f, 0f, 0.0f, beauty = 0.42f)
+            "cleanglow"   -> FilterSettings(0.065f, 1.02f, 1.08f, 1.035f,1.02f, 1.0f,  0f,    0f, 0f, 0.12f, beauty = 0.24f)
+            "vhs1993"     -> FilterSettings(0.025f, 1.08f, 0.78f, 1.08f, 1.0f,  0.88f, 0.24f, 0f, 0f, 0.18f, vhs = 0.72f)
+            "kuwaitgold"  -> FilterSettings(0.045f, 1.10f, 1.16f, 1.18f, 1.065f,0.82f, 0.12f, 0f, 0f, 0.22f)
             else -> neutral
         }
 
@@ -537,6 +583,8 @@ class VideoOverlayProcessor {
             warpMode   = target.warpMode,
             warpAmount = lerp(neutral.warpAmount, target.warpAmount),
             sCurve     = lerp(neutral.sCurve,     target.sCurve),
+            beauty     = lerp(neutral.beauty,     target.beauty),
+            vhs        = lerp(neutral.vhs,        target.vhs),
         )
     }
 

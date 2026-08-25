@@ -190,6 +190,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   late final PageController _filterPageController;
   int _activeFilterIndex = 0;
   final double _activeFilterStrength = 0.95;
+  ui.FragmentShader? _cameraFilterShader;
   final NativeArController _nativeArController = NativeArController();
   NativeStoryCameraController _nativeCameraController =
       NativeStoryCameraController();
@@ -259,8 +260,45 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
     _filterPageController.addListener(_onFilterScroll);
 
+    _loadCameraFilterShader();
+
     _loadSettings();
     _requestPermissionsAndInitialize();
+  }
+
+  Future<void> _loadCameraFilterShader() async {
+    try {
+      final program = await ui.FragmentProgram.fromAsset(
+        'packages/story_editor_pro/shaders/story_filter.frag',
+      );
+      if (!mounted) return;
+      setState(() => _cameraFilterShader = program.fragmentShader());
+    } catch (error) {
+      debugPrint('StoryCameraScreen: filter shader unavailable: $error');
+    }
+  }
+
+  void _applyCameraFilterShader(Size size, String filterId, double strength) {
+    final shader = _cameraFilterShader;
+    if (shader == null) return;
+    final matrix = StoryEditorFilters.matrix(filterId, strength);
+    shader
+      ..setFloat(0, size.width)
+      ..setFloat(1, size.height)
+      ..setFloat(2, matrix[0])
+      ..setFloat(3, matrix[1])
+      ..setFloat(4, matrix[2])
+      ..setFloat(5, matrix[5])
+      ..setFloat(6, matrix[6])
+      ..setFloat(7, matrix[7])
+      ..setFloat(8, matrix[10])
+      ..setFloat(9, matrix[11])
+      ..setFloat(10, matrix[12])
+      ..setFloat(11, matrix[4] / 255.0)
+      ..setFloat(12, StoryEditorFilters.sCurveStrength(filterId, strength))
+      ..setFloat(13, StoryEditorFilters.vignetteStrength(filterId, strength))
+      ..setFloat(14, StoryEditorFilters.beautyStrength(filterId, strength))
+      ..setFloat(15, StoryEditorFilters.vhsStrength(filterId, strength));
   }
 
   /// Requests all required permissions when story editor is opened
@@ -2858,6 +2896,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             _buildActiveCameraPreview(),
             _activeFilterId,
             _activeFilterStrength,
+            useGpuEffects: true,
           );
 
           return ClipRect(
@@ -3231,14 +3270,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildLiveFilteredPreview(
     Widget basePreview,
     String filterId,
-    double strength,
-  ) {
+    double strength, {
+    bool useGpuEffects = false,
+  }) {
     final s = strength.clamp(0.0, 1.0);
+    final isColorEffect =
+        filterId != StoryEditorFilters.none &&
+        !StoryEditorFilters.isNativeLens(filterId);
+    final useShader =
+        useGpuEffects && isColorEffect && _cameraFilterShader != null;
 
     Widget buildBaseLayer() {
       Widget layer = basePreview;
-      if (filterId != StoryEditorFilters.none &&
-          !StoryEditorFilters.isNativeLens(filterId)) {
+      if (isColorEffect && !useShader) {
         layer = ColorFiltered(
           colorFilter: StoryEditorFilters.colorFilter(filterId, s),
           child: layer,
@@ -3249,12 +3293,34 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     Widget preview = buildBaseLayer();
 
+    if (useShader) {
+      preview = Stack(
+        fit: StackFit.expand,
+        children: [
+          preview,
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                _applyCameraFilterShader(constraints.biggest, filterId, s);
+                return BackdropFilter(
+                  filter: ui.ImageFilter.shader(_cameraFilterShader!),
+                  child: const SizedBox.expand(),
+                );
+              },
+            ),
+          ),
+        ],
+      );
+    }
+
     final bool needsVignette =
         filterId == 'vignette' ||
         filterId == 'cinematic' ||
         filterId == 'nightneon' ||
         filterId == 'filmicfade' ||
-        filterId == 'retro2044';
+        filterId == 'retro2044' ||
+        filterId == 'vhs1993' ||
+        filterId == 'kuwaitgold';
     if (needsVignette) {
       final vignetteOpacity =
           switch (filterId) {
@@ -3281,6 +3347,61 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     Colors.black.withValues(alpha: vignetteOpacity),
                   ],
                   stops: const [0.0, 0.58, 1.0],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (useGpuEffects && filterId == 'vhs1993') {
+      final now = DateTime.now();
+      final hh = now.hour.toString().padLeft(2, '0');
+      final mm = now.minute.toString().padLeft(2, '0');
+      final dd = now.day.toString().padLeft(2, '0');
+      final month = now.month.toString().padLeft(2, '0');
+      preview = Stack(
+        fit: StackFit.expand,
+        children: [
+          preview,
+          Positioned(
+            left: 24,
+            top: 28,
+            child: IgnorePointer(
+              child: Text(
+                'CAMERA 1\nPLAY  ▶\n$hh:$mm\n$dd.$month.${now.year}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'monospace',
+                  fontSize: 20,
+                  height: 1.05,
+                  shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (useGpuEffects && filterId == 'kuwaitgold') {
+      preview = Stack(
+        fit: StackFit.expand,
+        children: [
+          preview,
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 120,
+            child: IgnorePointer(
+              child: Text(
+                'KUWAIT',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 6,
+                  shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
                 ),
               ),
             ),
