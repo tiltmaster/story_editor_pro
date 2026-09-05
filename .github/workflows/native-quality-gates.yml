@@ -27,8 +27,13 @@ jobs:
       - run: flutter test --no-pub
       - run: flutter pub get
         working-directory: example
+      # The Flutter build injects the pinned wrapper scripts/JAR from the
+      # selected Flutter SDK when they are absent from a clean checkout.
       - run: flutter build apk --debug --no-pub
         working-directory: example
+      - name: Run Android plugin JVM tests
+        working-directory: example/android
+        run: ./gradlew :story_editor_pro:testDebugUnitTest --no-daemon
 
   ios:
     # MediaPipeTasksVision 0.10.35 is built with the iOS 26 SDK and

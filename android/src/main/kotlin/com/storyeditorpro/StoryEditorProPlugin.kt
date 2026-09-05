@@ -91,14 +91,6 @@ class StoryEditorProPlugin :
                 flutterAssets,
                 "assets/ar/glasses_classic/runtime_mesh.json",
             ),
-            FaceArContract.LENS_GLASSES_AVIATOR_GOLD to resolveFlutterAsset(
-                flutterAssets,
-                "assets/ar/glasses_aviator_gold/runtime_mesh.json",
-            ),
-            FaceArContract.LENS_GLASSES_VISOR_CYAN to resolveFlutterAsset(
-                flutterAssets,
-                "assets/ar/glasses_visor_cyan/runtime_mesh.json",
-            ),
         )
         arController = FaceArController(context, modelAssetPath, meshAssetPaths)
         arMethodChannel = MethodChannel(
@@ -736,6 +728,7 @@ class StoryEditorProPlugin :
         val outputHeight = call.argument<Int>("outputHeight")
         val filterPreset = call.argument<String>("filterPreset") ?: "none"
         val filterStrength = call.argument<Double>("filterStrength") ?: 1.0
+        val beautyStrength = call.argument<Double>("beautyStrength") ?: 0.0
         val shouldMuteAudio = call.argument<Boolean>("shouldMuteAudio") ?: false
         val trimStartMs = call.argument<Number>("trimStartMs")?.toLong() ?: 0L
         val trimEndMs = call.argument<Number>("trimEndMs")?.toLong() ?: 0L
@@ -767,6 +760,7 @@ class StoryEditorProPlugin :
                     outputHeight = outputHeight,
                     filterPreset = filterPreset,
                     filterStrength = filterStrength,
+                    beautyStrength = beautyStrength,
                     shouldMuteAudio = shouldMuteAudio,
                     trimStartMs = trimStartMs,
                     trimEndMs = trimEndMs

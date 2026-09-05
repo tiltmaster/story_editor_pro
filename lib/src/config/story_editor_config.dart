@@ -56,8 +56,13 @@ class StoryEditorConfig {
   /// Show gallery picker button on camera screen (default: true)
   final bool showGalleryButton;
 
-  /// Mirror front camera preview like selfie camera (default: true)
+  /// Mirror front camera preview like a selfie camera (default: false).
   final bool mirrorFrontCameraPreview;
+
+  /// Whether the embedding app resolves camera permission before navigation.
+  /// When true, Story Editor Pro only verifies the permission and never opens
+  /// a second system prompt of its own.
+  final bool cameraPermissionManagedByHost;
 
   /// Opens the host application's authenticated, rights-gated music picker.
   /// Null hides the editor music control.
@@ -153,7 +158,8 @@ class StoryEditorConfig {
     this.enableHandsFree = true,
     this.enableGradientTextEditor = true,
     this.showGalleryButton = false,
-    this.mirrorFrontCameraPreview = true,
+    this.mirrorFrontCameraPreview = false,
+    this.cameraPermissionManagedByHost = false,
     this.onPickMusic,
     this.handsFreeDelayOptions = const [3, 5, 10, 15],
     this.defaultHandsFreeDelay = 3,
@@ -192,6 +198,7 @@ class StoryEditorConfig {
     bool? enableGradientTextEditor,
     bool? showGalleryButton,
     bool? mirrorFrontCameraPreview,
+    bool? cameraPermissionManagedByHost,
     Future<StoryEditorMusicSelection?> Function(BuildContext context)?
     onPickMusic,
     List<int>? handsFreeDelayOptions,
@@ -231,6 +238,8 @@ class StoryEditorConfig {
       showGalleryButton: showGalleryButton ?? this.showGalleryButton,
       mirrorFrontCameraPreview:
           mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
+      cameraPermissionManagedByHost:
+          cameraPermissionManagedByHost ?? this.cameraPermissionManagedByHost,
       onPickMusic: onPickMusic ?? this.onPickMusic,
       handsFreeDelayOptions:
           handsFreeDelayOptions ?? this.handsFreeDelayOptions,
@@ -285,7 +294,13 @@ class StoryEditorConfigProvider extends InheritedWidget {
   static StoryEditorConfig of(BuildContext context) {
     final provider = context
         .dependOnInheritedWidgetOfExactType<StoryEditorConfigProvider>();
-    return provider?.config ?? const StoryEditorConfig();
+    final config = provider?.config ?? const StoryEditorConfig();
+    // Preserve host translations; localize only the untouched default catalog.
+    if (identical(config.strings, const StoryEditorStrings()) &&
+        Localizations.maybeLocaleOf(context)?.languageCode == 'ar') {
+      return config.copyWith(strings: const StoryEditorStrings.arabic());
+    }
+    return config;
   }
 
   /// Get the config from context without listening to changes

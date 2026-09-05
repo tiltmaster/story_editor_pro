@@ -1,6 +1,6 @@
 name: story_editor_pro
 description: "A powerful story editor with camera, boomerang effects, drawing tools, text overlays, collages, and close friends sharing."
-version: 1.4.0
+version: 1.5.0
 homepage: https://github.com/tiltmaster/story_editor_pro
 repository: https://github.com/tiltmaster/story_editor_pro
 issue_tracker: https://github.com/tiltmaster/story_editor_pro/issues
@@ -14,7 +14,7 @@ topics:
 
 environment:
   sdk: ^3.8.1
-  flutter: ">=1.17.0"
+  flutter: ">=3.38.0"
 
 dependencies:
   flutter:
@@ -39,6 +39,8 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   flutter_lints: ^5.0.0
 
 # For information on the generic Dart part of this file, see the
@@ -60,9 +62,8 @@ flutter:
     - assets/props/
     - assets/word_art/
     - assets/ar/glasses_classic/
-    - assets/ar/glasses_aviator_gold/
-    - assets/ar/glasses_visor_cyan/
     - assets/ar/models/
+    - assets/ar/THIRD_PARTY_NOTICES.md
 
   shaders:
     - shaders/story_filter.frag

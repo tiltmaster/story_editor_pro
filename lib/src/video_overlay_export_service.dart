@@ -50,6 +50,7 @@ class VideoOverlayExportService {
     int? outputHeight,
     String filterPreset = 'none',
     double filterStrength = 1.0,
+    double beautyStrength = 0,
     bool shouldMuteAudio = false,
     int trimStartMs = 0,
     int trimEndMs = 0,
@@ -83,6 +84,9 @@ class VideoOverlayExportService {
             'outputHeight': outputHeight,
             'filterPreset': filterPreset,
             'filterStrength': filterStrength,
+            'beautyStrength': beautyStrength.isFinite
+                ? beautyStrength.clamp(0, 1)
+                : 0,
             'shouldMuteAudio': shouldMuteAudio,
             'trimStartMs': trimStartMs,
             'trimEndMs': trimEndMs,
@@ -137,6 +141,7 @@ class VideoOverlayExportService {
     int? outputHeight,
     String filterPreset = 'none',
     double filterStrength = 1.0,
+    double beautyStrength = 0,
     bool shouldMuteAudio = false,
     int trimStartMs = 0,
     int trimEndMs = 0,
@@ -168,6 +173,7 @@ class VideoOverlayExportService {
       outputHeight: outputHeight,
       filterPreset: filterPreset,
       filterStrength: filterStrength,
+      beautyStrength: beautyStrength,
       shouldMuteAudio: shouldMuteAudio,
       trimStartMs: trimStartMs,
       trimEndMs: trimEndMs,
@@ -186,6 +192,7 @@ class VideoOverlayExportService {
     int? outputHeight,
     required String filterPreset,
     required double filterStrength,
+    required double beautyStrength,
     required bool shouldMuteAudio,
     required int trimStartMs,
     required int trimEndMs,
@@ -202,6 +209,9 @@ class VideoOverlayExportService {
             'outputHeight': outputHeight,
             'filterPreset': filterPreset,
             'filterStrength': filterStrength,
+            'beautyStrength': beautyStrength.isFinite
+                ? beautyStrength.clamp(0, 1)
+                : 0,
             'shouldMuteAudio': shouldMuteAudio,
             'trimStartMs': trimStartMs,
             'trimEndMs': trimEndMs,

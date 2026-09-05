@@ -36,8 +36,7 @@ void main() {
     final capabilities = await controller.getCapabilities();
     expect(capabilities.available, isTrue);
     expect(capabilities.supportsLens(NativeArLensIds.classicGlasses), isTrue);
-    expect(capabilities.supportsLens(NativeArLensIds.aviatorGold), isTrue);
-    expect(capabilities.supportsLens(NativeArLensIds.visorCyan), isTrue);
+    expect(NativeArLensIds.glasses, {NativeArLensIds.classicGlasses});
 
     await controller.prepare();
     expect(controller.state, NativeArRuntimeState.preparing);
@@ -51,6 +50,10 @@ void main() {
     expect(lensCall.arguments, <String, Object?>{
       'lensId': NativeArLensIds.classicGlasses,
       'intensity': 1.0,
+      'mirrorOutput': false,
+      'compositionId': 'none',
+      'placeStyle': 'none',
+      'placeName': '',
     });
     expect(
       calls.map((call) => call.method),
@@ -80,6 +83,53 @@ void main() {
       expect(controller.state, NativeArRuntimeState.unavailable);
       expect(await controller.setLens(NativeArLensIds.classicGlasses), isFalse);
       expect(await controller.setEnabled(true), isFalse);
+      await controller.dispose();
+    },
+  );
+
+  test(
+    'composed lenses send bounded locale context to native renderers',
+    () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(methodChannel, (call) async {
+        calls.add(call);
+        if (call.method == 'getCapabilities') {
+          return <String, Object?>{
+            'available': true,
+            'preview': true,
+            'recording': true,
+            'lensIds': NativeArLensIds.all.toList(),
+          };
+        }
+        return null;
+      });
+
+      final controller = NativeArController();
+      final capabilities = await controller.getCapabilities();
+      expect(capabilities.supportsLens(NativeArLensIds.analogTape), isTrue);
+      expect(NativeArLensIds.composed, hasLength(5));
+      expect(
+        await controller.setLens(
+          NativeArLensIds.desertLuxe,
+          intensity: 2,
+          languageCode: 'ar',
+          countryCode: 'KW',
+          mirrorOutput: true,
+        ),
+        isTrue,
+      );
+
+      final lensCall = calls.singleWhere((call) => call.method == 'setLens');
+      expect(lensCall.arguments, <String, Object?>{
+        'lensId': NativeArLensIds.desertLuxe,
+        'intensity': 1.0,
+        'languageCode': 'ar',
+        'countryCode': 'KW',
+        'mirrorOutput': true,
+        'compositionId': 'none',
+        'placeStyle': 'none',
+        'placeName': '',
+      });
       await controller.dispose();
     },
   );

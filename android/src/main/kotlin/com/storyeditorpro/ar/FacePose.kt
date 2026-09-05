@@ -69,6 +69,14 @@ internal object GlassesYawProjection {
 
 /** Inverts the detector-only bitmap rotation back into CameraX buffer coordinates. */
 internal object FaceCoordinateTransform {
+    fun bufferToDetector(point: Point3f, rotationDegrees: Int): Point3f =
+        when (((rotationDegrees % 360) + 360) % 360) {
+            90 -> Point3f(1f - point.y, point.x, point.z)
+            180 -> Point3f(1f - point.x, 1f - point.y, point.z)
+            270 -> Point3f(point.y, 1f - point.x, point.z)
+            else -> point
+        }
+
     fun detectorToBuffer(point: Point3f, rotationDegrees: Int): Point3f =
         when (((rotationDegrees % 360) + 360) % 360) {
             90 -> Point3f(point.y, 1f - point.x, point.z)

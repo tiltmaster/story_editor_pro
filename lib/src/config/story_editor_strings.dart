@@ -1,3 +1,5 @@
+import 'package:intl/intl.dart';
+
 /// Localization strings for Story Editor Pro
 /// All strings have English defaults and can be customized for any language
 ///
@@ -7,6 +9,11 @@
 /// - gradient* = Gradient Text Editor
 /// - editor* = Story Editor Screen
 class StoryEditorStrings {
+  final String languageCode;
+  final String cameraEffects;
+  final String cameraLensLoading;
+  final String cameraLensUnavailable;
+  final String cameraEffectsUnavailable;
   // ============ Camera Settings Screen ============
   final String settingsTitle;
   final String settingsControlsSection;
@@ -78,13 +85,12 @@ class StoryEditorStrings {
   final String cameraFilterSoftBeauty;
   final String cameraFilterCleanGlow;
   final String cameraFilterVhs1993;
+  final String cameraFilterDayTime;
+  final String cameraFilterTimeFocus;
   final String cameraFilterKuwaitGold;
+  final String cameraFilterRetroDate;
   final String cameraLensClassicGlasses;
   final String cameraLensClassicGlassesArabic;
-  final String cameraLensAviatorGold;
-  final String cameraLensAviatorGoldArabic;
-  final String cameraLensVisorCyan;
-  final String cameraLensVisorCyanArabic;
 
   // Legacy host-app localization inputs retained for source compatibility.
   // These labels do not add presets; native mesh lenses use the dedicated
@@ -159,6 +165,12 @@ class StoryEditorStrings {
   final String editorBrushChalk;
 
   const StoryEditorStrings({
+    this.languageCode = 'en',
+    this.cameraEffects = 'Effects',
+    this.cameraLensLoading = 'Loading lens…',
+    this.cameraLensUnavailable = 'Lens unavailable',
+    this.cameraEffectsUnavailable =
+        'Could not apply the effects. Try another effect.',
     // ─────────────────────────────────────────────────────────────
     // Camera Settings Screen
     // ─────────────────────────────────────────────────────────────
@@ -235,14 +247,13 @@ class StoryEditorStrings {
     this.cameraFilterVelvet = 'Velvet',
     this.cameraFilterSoftBeauty = 'Soft Beauty',
     this.cameraFilterCleanGlow = 'Clean Glow',
-    this.cameraFilterVhs1993 = 'VHS 1993',
-    this.cameraFilterKuwaitGold = 'Kuwait Gold',
+    this.cameraFilterVhs1993 = 'Analog Tape',
+    this.cameraFilterDayTime = 'Golden Bloom',
+    this.cameraFilterTimeFocus = 'Studio Glow',
+    this.cameraFilterKuwaitGold = 'Desert Luxe',
+    this.cameraFilterRetroDate = 'Film Aura',
     this.cameraLensClassicGlasses = 'Classic Glasses',
     this.cameraLensClassicGlassesArabic = 'نظارات كلاسيكية',
-    this.cameraLensAviatorGold = 'Aviator Gold',
-    this.cameraLensAviatorGoldArabic = 'نظارات طيار ذهبية',
-    this.cameraLensVisorCyan = 'Cyan Visor',
-    this.cameraLensVisorCyanArabic = 'قناع سماوي',
     this.cameraFilterArGolden = 'Golden',
     this.cameraFilterArFrost = 'Frost',
     this.cameraFilterArNeon = 'Neon',
@@ -321,16 +332,167 @@ class StoryEditorStrings {
     this.editorBrushChalk = 'Chalk',
   });
 
+  /// Built-in Arabic copy for the camera, settings, editor and filter catalog.
+  const StoryEditorStrings.arabic()
+    : this(
+        languageCode: 'ar',
+        cameraEffects: 'التأثيرات',
+        cameraLensLoading: 'جارٍ تحميل العدسة…',
+        cameraLensUnavailable: 'العدسة غير متاحة',
+        cameraEffectsUnavailable: 'تعذّر تطبيق التأثيرات. جرّب تأثيراً آخر.',
+        settingsTitle: 'الإعدادات',
+        settingsControlsSection: 'عناصر التحكم',
+        settingsFrontCameraTitle: 'الكاميرا الأمامية افتراضياً',
+        settingsFrontCameraSubtitle: 'ابدأ بالكاميرا الأمامية عند فتح التطبيق',
+        settingsToolsSection: 'أدوات الكاميرا',
+        settingsToolbarPositionTitle: 'موضع شريط الأدوات',
+        settingsToolbarPositionSubtitle:
+            'اختر جانب الشاشة الذي تظهر فيه أدوات بوميرانغ والنص والإطارات.',
+        settingsLeftSide: 'الجانب الأيسر',
+        settingsRightSide: 'الجانب الأيمن',
+        cameraStory: 'قصة',
+        cameraGallery: 'المعرض',
+        cameraCancel: 'إلغاء',
+        cameraDelete: 'حذف',
+        cameraSettings: 'الإعدادات',
+        cameraPermissionRequired: 'يلزم السماح باستخدام الكاميرا',
+        cameraPermissionDescription: 'نحتاج إلى إذن الكاميرا لإنشاء القصص.',
+        cameraGrantPermission: 'السماح',
+        cameraGalleryAccessDenied: 'لم يُسمح بالوصول إلى المعرض',
+        cameraNoMediaInGallery: 'لا توجد وسائط في المعرض',
+        cameraNoImagesInGallery: 'لا توجد صور في المعرض',
+        cameraCouldNotOpenGallery: 'تعذّر فتح المعرض',
+        cameraCouldNotTakePhoto: 'تعذّر التقاط الصورة',
+        cameraCouldNotStartVideo: 'تعذّر بدء تسجيل الفيديو',
+        cameraCouldNotCreateCollage: 'تعذّر تجميع الصور',
+        cameraCouldNotCreateBoomerang: 'تعذّر إنشاء بوميرانغ',
+        cameraBoomerangProcessingError: 'تعذّرت معالجة بوميرانغ',
+        cameraDeletePhoto: 'حذف الصورة',
+        cameraDeletePhotoConfirmation: 'هل تريد حذف هذه الصورة؟',
+        cameraCapture: 'التقاط',
+        cameraStartAfter: 'البدء بعد',
+        cameraProcessingImage: 'جارٍ معالجة الصورة…',
+        cameraProcessingVideo: 'جارٍ معالجة الفيديو…',
+        cameraProcessing: 'جارٍ المعالجة…',
+        cameraCreatingBoomerang: 'جارٍ إنشاء بوميرانغ…',
+        cameraPhoto: 'صورة',
+        cameraVideo: 'فيديو',
+        cameraBoomerang: 'بوميرانغ',
+        cameraFilterNormal: 'طبيعي',
+        cameraFilterVivid: 'زاهٍ',
+        cameraFilterWarm: 'دافئ',
+        cameraFilterCool: 'بارد',
+        cameraFilterSunset: 'غروب',
+        cameraFilterFade: 'باهت',
+        cameraFilterMono: 'أحادي اللون',
+        cameraFilterNoir: 'أسود كلاسيكي',
+        cameraFilterDream: 'حلم',
+        cameraFilterVignette: 'حواف مظللة',
+        cameraFilter2044: '٢٠٤٤',
+        cameraFilterCinematic: 'سينمائي',
+        cameraFilterTealOrange: 'فيروزي وبرتقالي',
+        cameraFilterBulge: 'انتفاخ',
+        cameraFilterSwirl: 'دوامة',
+        cameraFilterPortraitPop: 'بورتريه زاهٍ',
+        cameraFilterNightNeon: 'نيون ليلي',
+        cameraFilterProductCrisp: 'وضوح',
+        cameraFilterFilmicFade: 'فيلم باهت',
+        cameraFilterPastelMist: 'ضباب باستيل',
+        cameraFilterGoldenHour: 'الساعة الذهبية',
+        cameraFilterArctic: 'قطبي',
+        cameraFilterSepia: 'بني عتيق',
+        cameraFilterEmerald: 'زمردي',
+        cameraFilterRoseGold: 'ذهبي وردي',
+        cameraFilterMoody: 'درامي',
+        cameraFilterBleach: 'فضي باهت',
+        cameraFilterVelvet: 'مخملي',
+        cameraFilterSoftBeauty: 'جمال ناعم',
+        cameraFilterCleanGlow: 'إشراقة نقية',
+        cameraFilterVhs1993: 'تسجيل عتيق',
+        cameraFilterDayTime: 'توهّج ذهبي',
+        cameraFilterTimeFocus: 'إضاءة الاستوديو',
+        cameraFilterKuwaitGold: 'سحر الصحراء',
+        cameraFilterRetroDate: 'هالة الفيلم',
+        cameraLensClassicGlasses: 'نظارات كلاسيكية',
+        cameraFilterArGolden: 'ذهبي',
+        cameraFilterArFrost: 'صقيع',
+        cameraFilterArNeon: 'نيون',
+        cameraFilterArNoir: 'أسود كلاسيكي',
+        cameraFilterArPrism: 'منشور',
+        cameraFilterArRetro: 'عتيق',
+        cameraFilterArStargaze: 'نجوم',
+        cameraFilterArGlasses: 'نظارات',
+        cameraGlassesPhotoOnly: 'متاح للصور فقط',
+        gradientBalance: 'التوازن',
+        gradientWriteSomething: 'اكتب شيئاً…',
+        gradientProcessingImage: 'جارٍ معالجة الصورة…',
+        editorImageSettings: 'إعدادات الصورة',
+        editorOk: 'موافق',
+        editorShare: 'مشاركة',
+        editorCloseFriends: 'الأصدقاء المقرّبون',
+        editorPeopleCount: 'عدد الأشخاص: 0',
+        editorCouldNotSave: 'تعذّر الحفظ',
+        editorYourStory: 'قصتك',
+        editorFacebookStory: 'وقصة فيسبوك',
+        editorEnterText: 'أدخل النص…',
+        editorSaved: 'تم الحفظ',
+        editorSaving: 'جارٍ الحفظ…',
+        editorSharing: 'جارٍ المشاركة…',
+        editorClose: 'إغلاق المحرر',
+        editorMuteAudio: 'كتم الصوت',
+        editorUnmuteAudio: 'تشغيل الصوت',
+        editorUndo: 'تراجع',
+        editorDraw: 'رسم',
+        editorAddText: 'إضافة نص',
+        editorSmartTags: 'ملصقات ذكية',
+        editorSave: 'حفظ',
+        editorPublish: 'متابعة',
+        editorDeleteLayer: 'حذف الطبقة',
+        editorDone: 'تم',
+        editorCancel: 'إلغاء',
+        editorApply: 'تطبيق',
+        editorTrimVideo: 'قص الفيديو',
+        editorAddMusic: 'إضافة موسيقى',
+        editorChangeMusic: 'تغيير الموسيقى',
+        editorSmartSection: 'ملصقات ذكية',
+        editorStickersSection: 'ملصقات',
+        editorEmojiSection: 'رموز تعبيرية',
+        editorSearchStickers: 'ابحث عن ملصقات…',
+        editorAllEmoji: 'الكل',
+        editorLocation: 'الموقع',
+        editorLocating: 'جارٍ تحديد المنطقة…',
+        editorEnterLocation: 'أدخل منطقة أو مكاناً',
+        editorAdd: 'إضافة',
+        editorGreeting: 'تحية',
+        editorTime: 'الوقت',
+        editorDate: 'التاريخ',
+        editorDay: 'اليوم',
+        editorBattery: 'البطارية',
+        editorBrushNormal: 'عادي',
+        editorBrushArrow: 'سهم',
+        editorBrushMarker: 'قلم تحديد',
+        editorBrushGlow: 'توهّج',
+        editorBrushEraser: 'ممحاة',
+        editorBrushChalk: 'طباشير',
+      );
+
   /// Format capture text: "Capture: 1/4"
   String formatCaptureText(int current, int total) =>
-      '$cameraCapture: $current/$total';
+      '$cameraCapture: ${_number(current)}/${_number(total)}';
 
   /// Format start after text: "Start after 3s"
-  String formatStartAfter(int seconds) => '$cameraStartAfter ${seconds}s';
+  String formatStartAfter(int seconds) =>
+      '$cameraStartAfter ${_number(seconds)}${languageCode == 'ar' ? ' ث' : 's'}';
 
   /// Format people count: "5 people"
   String formatPeopleCount(int count) =>
-      editorPeopleCount.replaceFirst('0', '$count');
+      editorPeopleCount.replaceFirst('0', _number(count));
+
+  String _number(int value) =>
+      NumberFormat.decimalPattern(languageCode).format(value);
+
+  String cameraEffectsLabel(int count) =>
+      '$cameraEffects${count > 0 ? ' · ${_number(count)}' : ''}';
 
   /// Format error with details
   String formatError(String baseError, String details) =>
@@ -342,14 +504,6 @@ class StoryEditorStrings {
         return languageCode.toLowerCase().startsWith('ar')
             ? cameraLensClassicGlassesArabic
             : cameraLensClassicGlasses;
-      case 'glasses_aviator_gold':
-        return languageCode.toLowerCase().startsWith('ar')
-            ? cameraLensAviatorGoldArabic
-            : cameraLensAviatorGold;
-      case 'glasses_visor_cyan':
-        return languageCode.toLowerCase().startsWith('ar')
-            ? cameraLensVisorCyanArabic
-            : cameraLensVisorCyan;
       case 'vivid':
         return cameraFilterVivid;
       case 'warm':
@@ -406,8 +560,14 @@ class StoryEditorStrings {
         return cameraFilterCleanGlow;
       case 'vhs1993':
         return cameraFilterVhs1993;
+      case 'daytime':
+        return cameraFilterDayTime;
+      case 'timefocus':
+        return cameraFilterTimeFocus;
       case 'kuwaitgold':
         return cameraFilterKuwaitGold;
+      case 'retrodate':
+        return cameraFilterRetroDate;
       case 'none':
       default:
         return cameraFilterNormal;

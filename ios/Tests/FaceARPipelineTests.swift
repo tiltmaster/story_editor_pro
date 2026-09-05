@@ -1,9 +1,52 @@
 import CoreGraphics
+import CoreImage
+import CoreVideo
 import Foundation
 import XCTest
 @testable import story_editor_pro
 
 final class FaceARPipelineTests: XCTestCase {
+    func testTrackedArtworkChangesActualPixelsAndAnimates() throws {
+        let extent = CGRect(x: 0, y: 0, width: 360, height: 640)
+        let source = CIImage(color: CIColor(red: 0.2, green: 0.3, blue: 0.4)).cropped(to: extent)
+        let compositor = FaceAdornmentCompositor()
+        let pose = FaceARPose(center: CGPoint(x: 0.5, y: 0.55), eyeDistance: 0.25, rollRadians: 0)
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        func pixels(_ image: CIImage) throws -> Data {
+            let result = try XCTUnwrap(context.createCGImage(image, from: extent))
+            return try XCTUnwrap(result.dataProvider?.data) as Data
+        }
+        let baseline = try pixels(source)
+        for lens in CreativeLensFrameRenderer.adornmentIds {
+            let first = compositor.composite(over: source, pose: pose, lensId: lens, time: 0, intensity: 1)
+            XCTAssertNotEqual(try pixels(first), baseline, "Artwork must change camera pixels: \(lens)")
+            if lens != "face_freckles" {
+                let next = compositor.composite(over: source, pose: pose, lensId: lens, time: 1, intensity: 1)
+                XCTAssertNotEqual(try pixels(first), try pixels(next), "Animation must change frames: \(lens)")
+            }
+        }
+    }
+
+    func testStackKeepsFaceArtworkAndLocationIndependent() throws {
+        let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: [:])
+        for id in CreativeLensFrameRenderer.adornmentIds {
+            XCTAssertNoThrow(try coordinator.setLens(id: id, intensity: 0.8,
+                compositionId: "daytime", placeStyle: "postcard", placeName: "Kyoto"))
+        }
+        XCTAssertThrowsError(try coordinator.setLens(id: "none", intensity: .nan))
+        XCTAssertThrowsError(try coordinator.setLens(id: "none", intensity: 1, placeStyle: "unknown"))
+        XCTAssertFalse(CreativeLensContext(countryCode: "KW", placeStyle: "postcard").hasOverlay)
+        XCTAssertTrue(CreativeLensContext(placeStyle: "postcard", placeName: "Kyoto").hasOverlay)
+    }
+
+    func testLocationOnlyBecomesActiveWithoutFacePreparation() throws {
+        let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: [:])
+        try coordinator.setLens(id: "none", intensity: 1, placeStyle: "editorial", placeName: "Paris")
+        coordinator.setEnabled(true)
+        XCTAssertTrue(coordinator.hasActiveEffect)
+        XCTAssertFalse(coordinator.faceReady)
+    }
+
     func testNativeSessionReuseRequiresAnActiveSameFacingSession() {
         XCTAssertTrue(NativeCameraSessionReuseContract.shouldReuse(
             isActive: true,
@@ -104,19 +147,20 @@ final class FaceARPipelineTests: XCTestCase {
 
     func testAllAuthoredLensIdentifiersAreAcceptedAndAdvertised() throws {
         let paths = [
-            "glasses_classic": "/classic.json",
-            "glasses_aviator_gold": "/aviator.json",
-            "glasses_visor_cyan": "/visor.json"
+            "glasses_classic": "/classic.json"
         ]
         let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: paths)
 
         for lensId in paths.keys {
             XCTAssertNoThrow(try coordinator.setLens(id: lensId, intensity: 1))
         }
+        for lensId in CreativeLensFrameRenderer.lensIds {
+            XCTAssertNoThrow(try coordinator.setLens(id: lensId, intensity: 1))
+        }
         XCTAssertThrowsError(try coordinator.setLens(id: "fake_color_preset", intensity: 1))
         XCTAssertEqual(
             coordinator.capabilities["lensIds"] as? [String],
-            paths.keys.sorted()
+            Array(Set(paths.keys).union(CreativeLensFrameRenderer.lensIds).union(CreativeLensFrameRenderer.adornmentIds)).sorted()
         )
     }
 

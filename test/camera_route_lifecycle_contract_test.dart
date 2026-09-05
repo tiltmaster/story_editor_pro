@@ -55,4 +55,13 @@ void main() {
     expect(initialization, contains('final controller = CameraController('));
     expect(initialization, contains('await controller.dispose();'));
   });
+
+  test('notification shade inactivity keeps the camera session alive', () {
+    final source = File('lib/src/story_camera_screen.dart').readAsStringSync();
+    expect(
+      source,
+      contains('if (state == AppLifecycleState.inactive) return;'),
+    );
+    expect(source, contains('bool get _cameraLifecycleIsActive'));
+  });
 }

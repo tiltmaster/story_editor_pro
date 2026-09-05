@@ -35,9 +35,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let coordinator = FaceARCoordinator(
             modelPath: bundledAssetPath("assets/ar/models/face_landmarker.task"),
             meshPaths: [
-                "glasses_classic": bundledAssetPath("assets/ar/glasses_classic/runtime_mesh.json"),
-                "glasses_aviator_gold": bundledAssetPath("assets/ar/glasses_aviator_gold/runtime_mesh.json"),
-                "glasses_visor_cyan": bundledAssetPath("assets/ar/glasses_visor_cyan/runtime_mesh.json")
+                "glasses_classic": bundledAssetPath("assets/ar/glasses_classic/runtime_mesh.json")
             ].compactMapValues { $0 }
         )
         let arHandler = FaceARMethodHandler(coordinator: coordinator)
@@ -113,6 +111,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let outputHeight = args["outputHeight"] as? Int
         let filterPreset = args["filterPreset"] as? String ?? "none"
         let filterStrength = args["filterStrength"] as? Double ?? 1.0
+        let beautyStrength = args["beautyStrength"] as? Double ?? 0.0
         let shouldMuteAudio = args["shouldMuteAudio"] as? Bool ?? false
         let trimStartMs = (args["trimStartMs"] as? NSNumber)?.int64Value ?? 0
         let trimEndMs = (args["trimEndMs"] as? NSNumber)?.int64Value ?? 0
@@ -139,6 +138,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             outputHeight: outputHeight,
             filterPreset: filterPreset,
             filterStrength: filterStrength,
+            beautyStrength: beautyStrength,
             shouldMuteAudio: shouldMuteAudio,
             trimStartMs: trimStartMs,
             trimEndMs: trimEndMs
@@ -488,6 +488,7 @@ class CameraManager: NSObject {
 
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private var photoCompletionHandler: ((String?, Error?) -> Void)?
+    private var photoRequiresEffectProcessing = false
 
     init(
         textureRegistry: FlutterTextureRegistry,
@@ -696,22 +697,14 @@ class CameraManager: NSObject {
     }
 
     func takePicture(completion: @escaping (String?, Error?) -> Void) {
-        if faceARCoordinator?.hasActiveEffect == true {
-            pixelBufferLock.lock()
-            let renderedFrame = latestPixelBuffer
-            pixelBufferLock.unlock()
-            if let renderedFrame = renderedFrame,
-               let data = faceARCoordinator?.jpegData(from: renderedFrame) {
-                writePhotoData(data, completion: completion)
-                return
-            }
-        }
         guard let photoOutput = photoOutput else {
             completion(nil, NSError(domain: "CameraManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Photo output not available"]))
             return
         }
 
+        let requiresEffectProcessing = faceARCoordinator?.hasActiveEffect == true
         photoCompletionHandler = completion
+        photoRequiresEffectProcessing = requiresEffectProcessing
 
         if let connection = photoOutput.connection(with: .video) {
             updateVideoOrientationIfNeeded(connection)
@@ -721,7 +714,21 @@ class CameraManager: NSObject {
             }
         }
 
-        let settings = AVCapturePhotoSettings()
+        let settings: AVCapturePhotoSettings
+        if requiresEffectProcessing,
+           let pixelFormat = photoOutput.availablePhotoPixelFormatTypes.first(where: {
+               $0 == kCVPixelFormatType_32BGRA
+           }) ?? photoOutput.availablePhotoPixelFormatTypes.first {
+            // Request an uncompressed photo buffer when a native lens is
+            // active. Default JPEG settings leave AVCapturePhoto.pixelBuffer
+            // nil, which would silently bypass the renderer below.
+            settings = AVCapturePhotoSettings(
+                format: [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
+            )
+        } else {
+            settings = AVCapturePhotoSettings()
+        }
+        settings.isHighResolutionPhotoEnabled = photoOutput.isHighResolutionCaptureEnabled
         if let device = currentDevice, device.hasFlash {
             settings.flashMode = photoOutput.supportedFlashModes.contains(.auto) ? .auto : .off
         }
@@ -966,8 +973,40 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         let completion = photoCompletionHandler
         photoCompletionHandler = nil
+        let requiresEffectProcessing = photoRequiresEffectProcessing
+        photoRequiresEffectProcessing = false
         if let error = error {
             completion?(nil, error)
+            return
+        }
+
+        // Apply an active native lens to the full-resolution photo buffer.
+        // The previous shortcut JPEG-encoded the latest 1080p preview frame,
+        // which made filtered photos materially lower quality than Normal.
+        if requiresEffectProcessing {
+            guard let coordinator = faceARCoordinator,
+                  let photoBuffer = photo.pixelBuffer else {
+                completion?(nil, NSError(
+                    domain: "CameraManager",
+                    code: 11,
+                    userInfo: [NSLocalizedDescriptionKey: "Filtered photo buffer is unavailable"]
+                ))
+                return
+            }
+            let timestamp = CMClockGetTime(CMClockGetHostTimeClock())
+            let rendered = coordinator.process(
+                pixelBuffer: photoBuffer,
+                timestamp: timestamp
+            )
+            guard let data = coordinator.jpegData(from: rendered) else {
+                completion?(nil, NSError(
+                    domain: "CameraManager",
+                    code: 12,
+                    userInfo: [NSLocalizedDescriptionKey: "Filtered photo encoding failed"]
+                ))
+                return
+            }
+            writePhotoData(data, completion: completion)
             return
         }
 

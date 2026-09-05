@@ -20,7 +20,7 @@ void main() {
     );
   });
 
-  test('glasses append without changing any existing filter index', () {
+  test('only the approved glasses lens is appended', () {
     final unsupported = StoryEditorFilters.cameraPresetsFor(
       supportsClassicGlasses: false,
     );
@@ -29,7 +29,7 @@ void main() {
     );
 
     expect(unsupported, same(StoryEditorFilters.presets));
-    expect(supported.length, StoryEditorFilters.presets.length + 3);
+    expect(supported.length, StoryEditorFilters.presets.length + 1);
     expect(
       supported.take(StoryEditorFilters.presets.length),
       orderedEquals(StoryEditorFilters.presets),
@@ -38,11 +38,7 @@ void main() {
       supported
           .skip(StoryEditorFilters.presets.length)
           .map((preset) => preset.id),
-      orderedEquals(<String>[
-        NativeArLensIds.classicGlasses,
-        NativeArLensIds.aviatorGold,
-        NativeArLensIds.visorCyan,
-      ]),
+      orderedEquals(<String>[NativeArLensIds.classicGlasses]),
     );
   });
 
@@ -74,30 +70,11 @@ void main() {
     );
   });
 
-  test('new authored glasses labels are localized for English and Arabic', () {
+  test('authored effect labels are available without lens placeholders', () {
     const strings = StoryEditorStrings();
 
-    expect(
-      strings.filterNameForPreset(NativeArLensIds.aviatorGold),
-      'Aviator Gold',
-    );
-    expect(
-      strings.filterNameForPreset(
-        NativeArLensIds.aviatorGold,
-        languageCode: 'ar',
-      ),
-      'نظارات طيار ذهبية',
-    );
-    expect(
-      strings.filterNameForPreset(NativeArLensIds.visorCyan),
-      'Cyan Visor',
-    );
-    expect(
-      strings.filterNameForPreset(
-        NativeArLensIds.visorCyan,
-        languageCode: 'ar',
-      ),
-      'قناع سماوي',
-    );
+    expect(strings.filterNameForPreset('daytime'), 'Golden Bloom');
+    expect(strings.filterNameForPreset('timefocus'), 'Studio Glow');
+    expect(strings.filterNameForPreset('retrodate'), 'Film Aura');
   });
 }

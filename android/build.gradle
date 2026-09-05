@@ -52,7 +52,10 @@ android {
     }
 
     defaultConfig {
-        minSdk 21
+        // MediaPipe Tasks Vision 0.10.35 declares API 24 as its minimum.
+        // Keep the plugin contract aligned so consumers cannot discover the
+        // incompatibility only during manifest merging.
+        minSdk 24
     }
 
     sourceSets {

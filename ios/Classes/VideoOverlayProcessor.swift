@@ -6,6 +6,134 @@ import ImageIO
 
 class VideoOverlayProcessor {
     private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_31_K"
+    // One deterministic lightweight pass matching the Flutter and Android
+    // color-grade/procedural renderer.
+    private let parityFilterKernel: CIKernel? = CIKernel(source: """
+        kernel vec4 storyParityFilter(
+            sampler image,
+            float width, float height,
+            float r0, float r1, float r2,
+            float g0, float g1, float g2,
+            float b0, float b1, float b2,
+            float bias, float sCurve, float vignette, float beauty,
+            float tape, float bloom, float grainAmount, float halation,
+            float splitTone, float chroma
+        ) {
+            vec2 size = vec2(max(width, 1.0), max(height, 1.0));
+            vec2 d = destCoord();
+            vec2 uv = d / size;
+            // Flutter's fragment origin is top-left while Core Image uses
+            // bottom-left. Procedural bands/grain must share Flutter's phase.
+            vec2 proceduralUv = vec2(uv.x, 1.0 - uv.y);
+            vec2 transformed = samplerTransform(image, d);
+            vec4 pixel = sample(image, transformed);
+            vec3 source = pixel.rgb;
+            if (tape > 0.001 || chroma > 0.001) {
+                vec2 virtualFrag = proceduralUv * vec2(720.0, 1280.0);
+                float band = virtualFrag.y / 64.0;
+                float bandIndex = floor(band);
+                float bandMix = smoothstep(0.0, 1.0, fract(band));
+                float noiseA = fract(sin(bandIndex * 91.3458) * 47453.5453) - 0.5;
+                float noiseB = fract(sin((bandIndex + 1.0) * 91.3458) * 47453.5453) - 0.5;
+                float bandNoise = mix(noiseA, noiseB, bandMix);
+                float sourceLuma = dot(source, vec3(0.2126, 0.7152, 0.0722));
+                source = mix(source, vec3(sourceLuma), 0.08 * tape);
+                source += vec3(0.018, 0.002, -0.014) * bandNoise * tape;
+                float edge = distance(proceduralUv, vec2(0.5));
+                source += vec3(0.012, -0.004, -0.010)
+                    * (0.35 + edge) * chroma;
+            }
+
+            if (beauty > 0.001) {
+                // Edge-aware bilateral smoothing; no full-frame blur or skin whitening.
+                vec3 original = pixel.rgb;
+                vec3 total = original;
+                float totalWeight = 1.0;
+                vec3 n0 = sample(image, samplerTransform(image, d + size * vec2(1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff0 = n0 - original;
+                float w0 = exp(-dot(diff0, diff0) * 180.0);
+                total += n0 * w0; totalWeight += w0;
+                vec3 n1 = sample(image, samplerTransform(image, d + size * vec2(-1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff1 = n1 - original;
+                float w1 = exp(-dot(diff1, diff1) * 180.0);
+                total += n1 * w1; totalWeight += w1;
+                vec3 n2 = sample(image, samplerTransform(image, d + size * vec2(0.0000, 1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff2 = n2 - original;
+                float w2 = exp(-dot(diff2, diff2) * 180.0);
+                total += n2 * w2; totalWeight += w2;
+                vec3 n3 = sample(image, samplerTransform(image, d + size * vec2(0.0000, -1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff3 = n3 - original;
+                float w3 = exp(-dot(diff3, diff3) * 180.0);
+                total += n3 * w3; totalWeight += w3;
+                vec3 n4 = sample(image, samplerTransform(image, d + size * vec2(0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff4 = n4 - original;
+                float w4 = exp(-dot(diff4, diff4) * 180.0);
+                total += n4 * w4; totalWeight += w4;
+                vec3 n5 = sample(image, samplerTransform(image, d + size * vec2(-0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff5 = n5 - original;
+                float w5 = exp(-dot(diff5, diff5) * 180.0);
+                total += n5 * w5; totalWeight += w5;
+                vec3 n6 = sample(image, samplerTransform(image, d + size * vec2(0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff6 = n6 - original;
+                float w6 = exp(-dot(diff6, diff6) * 180.0);
+                total += n6 * w6; totalWeight += w6;
+                vec3 n7 = sample(image, samplerTransform(image, d + size * vec2(-0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 diff7 = n7 - original;
+                float w7 = exp(-dot(diff7, diff7) * 180.0);
+                total += n7 * w7; totalWeight += w7;
+                float luma = dot(original, vec3(0.2126, 0.7152, 0.0722));
+                float cb = 0.5 + dot(original, vec3(-0.168736, -0.331264, 0.5));
+                float cr = 0.5 + dot(original, vec3(0.5, -0.418688, -0.081312));
+                float skin = smoothstep(0.49, 0.55, cr) * (1.0 - smoothstep(0.67, 0.77, cr))
+                    * smoothstep(0.20, 0.30, cb) * (1.0 - smoothstep(0.51, 0.58, cb))
+                    * smoothstep(0.015, 0.10, luma);
+                source += (total / totalWeight - original) * skin * beauty * 0.82;
+            }
+
+            if (bloom > 0.001 || halation > 0.001) {
+                float highlight = smoothstep(0.62, 0.94,
+                    dot(source, vec3(0.2126, 0.7152, 0.0722)));
+                source += source * highlight * (0.16 * bloom);
+                source += highlight * vec3(0.055, 0.016, -0.008) * halation;
+            }
+
+            vec3 color = vec3(
+                dot(vec3(r0, r1, r2), source) + bias,
+                dot(vec3(g0, g1, g2), source) + bias,
+                dot(vec3(b0, b1, b2), source) + bias
+            );
+            if (sCurve > 0.001) {
+                vec3 curved = color * color * (3.0 - 2.0 * color);
+                color = mix(color, curved, sCurve);
+            }
+            if (abs(splitTone) > 0.001) {
+                float amount = abs(splitTone);
+                float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                float shadows = 1.0 - smoothstep(0.12, 0.58, luma);
+                float highlights = smoothstep(0.52, 0.92, luma);
+                vec3 warmSplit = vec3(-0.022, 0.012, 0.030) * shadows
+                    + vec3(0.070, 0.030, -0.018) * highlights;
+                vec3 coolSplit = vec3(0.035, -0.010, 0.055) * shadows
+                    + vec3(0.008, 0.028, 0.042) * highlights;
+                color += (splitTone > 0.0 ? warmSplit : coolSplit) * amount;
+            }
+            if (grainAmount > 0.001) {
+                vec2 grainCell = mod(
+                    floor(proceduralUv * vec2(720.0, 1280.0) * 0.72),
+                    vec2(64.0)
+                );
+                float noise = fract(sin(dot(grainCell, vec2(12.9898, 78.233)))
+                    * 43758.5453) - 0.5;
+                float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                color += vec3(noise * (0.020 + (1.0 - luma) * 0.018) * grainAmount);
+            }
+            if (vignette > 0.001) {
+                float dist = distance(uv, vec2(0.5));
+                color *= 1.0 - smoothstep(0.35, 0.82, dist) * vignette;
+            }
+            return vec4(clamp(color, 0.0, 1.0), pixel.a);
+        }
+        """)
 
     /// Compose overlay PNG on top of video and export as new MP4
     func exportVideoWithOverlay(
@@ -18,6 +146,7 @@ class VideoOverlayProcessor {
         outputHeight: Int? = nil,
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
+        beautyStrength: Double = 0.0,
         shouldMuteAudio: Bool = false,
         trimStartMs: Int64 = 0,
         trimEndMs: Int64 = 0,
@@ -42,6 +171,7 @@ class VideoOverlayProcessor {
                 outputHeight: outputHeight,
                 filterPreset: filterPreset,
                 filterStrength: filterStrength,
+                beautyStrength: beautyStrength,
                 shouldMuteAudio: shouldMuteAudio,
                 trimStartMs: trimStartMs,
                 trimEndMs: trimEndMs,
@@ -150,6 +280,7 @@ class VideoOverlayProcessor {
         outputHeight: Int?,
         filterPreset: String,
         filterStrength: Double,
+        beautyStrength: Double,
         shouldMuteAudio: Bool = false,
         trimStartMs: Int64 = 0,
         trimEndMs: Int64 = 0,
@@ -226,9 +357,22 @@ class VideoOverlayProcessor {
             }
 
             let filtered: CIImage
-            if filterPreset != "none" && filterStrength > 0.01 {
-                filtered = self.applyFilter(to: source.clampedToExtent(), preset: filterPreset, strength: filterStrength)
-                    .cropped(to: targetExtent)
+            if (filterPreset != "none" && filterStrength > 0.01) || beautyStrength > 0 {
+                guard let renderedFilter = self.applyFilter(
+                    to: source.clampedToExtent(),
+                    extent: targetExtent,
+                    preset: filterPreset,
+                    strength: filterStrength,
+                    beautyStrength: beautyStrength
+                ) else {
+                    request.finish(with: NSError(
+                        domain: "StoryEditorPro.Filter",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "The iOS parity filter kernel is unavailable."]
+                    ))
+                    return
+                }
+                filtered = renderedFilter.cropped(to: targetExtent)
             } else {
                 filtered = source.cropped(to: targetExtent)
             }
@@ -340,7 +484,19 @@ class VideoOverlayProcessor {
         let ciContext = CIContext(options: [.useSoftwareRenderer: false])
         let composition = AVVideoComposition(asset: asset) { request in
             let source = request.sourceImage.clampedToExtent()
-            let filtered = self.applyFilter(to: source, preset: preset, strength: strength)
+            guard let filtered = self.applyFilter(
+                to: source,
+                extent: request.sourceImage.extent,
+                preset: preset,
+                strength: strength
+            ) else {
+                request.finish(with: NSError(
+                    domain: "StoryEditorPro.Filter",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "The iOS parity filter kernel is unavailable."]
+                ))
+                return
+            }
             request.finish(with: filtered.cropped(to: request.sourceImage.extent), context: ciContext)
         }
 
@@ -372,90 +528,74 @@ class VideoOverlayProcessor {
     ///
     /// CIColorMatrix works in 0–1 normalised space, so the bias becomes:
     ///   bias = brightness + (1 − contrast) × 0.5
-    private func applyFilter(to image: CIImage, preset: String, strength: Double) -> CIImage {
-        let t = max(0.0, min(1.0, strength))
-        if t < 0.001 { return image }
+    private func applyFilter(
+        to image: CIImage,
+        extent renderExtent: CGRect,
+        preset: String,
+        strength: Double,
+        beautyStrength: Double = 0
+    ) -> CIImage? {
+        let t = strength.isFinite ? max(0.0, min(1.0, strength)) : 0.0
+        if t < 0.001 && beautyStrength <= 0 { return image }
         let p = resolveFilterParams(preset: preset, strength: t)
 
-        let c = p.contrast
-        let s = p.saturation
-        // BT.709 luminance weights — same as Flutter
-        let rLum = 0.2126, gLum = 0.7152, bLum = 0.0722
-        let sr = (1.0 - s) * rLum
-        let sg = (1.0 - s) * gLum
-        let sb = (1.0 - s) * bLum
-
-        let r0 = (sr + s) * c * p.red;   let r1 = sg * c * p.red;   let r2 = sb * c * p.red
-        let g0 = sr * c * p.green;        let g1 = (sg + s) * c * p.green; let g2 = sb * c * p.green
-        let b0 = sr * c * p.blue;         let b1 = sg * c * p.blue; let b2 = (sb + s) * c * p.blue
-        let bias = p.brightness + (1.0 - c) * 0.5
-
-        guard let matrix = CIFilter(name: "CIColorMatrix") else { return image }
-        matrix.setValue(image,                                   forKey: kCIInputImageKey)
-        matrix.setValue(CIVector(x: r0, y: r1, z: r2, w: 0),   forKey: "inputRVector")
-        matrix.setValue(CIVector(x: g0, y: g1, z: g2, w: 0),   forKey: "inputGVector")
-        matrix.setValue(CIVector(x: b0, y: b1, z: b2, w: 0),   forKey: "inputBVector")
-        matrix.setValue(CIVector(x: 0,  y: 0,  z: 0,  w: 1),   forKey: "inputAVector")
-        matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 0), forKey: "inputBiasVector")
-        var output = matrix.outputImage ?? image
-
-        // S-curve tone mapping via CIToneCurve.
-        // Control points pull shadows down and lift highlights, matching the
-        // GLSL smoothstep pass on Android and the contrast approximation in Flutter.
-        // d = sCurve × 0.094 maps exactly to the GLSL smoothstep shadow drop.
-        if p.sCurve > 0.001,
-           let toneCurve = CIFilter(name: "CIToneCurve") {
-            let d = p.sCurve * 0.094
-            toneCurve.setValue(output,                                forKey: kCIInputImageKey)
-            toneCurve.setValue(CIVector(x: 0.0,  y: 0.0),           forKey: "inputPoint0")
-            toneCurve.setValue(CIVector(x: 0.25, y: 0.25 - d),      forKey: "inputPoint1")
-            toneCurve.setValue(CIVector(x: 0.5,  y: 0.5),           forKey: "inputPoint2")
-            toneCurve.setValue(CIVector(x: 0.75, y: 0.75 + d),      forKey: "inputPoint3")
-            toneCurve.setValue(CIVector(x: 1.0,  y: 1.0),           forKey: "inputPoint4")
-            if let result = toneCurve.outputImage { output = result }
-        }
-
-        // CIVignette intensity is calibrated to be visually equivalent to the
-        // Flutter RadialGradient / Android GLSL vignette at the same preset.
-        // CIVignette uses a different internal curve, so intensity ≈ vigAmount × 1.78.
-        if p.vignette > 0.001,
-           let vignette = CIFilter(name: "CIVignette") {
-            let extent = output.extent
-            let radius = min(extent.width, extent.height) * 0.45
-            vignette.setValue(output, forKey: kCIInputImageKey)
-            vignette.setValue(p.vignette, forKey: kCIInputIntensityKey)
-            vignette.setValue(radius,     forKey: kCIInputRadiusKey)
-            if let result = vignette.outputImage { output = result }
-        }
-
-        if p.beauty > 0.001,
-           let smoothing = CIFilter(name: "CINoiseReduction") {
-            smoothing.setValue(output, forKey: kCIInputImageKey)
-            smoothing.setValue(0.015 + p.beauty * 0.025, forKey: "inputNoiseLevel")
-            smoothing.setValue(0.35 + p.beauty * 0.20, forKey: "inputSharpness")
-            if let result = smoothing.outputImage { output = result }
-        }
-
-        if p.vhs > 0.001,
-           let stripes = CIFilter(name: "CIStripesGenerator") {
-            stripes.setValue(CIColor(red: 1, green: 1, blue: 1, alpha: 0), forKey: "inputColor0")
-            stripes.setValue(CIColor(red: 0, green: 0, blue: 0, alpha: 0.055 * p.vhs), forKey: "inputColor1")
-            stripes.setValue(1.0, forKey: "inputWidth")
-            stripes.setValue(0.35, forKey: "inputSharpness")
-            if let scanlines = stripes.outputImage?.cropped(to: output.extent) {
-                output = scanlines.composited(over: output)
+        if let parityFilterKernel = parityFilterKernel {
+            let c = p.contrast
+            let s = p.saturation
+            let rLum = 0.2126, gLum = 0.7152, bLum = 0.0722
+            let sr = (1.0 - s) * rLum
+            let sg = (1.0 - s) * gLum
+            let sb = (1.0 - s) * bLum
+            let r0 = (sr + s) * c * p.red
+            let r1 = sg * c * p.red
+            let r2 = sb * c * p.red
+            let g0 = sr * c * p.green
+            let g1 = (sg + s) * c * p.green
+            let g2 = sb * c * p.green
+            let b0 = sr * c * p.blue
+            let b1 = sg * c * p.blue
+            let b2 = (sb + s) * c * p.blue
+            let bias = p.brightness + (1.0 - c) * 0.5
+            if let result = parityFilterKernel.apply(
+                extent: renderExtent,
+                roiCallback: { _, rect in
+                    rect.insetBy(dx: -renderExtent.width * 2.2 / 720.0,
+                                 dy: -renderExtent.height * 2.2 / 1280.0)
+                },
+                arguments: [
+                    image.clampedToExtent(),
+                    renderExtent.width,
+                    renderExtent.height,
+                    r0, r1, r2,
+                    g0, g1, g2,
+                    b0, b1, b2,
+                    bias,
+                    p.sCurve,
+                    p.vignette,
+                    beautyStrength.isFinite ? max(0, min(1, beautyStrength)) : 0,
+                    p.vhs,
+                    p.bloom,
+                    p.grain,
+                    p.halation,
+                    p.splitTone,
+                    p.chroma,
+                ]
+            ) {
+                return result
             }
         }
 
-        return output
+        // Do not silently substitute Core Image filters with different math.
+        // A missing/failed parity kernel must fail the export explicitly.
+        return nil
     }
 
-    private func resolveFilterParams(preset: String, strength: Double) -> (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double, beauty: Double, vhs: Double) {
+    private func resolveFilterParams(preset: String, strength: Double) -> (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double, beauty: Double, vhs: Double, bloom: Double, grain: Double, halation: Double, splitTone: Double, chroma: Double) {
         let neutral = (brightness: 0.0, contrast: 1.0, saturation: 1.0, red: 1.0, green: 1.0, blue: 1.0, vignette: 0.0, sCurve: 0.0, warpMode: 0, warpAmount: 0.0)
         let target: (brightness: Double, contrast: Double, saturation: Double, red: Double, green: Double, blue: Double, vignette: Double, sCurve: Double, warpMode: Int, warpAmount: Double)
 
         // Tuple order: (brightness, contrast, saturation, red, green, blue, vignette, sCurve, warpMode, warpAmount)
-        // vignette: iOS CIVignette intensity, calibrated to match Android GLSL visually (≈ androidValue × 1.78 for vignette-heavy presets)
+        // vignette: shared normalized strength used by Flutter/Android/iOS.
         // sCurve: 0–1 strength for CIToneCurve; d = sCurve × 0.094 is the shadow/highlight pull
         switch preset {
         case "vivid":       target = (0.02,  1.25, 1.50, 1.04, 1.02, 1.02, 0.0,  0.45, 0, 0.0)
@@ -466,35 +606,43 @@ class VideoOverlayProcessor {
         case "mono":        target = (0.0,   1.10, 0.0,  1.0,  1.0,  1.0,  0.0,  0.40, 0, 0.0)
         case "noir":        target = (-0.04, 1.45, 0.0,  1.0,  1.0,  1.0,  0.0,  0.65, 0, 0.0)
         case "dream":       target = (0.07,  0.88, 1.18, 1.10, 1.02, 1.08, 0.0,  0.0,  0, 0.0)
-        case "vignette":    target = (-0.02, 1.15, 1.05, 1.01, 1.0,  0.99, 1.1,  0.25, 0, 0.0)
-        case "retro2044":   target = (0.02,  1.22, 1.42, 1.20, 0.95, 1.18, 0.42, 0.45, 0, 0.0)
-        case "cinematic":   target = (-0.02, 1.30, 0.72, 1.06, 1.01, 0.90, 0.65, 0.65, 0, 0.0)
-        case "tealorange":  target = (0.01,  1.22, 1.18, 1.20, 1.01, 1.18, 0.32, 0.45, 0, 0.0)
+        case "vignette":    target = (-0.02, 1.15, 1.05, 1.01, 1.0,  0.99, 0.62, 0.25, 0, 0.0)
+        case "retro2044":   target = (0.02,  1.22, 1.42, 1.20, 0.95, 1.18, 0.22, 0.45, 0, 0.0)
+        case "cinematic":   target = (-0.02, 1.30, 0.72, 1.06, 1.01, 0.90, 0.35, 0.65, 0, 0.0)
+        case "tealorange":  target = (0.01,  1.22, 1.18, 1.20, 1.01, 1.18, 0.18, 0.45, 0, 0.0)
         case "portraitpop": target = (0.03,  1.18, 1.15, 1.14, 1.03, 0.92, 0.16, 0.30, 0, 0.0)
         case "nightneon":   target = (-0.03, 1.38, 1.38, 0.94, 1.10, 1.28, 0.40, 0.60, 0, 0.0)
         case "productcrisp":target = (0.01,  1.28, 1.22, 1.04, 1.04, 1.04, 0.08, 0.45, 0, 0.0)
         case "filmicfade":  target = (0.02,  1.05, 0.72, 1.06, 1.01, 0.90, 0.52, 0.25, 0, 0.0)
         case "pastelmist":  target = (0.06,  0.88, 0.88, 1.06, 1.02, 1.08, 0.22, 0.0,  0, 0.0)
-        case "goldenhour":  target = (0.05,  1.08, 1.22, 1.22, 1.08, 0.72, 0.25, 0.20, 0, 0.0)
+        case "goldenhour":  target = (0.05,  1.08, 1.22, 1.22, 1.08, 0.72, 0.14, 0.20, 0, 0.0)
         case "arctic":      target = (0.06,  1.12, 0.85, 0.86, 1.00, 1.30, 0.0,  0.0,  0, 0.0)
-        case "sepia":       target = (0.03,  1.05, 0.35, 1.22, 1.05, 0.78, 0.21, 0.35, 0, 0.0)
+        case "sepia":       target = (0.03,  1.05, 0.35, 1.22, 1.05, 0.78, 0.12, 0.35, 0, 0.0)
         case "emerald":     target = (0.0,   1.12, 1.12, 0.85, 1.20, 0.95, 0.0,  0.25, 0, 0.0)
         case "rosegold":    target = (0.05,  1.02, 1.10, 1.20, 0.98, 1.02, 0.0,  0.0,  0, 0.0)
-        case "moody":       target = (-0.06, 1.28, 0.82, 0.98, 0.98, 1.06, 0.36, 0.55, 0, 0.0)
-        case "bleach":      target = (0.08,  1.35, 0.55, 1.02, 1.02, 1.00, 0.43, 0.0,  0, 0.0)
-        case "velvet":      target = (-0.02, 1.15, 1.30, 1.10, 0.88, 1.14, 0.28, 0.40, 0, 0.0)
+        case "moody":       target = (-0.06, 1.28, 0.82, 0.98, 0.98, 1.06, 0.20, 0.55, 0, 0.0)
+        case "bleach":      target = (0.08,  1.35, 0.55, 1.02, 1.02, 1.00, 0.24, 0.0,  0, 0.0)
+        case "velvet":      target = (-0.02, 1.15, 1.30, 1.10, 0.88, 1.14, 0.16, 0.40, 0, 0.0)
         case "softbeauty":  target = (0.045, 0.96, 1.04, 1.06, 1.015,0.985,0.0,  0.0,  0, 0.0)
         case "cleanglow":   target = (0.065, 1.02, 1.08, 1.035,1.02, 1.0,  0.0,  0.12, 0, 0.0)
-        case "vhs1993":     target = (0.025, 1.08, 0.78, 1.08, 1.0,  0.88, 0.43, 0.18, 0, 0.0)
-        case "kuwaitgold":  target = (0.045, 1.10, 1.16, 1.18, 1.065,0.82, 0.21, 0.22, 0, 0.0)
+        case "vhs1993":     target = (0.010, 0.94, 0.82, 1.055,1.0,  0.935,0.15, 0.08, 0, 0.0)
+        case "kuwaitgold":  target = (0.012, 1.07, 1.04, 1.065,1.010,0.940,0.12, 0.26, 0, 0.0)
+        case "daytime":     target = (0.035, 0.98, 0.95, 1.045,1.015,0.965,0.06, 0.08, 0, 0.0)
+        case "timefocus":   target = (0.025, 1.02, 0.96, 1.025,1.010,0.995,0.08, 0.10, 0, 0.0)
+        case "retrodate":   target = (0.018, 0.96, 0.88, 1.060,1.005,0.940,0.18, 0.06, 0, 0.0)
         default:            target = neutral
         }
 
         func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double {
             a + (b - a) * t
         }
-        let beautyTarget = preset == "softbeauty" ? 0.42 : (preset == "cleanglow" ? 0.24 : 0.0)
-        let vhsTarget = preset == "vhs1993" ? 0.72 : 0.0
+        let beautyTarget = 0.0
+        let vhsTarget = preset == "vhs1993" ? 0.68 : 0.0
+        let bloomTarget: Double = ["vhs1993": 0.08, "daytime": 0.46, "timefocus": 0.22, "kuwaitgold": 0.32, "retrodate": 0.30][preset] ?? 0.0
+        let grainTarget: Double = ["vhs1993": 0.72, "daytime": 0.05, "kuwaitgold": 0.12, "retrodate": 0.36][preset] ?? 0.0
+        let halationTarget: Double = ["vhs1993": 0.12, "daytime": 0.42, "timefocus": 0.12, "kuwaitgold": 0.30, "retrodate": 0.34][preset] ?? 0.0
+        let splitToneTarget: Double = ["vhs1993": 0.08, "daytime": 0.15, "timefocus": -0.04, "kuwaitgold": 0.42, "retrodate": -0.38][preset] ?? 0.0
+        let chromaTarget: Double = ["vhs1993": 0.62, "daytime": 0.04, "kuwaitgold": 0.07, "retrodate": 0.24][preset] ?? 0.0
 
         return (
             brightness: lerp(neutral.brightness, target.brightness, strength),
@@ -508,7 +656,12 @@ class VideoOverlayProcessor {
             warpMode:   target.warpMode,
             warpAmount: lerp(neutral.warpAmount, target.warpAmount, strength),
             beauty:     beautyTarget * strength,
-            vhs:        vhsTarget * strength
+            vhs:        vhsTarget * strength,
+            bloom:      bloomTarget * strength,
+            grain:      grainTarget * strength,
+            halation:   halationTarget * strength,
+            splitTone:  splitToneTarget * strength,
+            chroma:     chromaTarget * strength
         )
     }
 

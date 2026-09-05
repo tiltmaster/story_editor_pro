@@ -39,11 +39,23 @@ class StoryFilterParams {
 class StoryEditorFilters {
   static const String none = 'none';
   static const String glassesLensId = 'glasses_classic';
-  static const String aviatorGoldLensId = 'glasses_aviator_gold';
-  static const String visorCyanLensId = 'glasses_visor_cyan';
+  static const Set<String> composedLensIds = <String>{
+    'vhs1993',
+    'daytime',
+    'timefocus',
+    'kuwaitgold',
+    'retrodate',
+  };
 
   static const List<StoryFilterPreset> presets = [
     StoryFilterPreset(id: 'none', name: 'Normal'),
+    // Signature looks stay directly beside Normal and transform the camera
+    // pixels themselves. Text/date/location remain optional editor stickers.
+    StoryFilterPreset(id: 'vhs1993', name: 'Analog Tape'),
+    StoryFilterPreset(id: 'daytime', name: 'Golden Bloom'),
+    StoryFilterPreset(id: 'timefocus', name: 'Studio Glow'),
+    StoryFilterPreset(id: 'kuwaitgold', name: 'Desert Luxe'),
+    StoryFilterPreset(id: 'retrodate', name: 'Film Aura'),
     StoryFilterPreset(id: 'vivid', name: 'Vivid'),
     StoryFilterPreset(id: 'warm', name: 'Warm'),
     StoryFilterPreset(id: 'cool', name: 'Cool'),
@@ -71,8 +83,6 @@ class StoryEditorFilters {
     StoryFilterPreset(id: 'velvet', name: 'Velvet'),
     StoryFilterPreset(id: 'softbeauty', name: 'Soft Beauty'),
     StoryFilterPreset(id: 'cleanglow', name: 'Clean Glow'),
-    StoryFilterPreset(id: 'vhs1993', name: 'VHS 1993'),
-    StoryFilterPreset(id: 'kuwaitgold', name: 'Kuwait Gold'),
   ];
 
   /// The original color presets plus the authored native glasses lenses.
@@ -84,20 +94,8 @@ class StoryEditorFilters {
     name: 'Classic Glasses',
   );
 
-  static const StoryFilterPreset aviatorGoldLens = StoryFilterPreset(
-    id: aviatorGoldLensId,
-    name: 'Aviator Gold',
-  );
-
-  static const StoryFilterPreset visorCyanLens = StoryFilterPreset(
-    id: visorCyanLensId,
-    name: 'Cyan Visor',
-  );
-
   static const List<StoryFilterPreset> nativeLensPresets = <StoryFilterPreset>[
     classicGlassesLens,
-    aviatorGoldLens,
-    visorCyanLens,
   ];
 
   static const List<StoryFilterPreset> cameraPresets = <StoryFilterPreset>[
@@ -123,8 +121,11 @@ class StoryEditorFilters {
   static bool isNativeLens(String presetId) =>
       nativeLensPresets.any((preset) => preset.id == presetId);
 
+  static bool isComposedLens(String presetId) =>
+      composedLensIds.contains(presetId);
+
   static StoryFilterParams resolve(String presetId, double strength) {
-    final s = strength.clamp(0.0, 1.0);
+    final s = _boundedStrength(strength);
 
     StoryFilterParams target;
     switch (presetId) {
@@ -400,22 +401,52 @@ class StoryEditorFilters {
         break;
       case 'vhs1993':
         target = const StoryFilterParams(
-          brightness: 0.025,
-          contrast: 1.08,
-          saturation: 0.78,
-          red: 1.08,
+          brightness: 0.010,
+          contrast: 0.94,
+          saturation: 0.82,
+          red: 1.055,
           green: 1.0,
-          blue: 0.88,
+          blue: 0.935,
         );
         break;
       case 'kuwaitgold':
         target = const StoryFilterParams(
-          brightness: 0.045,
-          contrast: 1.10,
-          saturation: 1.16,
-          red: 1.18,
-          green: 1.065,
-          blue: 0.82,
+          brightness: 0.012,
+          contrast: 1.07,
+          saturation: 1.04,
+          red: 1.065,
+          green: 1.010,
+          blue: 0.940,
+        );
+        break;
+      case 'daytime':
+        target = const StoryFilterParams(
+          brightness: 0.035,
+          contrast: 0.98,
+          saturation: 0.95,
+          red: 1.045,
+          green: 1.015,
+          blue: 0.965,
+        );
+        break;
+      case 'timefocus':
+        target = const StoryFilterParams(
+          brightness: 0.025,
+          contrast: 1.02,
+          saturation: 0.96,
+          red: 1.025,
+          green: 1.010,
+          blue: 0.995,
+        );
+        break;
+      case 'retrodate':
+        target = const StoryFilterParams(
+          brightness: 0.018,
+          contrast: 0.96,
+          saturation: 0.88,
+          red: 1.060,
+          green: 1.005,
+          blue: 0.940,
         );
         break;
       case 'none':
@@ -449,7 +480,7 @@ class StoryEditorFilters {
   /// These values match the Android GLSL shader's uVignette uniform exactly,
   /// so the Flutter preview vignette is visually consistent with the export.
   static double vignetteStrength(String presetId, double strength) {
-    final s = strength.clamp(0.0, 1.0);
+    final s = _boundedStrength(strength);
     const double neutral = 0.0;
     double target;
     switch (presetId) {
@@ -496,10 +527,19 @@ class StoryEditorFilters {
         target = 0.16;
         break;
       case 'vhs1993':
-        target = 0.24;
+        target = 0.15;
         break;
       case 'kuwaitgold':
         target = 0.12;
+        break;
+      case 'daytime':
+        target = 0.06;
+        break;
+      case 'timefocus':
+        target = 0.08;
+        break;
+      case 'retrodate':
+        target = 0.18;
         break;
       default:
         return 0.0;
@@ -511,7 +551,7 @@ class StoryEditorFilters {
   /// Passed to the second ColorFiltered pass (contrast approximation) in the
   /// Flutter preview and to CIToneCurve (iOS) / GLSL smoothstep (Android).
   static double sCurveStrength(String presetId, double strength) {
-    final s = strength.clamp(0.0, 1.0);
+    final s = _boundedStrength(strength);
     double target;
     switch (presetId) {
       case 'vivid':
@@ -575,10 +615,19 @@ class StoryEditorFilters {
         target = 0.12;
         break;
       case 'vhs1993':
-        target = 0.18;
+        target = 0.08;
         break;
       case 'kuwaitgold':
-        target = 0.22;
+        target = 0.26;
+        break;
+      case 'daytime':
+        target = 0.08;
+        break;
+      case 'timefocus':
+        target = 0.10;
+        break;
+      case 'retrodate':
+        target = 0.06;
         break;
       default:
         return 0.0; // fade, dream, pastelmist, arctic, rosegold, bleach, none
@@ -643,9 +692,15 @@ class StoryEditorFilters {
       case 'cleanglow':
         return const Color(0xFFFFEEE7);
       case 'vhs1993':
-        return const Color(0xFFC8A888);
+        return const Color(0xFFB58F7B);
       case 'kuwaitgold':
-        return const Color(0xFFD5A33D);
+        return const Color(0xFFE2A74E);
+      case 'daytime':
+        return const Color(0xFFFFD58A);
+      case 'timefocus':
+        return const Color(0xFFFFD9CF);
+      case 'retrodate':
+        return const Color(0xFFC8A8E8);
       case 'none':
       default:
         return const Color(0xFFFFFFFF);
@@ -711,29 +766,99 @@ class StoryEditorFilters {
     ];
   }
 
-  /// Skin-aware smoothing strength used by the GPU preview and native export.
-  /// This is intentionally conservative: pores remain visible and only
-  /// skin-like chroma is blended with a small bilateral neighbourhood.
-  static double beautyStrength(String presetId, double strength) {
-    final s = strength.clamp(0.0, 1.0);
+  /// Color presets do not change the independent camera Beauty layer.
+  /// The shader ABI retains this slot; camera/editor supply their explicit
+  /// smoothing amount so switching looks never changes the user's choice.
+  static double beautyStrength(String presetId, double strength) => 0.0;
+
+  /// Analog-tape character. The shader uses mild chroma bleed, horizontal
+  /// softness and organic grain; it deliberately has no scanline/dropout bars.
+  static double vhsStrength(String presetId, double strength) =>
+      presetId == 'vhs1993' ? 0.68 * _boundedStrength(strength) : 0.0;
+
+  static double bloomStrength(String presetId, double strength) {
+    final s = _boundedStrength(strength);
+    return switch (presetId) {
+      'vhs1993' => 0.08 * s,
+      'daytime' => 0.46 * s,
+      'timefocus' => 0.22 * s,
+      'kuwaitgold' => 0.32 * s,
+      'retrodate' => 0.30 * s,
+      _ => 0.0,
+    };
+  }
+
+  static double grainStrength(String presetId, double strength) {
+    final s = _boundedStrength(strength);
+    return switch (presetId) {
+      'vhs1993' => 0.72 * s,
+      'daytime' => 0.05 * s,
+      'kuwaitgold' => 0.12 * s,
+      'retrodate' => 0.36 * s,
+      _ => 0.0,
+    };
+  }
+
+  static double halationStrength(String presetId, double strength) {
+    final s = _boundedStrength(strength);
+    return switch (presetId) {
+      'vhs1993' => 0.12 * s,
+      'daytime' => 0.42 * s,
+      'timefocus' => 0.12 * s,
+      'kuwaitgold' => 0.30 * s,
+      'retrodate' => 0.34 * s,
+      _ => 0.0,
+    };
+  }
+
+  /// Signed split-tone direction: positive is teal-shadow/gold-highlight;
+  /// negative is violet-shadow/cyan-highlight.
+  static double splitToneStrength(String presetId, double strength) {
+    final s = _boundedStrength(strength);
+    return switch (presetId) {
+      'vhs1993' => 0.08 * s,
+      'daytime' => 0.15 * s,
+      'timefocus' => -0.04 * s,
+      'kuwaitgold' => 0.42 * s,
+      'retrodate' => -0.38 * s,
+      _ => 0.0,
+    };
+  }
+
+  static double chromaStrength(String presetId, double strength) {
+    final s = _boundedStrength(strength);
+    return switch (presetId) {
+      'vhs1993' => 0.62 * s,
+      'daytime' => 0.04 * s,
+      'kuwaitgold' => 0.07 * s,
+      'retrodate' => 0.24 * s,
+      _ => 0.0,
+    };
+  }
+
+  static IconData thumbnailIcon(String presetId) {
     switch (presetId) {
-      case 'softbeauty':
-        return 0.42 * s;
-      case 'cleanglow':
-        return 0.24 * s;
+      case 'vhs1993':
+        return Icons.movie_filter_rounded;
+      case 'daytime':
+        return Icons.wb_sunny_rounded;
+      case 'timefocus':
+        return Icons.face_retouching_natural_rounded;
+      case 'kuwaitgold':
+        return Icons.landscape_rounded;
+      case 'retrodate':
+        return Icons.blur_on_rounded;
+      case glassesLensId:
+        return Icons.face_retouching_natural_rounded;
       default:
-        return 0.0;
+        return Icons.auto_awesome_rounded;
     }
   }
 
-  /// VHS treatment strength. A dedicated shader path adds scanlines, subtle
-  /// chroma displacement, and deterministic grain without network assets.
-  static double vhsStrength(String presetId, double strength) =>
-      presetId == 'vhs1993' ? 0.72 * strength.clamp(0.0, 1.0) : 0.0;
-
-  static bool addsVhsTimestamp(String presetId) => presetId == 'vhs1993';
-
   static double _lerp(double a, double b, double t) => a + (b - a) * t;
+
+  static double _boundedStrength(double strength) =>
+      strength.isFinite ? strength.clamp(0.0, 1.0) : 0.0;
 
   static double _finite(double v) => v.isFinite ? v : 0.0;
 

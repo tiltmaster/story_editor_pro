@@ -384,6 +384,11 @@ final class FaceARCoordinator {
     private let modelPath: String?
     private let meshPaths: [String: String]
     private let lock = NSLock()
+    // Video frames and AVCapturePhoto callbacks arrive on different queues.
+    // Renderer pools/caches are dimension-specific mutable state, so serialize
+    // only the actual render/encode work while keeping coordinator state reads
+    // under the shorter lock above.
+    private let renderLock = NSLock()
     private var renderers: [String: FaceARFrameRenderer] = [:]
     private var tracker: FaceLandmarkTracking?
     private var backend = "unprepared"
@@ -399,6 +404,9 @@ final class FaceARCoordinator {
     private var preparationStarted = false
     private var preparationGeneration: UInt = 0
     private var lastTimestampMilliseconds = -1
+    private var poseReceivedAt = Date.distantPast
+    private var creativeRenderer: CreativeLensFrameRenderer?
+    private var creativeContext = CreativeLensContext()
 
     init(modelPath: String?, meshPaths: [String: String]) {
         self.modelPath = modelPath
@@ -407,16 +415,27 @@ final class FaceARCoordinator {
 
     var capabilities: [String: Any] {
         lock.lock(); let currentBackend = backend; lock.unlock()
-        let supported = !meshPaths.isEmpty
+        let faceTrackingSupported = !meshPaths.isEmpty
+        let supported = faceTrackingSupported || !CreativeLensFrameRenderer.lensIds.isEmpty
         return ["supported": supported, "backend": currentBackend, "maxFaces": 1,
                 "supports3D": false, "supportsRecording": supported,
-                "faceTracking": supported, "preview": supported, "recording": supported,
-                "lensIds": Array(meshPaths.keys).sorted()]
+                "faceTracking": faceTrackingSupported, "preview": supported, "recording": supported,
+                "lensIds": Array(Set(meshPaths.keys).union(CreativeLensFrameRenderer.lensIds).union(CreativeLensFrameRenderer.adornmentIds)).sorted()]
+    }
+
+    var faceReady: Bool {
+        lock.lock(); defer { lock.unlock() }; return tracker != nil
+    }
+
+    var runtimeState: String {
+        lock.lock(); defer { lock.unlock() }; return state.rawValue
     }
 
     var hasActiveEffect: Bool {
         lock.lock(); defer { lock.unlock() }
-        return enabled && lensId != "none" && renderers[lensId] != nil && state == .active
+        return enabled && state == .active &&
+            (renderers[lensId] != nil || CreativeLensFrameRenderer.lensIds.contains(lensId) ||
+             CreativeLensFrameRenderer.adornmentIds.contains(lensId) || creativeContext.hasOverlay)
     }
 
     func setEventSink(_ sink: FlutterEventSink?) {
@@ -460,7 +479,7 @@ final class FaceARCoordinator {
             self.preparationStarted = false
             let next: State
             if self.enabled {
-                next = Self.operationalState(enabled: true, lensId: self.lensId, trackerAvailable: true)
+                next = Self.operationalState(enabled: true, lensId: self.creativeContext.hasOverlay && self.lensId == "none" ? "overlay" : self.lensId, trackerAvailable: true)
             } else {
                 // `prepare` on its own reports ready; an explicit disable that
                 // arrives while preparation is running remains disabled.
@@ -476,23 +495,48 @@ final class FaceARCoordinator {
         lock.lock()
         enabled = value
         if !value { pose = nil; lastTrackingEvent = nil }
-        let next = Self.operationalState(enabled: value, lensId: lensId, trackerAvailable: tracker != nil)
+        let needsTracker = meshPaths[lensId] != nil || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
+        let trackerReady = tracker != nil || !needsTracker
+        let next = Self.operationalState(enabled: value, lensId: creativeContext.hasOverlay && lensId == "none" ? "overlay" : lensId, trackerAvailable: trackerReady)
         state = next
         lock.unlock()
         emitState(next)
-        if value { prepare() }
+        if value && needsTracker { prepare() }
     }
 
-    func setLens(id: String, intensity value: Double) throws {
-        guard id == "none" || meshPaths[id] != nil else {
+    func setLens(
+        id: String,
+        intensity value: Double,
+        languageCode: String = "en",
+        countryCode: String = "",
+        mirrorOutput: Bool = false,
+        compositionId: String = "none",
+        placeStyle: String = "none",
+        placeName: String = ""
+    ) throws {
+        guard value.isFinite,
+              ["none", "postcard", "editorial", "stamp"].contains(placeStyle),
+              compositionId == "none" || CreativeLensFrameRenderer.lensIds.contains(compositionId),
+              id == "none" || meshPaths[id] != nil || CreativeLensFrameRenderer.lensIds.contains(id) || CreativeLensFrameRenderer.adornmentIds.contains(id) else {
             throw NSError(domain: "FaceAR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown lens id: \(id)"])
         }
         lock.lock()
         lensId = id
         intensity = CGFloat(max(0, min(1, value)))
-        let next = Self.operationalState(enabled: enabled, lensId: id, trackerAvailable: tracker != nil)
+        creativeContext = CreativeLensContext(
+            languageCode: languageCode,
+            countryCode: countryCode,
+            mirrorOutput: mirrorOutput,
+            compositionId: compositionId, placeStyle: placeStyle, placeName: placeName
+        )
+        let requiresTracker = meshPaths[id] != nil || CreativeLensFrameRenderer.adornmentIds.contains(id)
+        let next = Self.operationalState(
+            enabled: enabled,
+            lensId: creativeContext.hasOverlay && id == "none" ? "overlay" : id,
+            trackerAvailable: tracker != nil || !requiresTracker
+        )
         state = next
-        let needsPreparation = enabled && tracker == nil
+        let needsPreparation = enabled && requiresTracker && tracker == nil
         lock.unlock()
         emitState(next)
         if needsPreparation { prepare() }
@@ -501,13 +545,21 @@ final class FaceARCoordinator {
     func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime) -> CVPixelBuffer {
         lock.lock()
         let currentRenderer = renderers[lensId]
-        let active = enabled && lensId != "none" && currentRenderer != nil && state == .active
-        let currentPose = pose
+        let currentLensId = lensId
+        let active = enabled && state == .active
+        let tracksFace = meshPaths[lensId] != nil || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
+        let currentPose = Date().timeIntervalSince(poseReceivedAt) <= 0.18 ? pose : nil
         let currentIntensity = intensity
+        let currentCreativeContext = creativeContext
+        let creativeActive = active && (creativeContext.hasOverlay ||
+            CreativeLensFrameRenderer.lensIds.contains(lensId) || CreativeLensFrameRenderer.adornmentIds.contains(lensId))
         frameIndex &+= 1
-        let shouldTrack = active && tracker != nil && !trackingInFlight && frameIndex % 2 == 0
+        let shouldTrack = active && tracksFace && tracker != nil && !trackingInFlight && frameIndex % 2 == 0
         if shouldTrack { trackingInFlight = true }
         let currentTracker = tracker
+        let generation = preparationGeneration
+        if creativeActive && creativeRenderer == nil { creativeRenderer = CreativeLensFrameRenderer() }
+        let activeCreativeRenderer = creativeRenderer
         lock.unlock()
 
         if shouldTrack {
@@ -520,14 +572,12 @@ final class FaceARCoordinator {
             currentTracker?.track(pixelBuffer: pixelBuffer, timestampMilliseconds: millis) { [weak self] detected in
                 guard let self = self else { return }
                 self.lock.lock()
-                guard self.enabled && self.lensId != "none" &&
-                      self.renderers[self.lensId] != nil && self.state == .active else {
-                    self.pose = nil
-                    self.trackingInFlight = false
-                    self.lock.unlock()
-                    return
+                guard generation == self.preparationGeneration else { self.lock.unlock(); return }
+                guard self.enabled && self.lensId == currentLensId && self.state == .active else {
+                    self.pose = nil; self.trackingInFlight = false; self.lock.unlock(); return
                 }
                 self.pose = detected.map { self.pose?.smoothed(toward: $0, alpha: 0.38) ?? $0 }
+                self.poseReceivedAt = Date()
                 self.trackingInFlight = false
                 let tracked = detected != nil
                 let notify = self.lastTrackingEvent != tracked
@@ -536,23 +586,36 @@ final class FaceARCoordinator {
                 if notify { self.emit(["type": "tracking", "state": State.active.rawValue, "faceTracked": tracked]) }
             }
         }
-        guard active, let currentPose = currentPose else { return pixelBuffer }
-        return currentRenderer?.render(
-            input: pixelBuffer,
-            pose: currentPose,
-            intensity: currentIntensity
-        ) ?? pixelBuffer
+        guard active else { return pixelBuffer }
+        renderLock.lock(); defer { renderLock.unlock() }
+        var output = pixelBuffer
+        if let currentPose = currentPose, let renderer = currentRenderer {
+            output = renderer.render(input: output, pose: currentPose, intensity: currentIntensity) ?? output
+        }
+        if creativeActive {
+            let seconds = CMTimeGetSeconds(timestamp)
+            output = activeCreativeRenderer?.render(input: output, lensId: currentLensId,
+                intensity: currentIntensity, lensContext: currentCreativeContext, pose: currentPose,
+                time: seconds.isFinite ? seconds.truncatingRemainder(dividingBy: 12) : 0) ?? output
+        }
+        return output
     }
 
     func jpegData(from buffer: CVPixelBuffer) -> Data? {
-        lock.lock(); let renderer = renderers[lensId]; lock.unlock()
-        return renderer?.jpegData(from: buffer)
+        lock.lock()
+        let renderer = renderers[lensId]
+        let isCreative = creativeContext.hasOverlay || CreativeLensFrameRenderer.lensIds.contains(lensId) || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
+        let activeCreativeRenderer = creativeRenderer
+        lock.unlock()
+        renderLock.lock()
+        defer { renderLock.unlock() }
+        return isCreative ? activeCreativeRenderer?.jpegData(from: buffer) : renderer?.jpegData(from: buffer)
     }
 
     func dispose() {
         lock.lock()
         let trackerToCancel = tracker
-        tracker = nil; renderers.removeAll(); pose = nil; enabled = false; lensId = "none"
+        tracker = nil; renderers.removeAll(); creativeRenderer = nil; pose = nil; enabled = false; lensId = "none"
         trackingInFlight = false; lastTrackingEvent = nil; backend = "unprepared"; state = .disabled
         preparationStarted = false; preparationGeneration &+= 1; lastTimestampMilliseconds = -1
         lock.unlock()
@@ -560,7 +623,7 @@ final class FaceARCoordinator {
         emitState(.disabled)
     }
 
-    private func emitState(_ state: State) { emit(["type": "state", "state": state.rawValue]) }
+    private func emitState(_ state: State) { emit(["type": "state", "state": state.rawValue, "faceReady": faceReady]) }
 
     private func emit(_ event: [String: Any]) {
         lock.lock(); let sink = eventSink; lock.unlock()
@@ -578,12 +641,21 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
         case "getCapabilities": result(coordinator.capabilities)
         case "prepare": coordinator.prepare(); result(["accepted": true])
         case "setEnabled":
-            coordinator.setEnabled((call.arguments as? [String: Any])?["enabled"] as? Bool ?? false); result(nil)
+            coordinator.setEnabled((call.arguments as? [String: Any])?["enabled"] as? Bool ?? false)
+            result(["state": coordinator.runtimeState, "faceReady": coordinator.faceReady])
         case "setLens":
             let args = call.arguments as? [String: Any]
             do {
-                try coordinator.setLens(id: args?["lensId"] as? String ?? "none",
-                                        intensity: (args?["intensity"] as? NSNumber)?.doubleValue ?? 1)
+                try coordinator.setLens(
+                    id: args?["lensId"] as? String ?? "none",
+                    intensity: (args?["intensity"] as? NSNumber)?.doubleValue ?? 1,
+                    languageCode: args?["languageCode"] as? String ?? "en",
+                    countryCode: args?["countryCode"] as? String ?? "",
+                    mirrorOutput: args?["mirrorOutput"] as? Bool ?? false,
+                    compositionId: args?["compositionId"] as? String ?? "none",
+                    placeStyle: args?["placeStyle"] as? String ?? "none",
+                    placeName: args?["placeName"] as? String ?? ""
+                )
                 result(nil)
             } catch {
                 result(FlutterError(code: "INVALID_LENS", message: error.localizedDescription, details: nil))

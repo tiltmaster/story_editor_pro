@@ -39,9 +39,14 @@ class TextureRenderer {
         // uSCurve: smoothstep S-curve matching CIToneCurve (iOS) and Flutter contrast pass.
         private const val FRAGMENT_SHADER_OES = """
             #extension GL_OES_EGL_image_external : require
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
             precision mediump float;
+            #endif
             varying vec2 vTexCoord;
             uniform samplerExternalOES uTexture;
+            uniform mat4 uTexMatrix;
             uniform mat3 uColorMatrix;
             uniform vec3 uColorBias;
             uniform float uVignette;
@@ -49,38 +54,113 @@ class TextureRenderer {
             uniform vec2 uOutputSize;
             uniform float uBeauty;
             uniform float uVhs;
+            uniform float uBloom;
+            uniform float uGrain;
+            uniform float uHalation;
+            uniform float uSplitTone;
+            uniform float uChroma;
             void main() {
                 vec2 uv = vTexCoord;
                 vec4 tex = texture2D(uTexture, uv);
                 vec3 source = tex.rgb;
-                if (uBeauty > 0.001) {
-                    vec2 px = vec2(1.35) / max(uOutputSize, vec2(1.0));
-                    vec3 softened = (source * 4.0
-                        + texture2D(uTexture, uv + vec2(px.x, 0.0)).rgb
-                        + texture2D(uTexture, uv - vec2(px.x, 0.0)).rgb
-                        + texture2D(uTexture, uv + vec2(0.0, px.y)).rgb
-                        + texture2D(uTexture, uv - vec2(0.0, px.y)).rgb) / 8.0;
-                    float luma = dot(source, vec3(0.2126, 0.7152, 0.0722));
-                    float warm = smoothstep(0.015, 0.18, source.r - source.g + 0.035);
-                    float notBlue = 1.0 - smoothstep(0.0, 0.16, source.b - source.g);
-                    float skin = warm * notBlue * smoothstep(0.08, 0.28, luma)
-                        * (1.0 - smoothstep(0.86, 1.0, luma));
-                    source = mix(source, softened, skin * uBeauty);
-                    source += vec3(0.012, 0.006, 0.003) * skin * uBeauty;
+                vec2 screenUv = gl_FragCoord.xy / max(uOutputSize, vec2(1.0));
+                // FlutterFragCoord is top-left/y-down; OpenGL is bottom-left.
+                // Use this parity coordinate only for procedural phase. Keep
+                // screenUv for outward radial sampling in native GL space.
+                vec2 proceduralUv = vec2(screenUv.x, 1.0 - screenUv.y);
+                if (uVhs > 0.001 || uChroma > 0.001) {
+                    vec2 virtualFrag = proceduralUv * vec2(720.0, 1280.0);
+                    float band = virtualFrag.y / 64.0;
+                    float bandIndex = floor(band);
+                    float bandMix = smoothstep(0.0, 1.0, fract(band));
+                    float noiseA = fract(sin(bandIndex * 91.3458) * 47453.5453) - 0.5;
+                    float noiseB = fract(sin((bandIndex + 1.0) * 91.3458) * 47453.5453) - 0.5;
+                    float bandNoise = mix(noiseA, noiseB, bandMix);
+                    float sourceLuma = dot(source, vec3(0.2126, 0.7152, 0.0722));
+                    source = mix(source, vec3(sourceLuma), 0.08 * uVhs);
+                    source += vec3(0.018, 0.002, -0.014) * bandNoise * uVhs;
+                    float edge = distance(proceduralUv, vec2(0.5));
+                    source += vec3(0.012, -0.004, -0.010)
+                        * (0.35 + edge) * uChroma;
                 }
-                if (uVhs > 0.001) {
-                    vec2 shift = vec2(1.6 / max(uOutputSize.x, 1.0), 0.0) * uVhs;
-                    source.r = texture2D(uTexture, uv + shift).r;
-                    source.b = texture2D(uTexture, uv - shift).b;
-                    float scan = sin(uv.y * uOutputSize.y * 1.52) * 0.018 * uVhs;
-                    float grain = fract(sin(dot(floor(uv * uOutputSize),
-                        vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
-                    source += vec3(scan + grain * 0.035 * uVhs);
+                if (uBeauty > 0.001) {
+                    // Edge-aware bilateral smoothing; no full-frame blur or skin whitening.
+                    vec3 original = tex.rgb;
+                    vec3 total = original;
+                    float totalWeight = 1.0;
+                    vec3 n0 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff0 = n0 - original;
+                    float w0 = exp(-dot(diff0, diff0) * 180.0);
+                    total += n0 * w0; totalWeight += w0;
+                    vec3 n1 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff1 = n1 - original;
+                    float w1 = exp(-dot(diff1, diff1) * 180.0);
+                    total += n1 * w1; totalWeight += w1;
+                    vec3 n2 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, 1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff2 = n2 - original;
+                    float w2 = exp(-dot(diff2, diff2) * 180.0);
+                    total += n2 * w2; totalWeight += w2;
+                    vec3 n3 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, -1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff3 = n3 - original;
+                    float w3 = exp(-dot(diff3, diff3) * 180.0);
+                    total += n3 * w3; totalWeight += w3;
+                    vec3 n4 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff4 = n4 - original;
+                    float w4 = exp(-dot(diff4, diff4) * 180.0);
+                    total += n4 * w4; totalWeight += w4;
+                    vec3 n5 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff5 = n5 - original;
+                    float w5 = exp(-dot(diff5, diff5) * 180.0);
+                    total += n5 * w5; totalWeight += w5;
+                    vec3 n6 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff6 = n6 - original;
+                    float w6 = exp(-dot(diff6, diff6) * 180.0);
+                    total += n6 * w6; totalWeight += w6;
+                    vec3 n7 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff7 = n7 - original;
+                    float w7 = exp(-dot(diff7, diff7) * 180.0);
+                    total += n7 * w7; totalWeight += w7;
+                    float luma = dot(original, vec3(0.2126, 0.7152, 0.0722));
+                    float cb = 0.5 + dot(original, vec3(-0.168736, -0.331264, 0.5));
+                    float cr = 0.5 + dot(original, vec3(0.5, -0.418688, -0.081312));
+                    float skin = smoothstep(0.49, 0.55, cr) * (1.0 - smoothstep(0.67, 0.77, cr))
+                        * smoothstep(0.20, 0.30, cb) * (1.0 - smoothstep(0.51, 0.58, cb))
+                        * smoothstep(0.015, 0.10, luma);
+                    source += (total / totalWeight - original) * skin * uBeauty * 0.82;
+                }
+                if (uBloom > 0.001 || uHalation > 0.001) {
+                    float highlight = smoothstep(0.62, 0.94,
+                        dot(source, vec3(0.2126, 0.7152, 0.0722)));
+                    source += source * highlight * (0.16 * uBloom);
+                    source += highlight * vec3(0.055, 0.016, -0.008) * uHalation;
                 }
                 vec3 color = uColorMatrix * source + uColorBias;
                 if (uSCurve > 0.001) {
                     vec3 curved = color * color * (3.0 - 2.0 * color);
                     color = mix(color, curved, uSCurve);
+                }
+                if (abs(uSplitTone) > 0.001) {
+                    float amount = abs(uSplitTone);
+                    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                    float shadows = 1.0 - smoothstep(0.12, 0.58, luma);
+                    float highlights = smoothstep(0.52, 0.92, luma);
+                    vec3 warmShadow = vec3(-0.022, 0.012, 0.030);
+                    vec3 warmHighlight = vec3(0.070, 0.030, -0.018);
+                    vec3 coolShadow = vec3(0.035, -0.010, 0.055);
+                    vec3 coolHighlight = vec3(0.008, 0.028, 0.042);
+                    vec3 split = uSplitTone > 0.0
+                        ? warmShadow * shadows + warmHighlight * highlights
+                        : coolShadow * shadows + coolHighlight * highlights;
+                    color += split * amount;
+                }
+                if (uGrain > 0.001) {
+                    vec2 grainCell = mod(
+                        floor(proceduralUv * vec2(720.0, 1280.0) * 0.72),
+                        vec2(64.0));
+                    float grain = fract(sin(dot(grainCell,
+                        vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+                    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                    color += vec3(grain * (0.020 + (1.0 - luma) * 0.018) * uGrain);
                 }
                 if (uVignette > 0.001) {
                     vec2 center = vec2(0.5, 0.5);
@@ -159,6 +239,11 @@ class TextureRenderer {
     private var filterSCurve = 0f
     private var filterBeauty = 0f
     private var filterVhs = 0f
+    private var filterBloom = 0f
+    private var filterGrain = 0f
+    private var filterHalation = 0f
+    private var filterSplitTone = 0f
+    private var filterChroma = 0f
 
     init {
         vertexBuffer = createFloatBuffer(QUAD_VERTICES)
@@ -315,6 +400,11 @@ class TextureRenderer {
         sCurve: Float = 0f,
         beauty: Float = 0f,
         vhs: Float = 0f,
+        bloom: Float = 0f,
+        grain: Float = 0f,
+        halation: Float = 0f,
+        splitTone: Float = 0f,
+        chroma: Float = 0f,
     ) {
         // Compute the identical 5×4 colour matrix that Flutter's ColorFilter.matrix()
         // produces, so the exported video matches the editor preview pixel-for-pixel.
@@ -350,6 +440,11 @@ class TextureRenderer {
         filterSCurve = sCurve
         filterBeauty = beauty
         filterVhs = vhs
+        filterBloom = bloom
+        filterGrain = grain
+        filterHalation = halation
+        filterSplitTone = splitTone
+        filterChroma = chroma
     }
 
     /**
@@ -452,6 +547,16 @@ class TextureRenderer {
         if (beautyLoc >= 0) GLES20.glUniform1f(beautyLoc, filterBeauty)
         val vhsLoc = GLES20.glGetUniformLocation(program, "uVhs")
         if (vhsLoc >= 0) GLES20.glUniform1f(vhsLoc, filterVhs)
+        val bloomLoc = GLES20.glGetUniformLocation(program, "uBloom")
+        if (bloomLoc >= 0) GLES20.glUniform1f(bloomLoc, filterBloom)
+        val grainLoc = GLES20.glGetUniformLocation(program, "uGrain")
+        if (grainLoc >= 0) GLES20.glUniform1f(grainLoc, filterGrain)
+        val halationLoc = GLES20.glGetUniformLocation(program, "uHalation")
+        if (halationLoc >= 0) GLES20.glUniform1f(halationLoc, filterHalation)
+        val splitToneLoc = GLES20.glGetUniformLocation(program, "uSplitTone")
+        if (splitToneLoc >= 0) GLES20.glUniform1f(splitToneLoc, filterSplitTone)
+        val chromaLoc = GLES20.glGetUniformLocation(program, "uChroma")
+        if (chromaLoc >= 0) GLES20.glUniform1f(chromaLoc, filterChroma)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 

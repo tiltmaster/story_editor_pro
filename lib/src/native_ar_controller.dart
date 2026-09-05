@@ -7,14 +7,30 @@ import 'package:flutter/services.dart';
 abstract final class NativeArLensIds {
   static const String none = 'none';
   static const String classicGlasses = 'glasses_classic';
-  static const String aviatorGold = 'glasses_aviator_gold';
-  static const String visorCyan = 'glasses_visor_cyan';
+  static const String analogTape = 'vhs1993';
+  static const String goldenBloom = 'daytime';
+  static const String studioGlow = 'timefocus';
+  static const String desertLuxe = 'kuwaitgold';
+  static const String filmAura = 'retrodate';
+  static const String celestial = 'face_celestial';
+  static const String heartHalo = 'face_hearts';
+  static const String freckles = 'face_freckles';
 
-  static const Set<String> glasses = <String>{
+  static const Set<String> glasses = <String>{classicGlasses};
+  static const Set<String> face = <String>{
     classicGlasses,
-    aviatorGold,
-    visorCyan,
+    celestial,
+    heartHalo,
+    freckles,
   };
+  static const Set<String> composed = <String>{
+    analogTape,
+    goldenBloom,
+    studioGlow,
+    desertLuxe,
+    filmAura,
+  };
+  static const Set<String> all = <String>{...face, ...composed};
 }
 
 enum NativeArRuntimeState { disabled, preparing, ready, active, unavailable }
@@ -80,12 +96,14 @@ class NativeArEvent {
     required this.type,
     required this.state,
     this.faceTracked,
+    this.faceTrackingReady,
     this.failure,
   });
 
   final NativeArEventType type;
   final NativeArRuntimeState state;
   final bool? faceTracked;
+  final bool? faceTrackingReady;
   final NativeArFailure? failure;
 
   factory NativeArEvent.fromMap(Map<Object?, Object?> map) {
@@ -102,6 +120,7 @@ class NativeArEvent {
       },
       state: NativeArController.parseState(stateName),
       faceTracked: map['faceTracked'] as bool?,
+      faceTrackingReady: map['faceReady'] as bool?,
       failure: code == null && message == null
           ? null
           : NativeArFailure(
@@ -136,11 +155,13 @@ class NativeArController {
   Future<NativeArCapabilities>? _capabilitiesRequest;
   Future<void>? _prepareRequest;
   bool _disposed = false;
+  bool _faceTrackingReady = false;
 
   Stream<NativeArEvent> get events => _events.stream;
   NativeArCapabilities get capabilities => _capabilities;
   NativeArRuntimeState get state => _state;
   NativeArFailure? get lastFailure => _lastFailure;
+  bool get faceTrackingReady => _faceTrackingReady;
 
   Future<NativeArCapabilities> getCapabilities() {
     _checkNotDisposed();
@@ -160,7 +181,7 @@ class NativeArController {
           faceTracking: true,
           preview: true,
           recording: true,
-          lensIds: NativeArLensIds.glasses,
+          lensIds: NativeArLensIds.all,
         );
       } else {
         _capabilities = const NativeArCapabilities.unavailable();
@@ -209,9 +230,15 @@ class NativeArController {
     _checkNotDisposed();
     if (!_capabilities.available) return false;
     try {
-      await _methodChannel.invokeMethod<void>('setEnabled', <String, Object?>{
-        'enabled': enabled,
-      });
+      _listenToNativeEvents();
+      final response = await _methodChannel.invokeMethod<Object?>(
+        'setEnabled',
+        <String, Object?>{'enabled': enabled},
+      );
+      if (response is Map && response['state'] is String) {
+        _faceTrackingReady = response['faceReady'] == true;
+        _emitState(parseState(response['state'] as String));
+      }
       if (!enabled) _emitState(NativeArRuntimeState.disabled);
       return true;
     } on MissingPluginException catch (error) {
@@ -226,8 +253,18 @@ class NativeArController {
     return false;
   }
 
-  Future<bool> setLens(String lensId, {double intensity = 1.0}) async {
+  Future<bool> setLens(
+    String lensId, {
+    double intensity = 1.0,
+    String? languageCode,
+    String? countryCode,
+    bool mirrorOutput = false,
+    String compositionId = 'none',
+    String placeStyle = 'none',
+    String placeName = '',
+  }) async {
     _checkNotDisposed();
+    if (!intensity.isFinite) throw ArgumentError.value(intensity, 'intensity');
     final normalizedIntensity = intensity.clamp(0.0, 1.0);
     if (!_capabilities.supportsLens(lensId) && lensId != NativeArLensIds.none) {
       _recordFailure('unsupported_lens', 'The selected AR lens is unavailable');
@@ -238,6 +275,12 @@ class NativeArController {
       await _methodChannel.invokeMethod<void>('setLens', <String, Object?>{
         'lensId': lensId,
         'intensity': normalizedIntensity,
+        if (languageCode != null) 'languageCode': languageCode,
+        if (countryCode != null) 'countryCode': countryCode,
+        'mirrorOutput': mirrorOutput,
+        'compositionId': compositionId,
+        'placeStyle': placeStyle,
+        'placeName': String.fromCharCodes(placeName.trim().runes.take(64)),
       });
       return true;
     } on MissingPluginException catch (error) {
@@ -258,6 +301,9 @@ class NativeArController {
       (Object? raw) {
         if (_disposed || raw is! Map) return;
         final event = NativeArEvent.fromMap(raw);
+        if (event.faceTrackingReady != null) {
+          _faceTrackingReady = event.faceTrackingReady!;
+        }
         _state = event.state;
         if (event.failure != null) _lastFailure = event.failure;
         _events.add(event);

@@ -6,14 +6,37 @@ internal object FaceArContract {
     const val BACKEND = "mediapipe_camerax_overlay"
     const val LENS_NONE = "none"
     const val LENS_GLASSES_CLASSIC = "glasses_classic"
-    const val LENS_GLASSES_AVIATOR_GOLD = "glasses_aviator_gold"
-    const val LENS_GLASSES_VISOR_CYAN = "glasses_visor_cyan"
+    const val LENS_ANALOG_TAPE = "vhs1993"
+    const val LENS_GOLDEN_BLOOM = "daytime"
+    const val LENS_STUDIO_GLOW = "timefocus"
+    const val LENS_DESERT_LUXE = "kuwaitgold"
+    const val LENS_FILM_AURA = "retrodate"
     val glassesLensIds = setOf(
         LENS_GLASSES_CLASSIC,
-        LENS_GLASSES_AVIATOR_GOLD,
-        LENS_GLASSES_VISOR_CYAN,
     )
-    val lensIds = glassesLensIds + LENS_NONE
+    val composedLensIds = setOf(
+        LENS_ANALOG_TAPE,
+        LENS_GOLDEN_BLOOM,
+        LENS_STUDIO_GLOW,
+        LENS_DESERT_LUXE,
+        LENS_FILM_AURA,
+    )
+    val adornmentLensIds = setOf("face_celestial", "face_hearts", "face_freckles")
+    val faceLensIds = glassesLensIds + adornmentLensIds
+    val placeStyles = setOf("none", "postcard", "editorial", "stamp")
+    val lensIds = faceLensIds + composedLensIds + LENS_NONE
+}
+
+internal data class CreativeLensContext(
+    val languageCode: String = "en",
+    val countryCode: String = "",
+    val mirrorOutput: Boolean = false,
+    val compositionId: String = "none",
+    val placeStyle: String = "none",
+    val placeName: String = "",
+) {
+    val hasOverlay: Boolean get() = compositionId in FaceArContract.composedLensIds ||
+        (placeStyle != "none" && placeName.isNotBlank())
 }
 
 internal enum class FaceArState(val wire: String) {

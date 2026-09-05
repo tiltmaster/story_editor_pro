@@ -10,9 +10,12 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'story_editor_screen.dart';
 import 'camera_prewarm.dart';
+import 'camera_effects.dart';
+import 'camera_effects_panel.dart';
 import 'camera_filter_slider_contract.dart';
 import 'native_ar_controller.dart';
 import 'native_story_camera_controller.dart';
+import 'video_overlay_export_service.dart';
 import 'boomerang_recorder.dart';
 import 'gradient_text_editor.dart';
 import 'smart_shutter_button.dart';
@@ -189,8 +192,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   late Animation<double> _pulseAnimation;
   late final PageController _filterPageController;
   int _activeFilterIndex = 0;
-  final double _activeFilterStrength = 0.95;
-  ui.FragmentShader? _cameraFilterShader;
+  double _activeFilterStrength = 0.85;
+  CameraEffects _effects = const CameraEffects();
+  Future<void> _effectsApplyFuture = Future<void>.value();
+  ui.FragmentProgram? _cameraFilterProgram;
+  late final Future<void> _cameraFilterLoadFuture;
+  final Map<String, ui.FragmentShader> _cameraFilterShaders =
+      <String, ui.FragmentShader>{};
   final NativeArController _nativeArController = NativeArController();
   NativeStoryCameraController _nativeCameraController =
       NativeStoryCameraController();
@@ -199,6 +207,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   bool _nativeArPrepared = false;
   Set<String> _supportedNativeLensIds = const <String>{};
   int _nativeArSelectionRevision = 0;
+  StreamSubscription<NativeArEvent>? _arStatusSubscription;
+  Object? _nativeEffectsError;
 
   bool get _usingNativeCamera =>
       _nativeBackendSelected && _nativeCameraController.isInitialized;
@@ -207,6 +217,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _usingNativeCamera ||
       (_cameraController?.value.isInitialized == true && _isInitialized);
 
+  bool get _filterSelectionLocked =>
+      _isCapturing ||
+      _isVideoRecording ||
+      _recordingStartInProgress ||
+      _isProcessingVideo ||
+      _isHandsFreeCountingDown;
+
+  bool get _cameraLifecycleIsActive =>
+      _latestLifecycleState == AppLifecycleState.resumed ||
+      _latestLifecycleState == AppLifecycleState.inactive;
+
   double get _activePreviewAspectRatio => _usingNativeCamera
       ? _nativeCameraController.session!.aspectRatio
       : _cameraController!.value.aspectRatio;
@@ -214,6 +235,29 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildActiveCameraPreview() => _usingNativeCamera
       ? Texture(textureId: _nativeCameraController.session!.textureId)
       : CameraPreview(_cameraController!);
+
+  Widget _presentCameraPreview(Widget preview) {
+    final config = StoryEditorConfigProvider.read(context);
+    final isFrontCamera = _isFrontCameraActive;
+    final wantsMirroredPreview =
+        isFrontCamera && config.mirrorFrontCameraPreview;
+    // The Flutter camera packages already mirror their front-camera preview;
+    // our native CameraX/AVFoundation texture deliberately does not.
+    final backendAlreadyMirrored = isFrontCamera && !_usingNativeCamera;
+    final shouldFlip = wantsMirroredPreview != backendAlreadyMirrored;
+    if (!shouldFlip) {
+      return preview;
+    }
+    // Normalize both backends to the configured handedness. With the default
+    // unmirrored mode this removes the Flutter camera package's implicit
+    // selfie mirror while leaving the native texture unchanged.
+    return Transform.flip(flipX: true, child: preview);
+  }
+
+  bool get _shouldMirrorCapturedMedia {
+    final config = StoryEditorConfigProvider.read(context);
+    return _isFrontCameraActive && config.mirrorFrontCameraPreview;
+  }
 
   bool get _isFrontCameraActive {
     if (_nativeBackendSelected) {
@@ -238,6 +282,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _cameraPresets[_activeFilterIndex];
   String get _activeFilterId => _activeFilterPreset.id;
 
+  Locale? _effectsLocale;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (_effectsLocale == locale) return;
+    _effectsLocale = locale;
+    // Refresh baked typography when the host changes language with the camera open.
+    if (_nativeArPrepared) unawaited(_applyNativeArSelection());
+  }
+
   @override
   void initState() {
     super.initState();
@@ -259,8 +315,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       initialPage: _activeFilterIndex,
     );
     _filterPageController.addListener(_onFilterScroll);
+    _arStatusSubscription = _nativeArController.events.listen((event) {
+      if (!mounted) return;
+      setState(() {
+        if (event.failure != null) _nativeEffectsError = event.failure!.message;
+      });
+    });
 
-    _loadCameraFilterShader();
+    _cameraFilterLoadFuture = _loadCameraFilterShader();
 
     _loadSettings();
     _requestPermissionsAndInitialize();
@@ -272,15 +334,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         'packages/story_editor_pro/shaders/story_filter.frag',
       );
       if (!mounted) return;
-      setState(() => _cameraFilterShader = program.fragmentShader());
+      setState(() => _cameraFilterProgram = program);
+      _onFilterScroll();
     } catch (error) {
       debugPrint('StoryCameraScreen: filter shader unavailable: $error');
     }
   }
 
-  void _applyCameraFilterShader(Size size, String filterId, double strength) {
-    final shader = _cameraFilterShader;
-    if (shader == null) return;
+  ui.FragmentShader? _cameraFilterShaderFor(
+    Size size,
+    String filterId,
+    double strength,
+  ) {
+    final program = _cameraFilterProgram;
+    if (program == null) return null;
+    final key = '${filterId}_${size.width.round()}x${size.height.round()}';
+    final shader = _cameraFilterShaders.putIfAbsent(
+      key,
+      program.fragmentShader,
+    );
     final matrix = StoryEditorFilters.matrix(filterId, strength);
     shader
       ..setFloat(0, size.width)
@@ -297,18 +369,33 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       ..setFloat(11, matrix[4] / 255.0)
       ..setFloat(12, StoryEditorFilters.sCurveStrength(filterId, strength))
       ..setFloat(13, StoryEditorFilters.vignetteStrength(filterId, strength))
-      ..setFloat(14, StoryEditorFilters.beautyStrength(filterId, strength))
-      ..setFloat(15, StoryEditorFilters.vhsStrength(filterId, strength));
+      ..setFloat(14, _effects.beauty)
+      ..setFloat(15, StoryEditorFilters.vhsStrength(filterId, strength))
+      ..setFloat(16, StoryEditorFilters.bloomStrength(filterId, strength))
+      ..setFloat(17, StoryEditorFilters.grainStrength(filterId, strength))
+      ..setFloat(18, StoryEditorFilters.halationStrength(filterId, strength))
+      ..setFloat(19, StoryEditorFilters.splitToneStrength(filterId, strength))
+      ..setFloat(20, StoryEditorFilters.chromaStrength(filterId, strength));
+    return shader;
   }
 
   /// Requests all required permissions when story editor is opened
   Future<void> _requestPermissionsAndInitialize() async {
     PermissionStatus resolvedCameraStatus;
     try {
-      final cameraStatus = await Permission.camera.status;
-      resolvedCameraStatus = cameraStatus.isGranted
-          ? cameraStatus
-          : await Permission.camera.request();
+      final config = StoryEditorConfigProvider.read(context);
+      if (config.cameraPermissionManagedByHost) {
+        // The host has already completed and validated the platform request
+        // before this route exists. Re-reading immediately after Android's
+        // permission sheet can transiently return the old denied value and
+        // incorrectly force a second launch attempt.
+        resolvedCameraStatus = PermissionStatus.granted;
+      } else {
+        final cameraStatus = await Permission.camera.status;
+        resolvedCameraStatus = cameraStatus.isGranted
+            ? cameraStatus
+            : await Permission.camera.request();
+      }
     } catch (error) {
       debugPrint('Camera permission request failed: $error');
       resolvedCameraStatus = PermissionStatus.denied;
@@ -319,15 +406,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (!_hasPermission) {
       setState(() => _isLoading = false);
       await CameraPrewarm.discard();
-      if (!mounted) return;
-      // A denied camera can never produce useful content. Leave a pushed
-      // camera route immediately instead of exposing a dead/black preview.
-      // When embedded as a root widget, the inline permission UI remains as a
-      // retry path because there is no route to pop.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _hasPermission) return;
-        Navigator.of(context).maybePop();
-      });
       return;
     }
 
@@ -360,8 +438,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _handsFreeCountdownTimer?.cancel();
     _handsFreeRecordingTimer?.cancel();
     _pulseController.dispose();
+    unawaited(_arStatusSubscription?.cancel());
     _filterPageController.removeListener(_onFilterScroll);
     _filterPageController.dispose();
+    for (final shader in _cameraFilterShaders.values) {
+      shader.dispose();
+    }
+    _cameraFilterShaders.clear();
     unawaited(_disposeCameraRouteResources());
     super.dispose();
   }
@@ -402,14 +485,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   void _onFilterScroll() {
+    if (_filterSelectionLocked) return;
     if (!_filterPageController.hasClients) return;
     final page = _filterPageController.page;
     if (page == null) return;
     final nextIndex = page.round().clamp(0, _combinedFilterCount - 1);
+    if (!_canSelectFilterIndex(nextIndex)) return;
     if (nextIndex != _activeFilterIndex && mounted) {
       setState(() => _activeFilterIndex = nextIndex);
       unawaited(_applyNativeArSelection());
     }
+  }
+
+  bool _canSelectFilterIndex(int index) {
+    final safeIndex = index.clamp(0, _combinedFilterCount - 1).toInt();
+    final preset = _cameraPresets[safeIndex];
+    return (_cameraFilterProgram != null &&
+            ui.ImageFilter.isShaderFilterSupported) ||
+        preset.id == StoryEditorFilters.none ||
+        StoryEditorFilters.isNativeLens(preset.id);
   }
 
   void _resetFilterSelection() {
@@ -425,6 +519,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _latestLifecycleState = state;
+    // Pulling Android's notification/quick-settings shade reports inactive,
+    // but the route is still foreground-visible. Keep the session and preview
+    // intact; pause only once the application is genuinely backgrounded.
+    if (state == AppLifecycleState.inactive) return;
+    if (state == AppLifecycleState.resumed && !_hasPermission) {
+      unawaited(_requestPermissionsAndInitialize());
+      return;
+    }
     if (_nativeBackendSelected) {
       if (state == AppLifecycleState.resumed) {
         unawaited(_resumeNativeCamera());
@@ -509,7 +611,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         screenWaitForController = initialization.elapsed;
       }
       _nativeBackendSelected = true;
-      if (_latestLifecycleState != AppLifecycleState.resumed) {
+      if (!_cameraLifecycleIsActive) {
         _nativeCameraSuspended = true;
         await _nativeCameraController.release();
         _isInitialized = false;
@@ -595,7 +697,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _resetCaptureStateForLifecycle();
     await _nativeCameraController.release();
     _isInitialized = false;
-    if (mounted && _latestLifecycleState != AppLifecycleState.resumed) {
+    if (mounted && !_cameraLifecycleIsActive) {
       setState(() {});
     }
   }
@@ -625,11 +727,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       return;
     }
     final facing = _nativeCameraController.facing;
-    if (_latestLifecycleState != AppLifecycleState.resumed) return;
+    if (!_cameraLifecycleIsActive) return;
     try {
       await _nativeCameraController.initialize(facing);
       if (_routeDisposing || !mounted) return;
-      if (_latestLifecycleState != AppLifecycleState.resumed) {
+      if (!_cameraLifecycleIsActive) {
         await _nativeCameraController.release();
         return;
       }
@@ -644,7 +746,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     } catch (e) {
       if (_routeDisposing || !mounted) return;
       debugPrint('Native camera resume failed; using fallback: $e');
-      if (_latestLifecycleState != AppLifecycleState.resumed) return;
+      if (!_cameraLifecycleIsActive) return;
       await _nativeCameraController.release();
       if (_routeDisposing || !mounted) return;
       _nativeBackendSelected = false;
@@ -740,6 +842,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         _activeFilterIndex < _cameraPresets.length &&
         StoryEditorFilters.isNativeLens(_cameraPresets[_activeFilterIndex].id);
     _nativeArPrepared = false;
+    _effects = _effects.copyWith(faceLens: 'none', placeStyle: 'none');
     if (_supportedNativeLensIds.isEmpty && !selectedNativeLens) return;
     void update() {
       _supportedNativeLensIds = const <String>{};
@@ -765,7 +868,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final capabilities = await _nativeArController.getCapabilities();
     if (!mounted || !capabilities.available) return;
 
-    final supportedLenses = NativeArLensIds.glasses
+    final supportedLenses = NativeArLensIds.face
         .where(capabilities.supportsLens)
         .toSet();
     final capabilitiesChanged =
@@ -775,29 +878,101 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       setState(() => _supportedNativeLensIds = supportedLenses);
     }
 
-    // Native prepare is quick and completes its heavy work asynchronously.
-    await _nativeArController.prepare();
+    // Discover capabilities after first frame; prepare the model on lens selection.
     if (!mounted) return;
     _nativeArPrepared = true;
     await _applyNativeArSelection();
   }
 
-  Future<void> _applyNativeArSelection() async {
-    if (!_nativeArPrepared) return;
+  Future<void> _applyNativeArSelection() {
+    if (!_nativeArPrepared) return Future<void>.value();
     final revision = ++_nativeArSelectionRevision;
-    final isGlasses = StoryEditorFilters.isNativeLens(_activeFilterId);
-    if (isGlasses) {
-      final selected = await _nativeArController.setLens(
-        _activeFilterId,
-        intensity: _activeFilterStrength,
-      );
-      if (revision != _nativeArSelectionRevision || !mounted) return;
-      if (selected) await _nativeArController.setEnabled(true);
-      return;
-    }
-    await _nativeArController.setLens(NativeArLensIds.none, intensity: 0);
-    if (revision != _nativeArSelectionRevision || !mounted) return;
-    await _nativeArController.setEnabled(false);
+    _nativeEffectsError = null;
+    final filter = _activeFilterId;
+    final effects = _effects;
+    final locale = Localizations.localeOf(context);
+    final mirror = _shouldMirrorCapturedMedia;
+    // Serialize channel writes. Rapid swipes cannot leave an old lens enabled
+    // after the latest selection, and the shutter awaits this same queue.
+    _effectsApplyFuture = _effectsApplyFuture
+        .then((_) async {
+          if (!mounted || revision != _nativeArSelectionRevision) return;
+          final face = effects.faceLens != 'none'
+              ? effects.faceLens
+              : StoryEditorFilters.isNativeLens(filter)
+              ? filter
+              : 'none';
+          final composition = StoryEditorFilters.isComposedLens(filter)
+              ? filter
+              : 'none';
+          final selected = await _nativeArController.setLens(
+            face != 'none' ? face : composition,
+            intensity: 1,
+            compositionId: composition,
+            placeStyle: effects.placeStyle,
+            placeName: effects.placeName,
+            languageCode: locale.languageCode,
+            countryCode: locale.countryCode,
+            mirrorOutput: mirror,
+          );
+          if (!mounted || revision != _nativeArSelectionRevision) return;
+          if (!selected) {
+            throw StateError('The selected camera lens is unavailable');
+          }
+          final enabled = await _nativeArController.setEnabled(
+            face != 'none' ||
+                composition != 'none' ||
+                (effects.placeStyle != 'none' && effects.placeName.isNotEmpty),
+          );
+          if (!enabled) throw StateError('Could not apply the camera effects');
+        })
+        .catchError((Object error) {
+          _nativeEffectsError = error;
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(context.storyStrings.cameraEffectsUnavailable),
+              ),
+            );
+          }
+        });
+    return _effectsApplyFuture;
+  }
+
+  Future<void> _showEffectsPanel() async {
+    if (_filterSelectionLocked) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF141419),
+      barrierColor: Colors.transparent,
+      showDragHandle: true,
+      builder: (_) => CameraEffectsPanel(
+        effects: _effects,
+        arEvents: _nativeArController.events,
+        lookId: _activeFilterId,
+        lookStrength: _activeFilterStrength,
+        supportedFaceLenses: _supportedNativeLensIds,
+        supportsPlaces: _usingNativeCamera && _nativeArPrepared,
+        supportsBeauty:
+            _cameraFilterProgram != null &&
+            ui.ImageFilter.isShaderFilterSupported,
+        onChanged: (effects, lookId, strength) {
+          if (!mounted) return;
+          final index = _cameraPresets.indexWhere((p) => p.id == lookId);
+          if (index >= 0 && !_canSelectFilterIndex(index)) return;
+          setState(() {
+            _effects = effects;
+            _activeFilterStrength = strength;
+            if (index >= 0) _activeFilterIndex = index;
+          });
+          if (_filterPageController.hasClients && index >= 0) {
+            _filterPageController.jumpToPage(index);
+          }
+          unawaited(_applyNativeArSelection());
+        },
+      ),
+    );
   }
 
   /// Non-critical camera setup applied after the preview is already visible.
@@ -828,12 +1003,44 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
+  Future<void> _ensureNativeEffectsReady() async {
+    if (!_nativeArPrepared) return;
+    await _applyNativeArSelection();
+    if (_nativeEffectsError != null) throw StateError('$_nativeEffectsError');
+    final needsFace =
+        _effects.faceLens != 'none' ||
+        StoryEditorFilters.isNativeLens(_activeFilterId);
+    if (needsFace &&
+        (!_nativeArController.faceTrackingReady ||
+            _nativeArController.state != NativeArRuntimeState.active)) {
+      await _nativeArController.events
+          .firstWhere(
+            (event) =>
+                (event.state == NativeArRuntimeState.active &&
+                    event.faceTrackingReady == true) ||
+                event.failure != null,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (!_nativeArController.faceTrackingReady ||
+          _nativeArController.state != NativeArRuntimeState.active ||
+          _nativeEffectsError != null) {
+        throw StateError(
+          'The face lens could not start. Choose another effect.',
+        );
+      }
+    }
+  }
+
   Future<String> _capturePhotoPath() async {
+    await _ensureNativeEffectsReady();
     if (_usingNativeCamera) return _nativeCameraController.takePicture();
     return (await _cameraController!.takePicture()).path;
   }
 
   Future<void> _beginBackendRecording() async {
+    // Selection updates are intentionally unawaited while swiping. Close that
+    // race at the recording boundary so frame zero has the selected lens.
+    await _ensureNativeEffectsReady();
     if (_usingNativeCamera) {
       if (Platform.isAndroid) {
         final microphoneStatus = await Permission.microphone.request();
@@ -859,6 +1066,136 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
     return (await _cameraController!.stopVideoRecording()).path;
   }
+
+  Future<Uint8List> _transparentVideoOverlay() async {
+    final recorder = ui.PictureRecorder();
+    ui.Canvas(recorder);
+    final image = await recorder.endRecording().toImage(1, 1);
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw StateError('Could not create video overlay');
+      return data.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
+  }
+
+  Future<String> _finalizeVideoWithoutEditor({
+    required String videoPath,
+    required String filterId,
+    required double filterStrength,
+    required bool flipHorizontally,
+  }) async {
+    final pixelFilterId = _pixelFilterIdForSavedMedia(filterId);
+    if (pixelFilterId == StoryEditorFilters.none &&
+        _effects.beauty == 0 &&
+        !flipHorizontally) {
+      return videoPath;
+    }
+    final output = await VideoOverlayExportService.exportVideoWithOverlay(
+      videoPath: videoPath,
+      overlayPngBytes: await _transparentVideoOverlay(),
+      mirrorHorizontally: flipHorizontally,
+      filterPreset: pixelFilterId,
+      filterStrength: filterStrength,
+      beautyStrength: _effects.beauty,
+    );
+    if (output == null) {
+      throw StateError(
+        VideoOverlayExportService.lastExportError ??
+            'Could not finalize captured video',
+      );
+    }
+    return output;
+  }
+
+  Future<String> _finalizePhotoForRawConsumer({
+    required String imagePath,
+    required String filterId,
+    required double filterStrength,
+    required bool flipHorizontally,
+  }) async {
+    final requiresPixelFilter =
+        _effects.beauty > 0 ||
+        (filterId != StoryEditorFilters.none &&
+            !StoryEditorFilters.isNativeLens(filterId));
+    if (!requiresPixelFilter && !flipHorizontally) {
+      return imagePath;
+    }
+
+    final codec = await ui.instantiateImageCodec(
+      await File(imagePath).readAsBytes(),
+    );
+    final frame = await codec.getNextFrame();
+    codec.dispose();
+    final source = frame.image;
+    ui.Image? filtered;
+    ui.Image? finalized;
+    try {
+      final bounds = Rect.fromLTWH(
+        0,
+        0,
+        source.width.toDouble(),
+        source.height.toDouble(),
+      );
+      ui.Image working = source;
+      if (requiresPixelFilter) {
+        final shader = _cameraFilterShaderFor(
+          bounds.size,
+          filterId,
+          filterStrength,
+        );
+        if (shader == null) {
+          throw StateError('The selected camera filter is not ready');
+        }
+        final recorder = ui.PictureRecorder();
+        final canvas = ui.Canvas(recorder);
+        canvas.saveLayer(
+          bounds,
+          Paint()..imageFilter = ui.ImageFilter.shader(shader),
+        );
+        canvas.drawImageRect(source, bounds, bounds, Paint());
+        canvas.restore();
+        filtered = await recorder.endRecording().toImage(
+          source.width,
+          source.height,
+        );
+        working = filtered;
+      }
+
+      if (flipHorizontally) {
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder)
+          ..translate(source.width.toDouble(), 0)
+          ..scale(-1, 1)
+          ..drawImageRect(working, bounds, bounds, Paint());
+        finalized = await recorder.endRecording().toImage(
+          source.width,
+          source.height,
+        );
+        working = finalized;
+      }
+
+      final data = await working.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw StateError('Could not encode captured photo');
+      final directory = await getTemporaryDirectory();
+      final outputPath =
+          '${directory.path}${Platform.pathSeparator}story_photo_${DateTime.now().microsecondsSinceEpoch}.png';
+      await File(
+        outputPath,
+      ).writeAsBytes(data.buffer.asUint8List(), flush: true);
+      return outputPath;
+    } finally {
+      finalized?.dispose();
+      filtered?.dispose();
+      source.dispose();
+    }
+  }
+
+  String _pixelFilterIdForSavedMedia(String filterId) =>
+      StoryEditorFilters.isNativeLens(filterId)
+      ? StoryEditorFilters.none
+      : filterId;
 
   Future<void> _setBackendZoom(double zoom) async {
     try {
@@ -1119,7 +1456,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Could not open gallery'),
+            content: Text(context.storyStrings.cameraCouldNotOpenGallery),
             backgroundColor: Colors.red.shade700,
             behavior: SnackBarBehavior.floating,
           ),
@@ -1141,6 +1478,22 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     try {
       HapticFeedback.mediumImpact();
 
+      // Freeze the visible look before the asynchronous camera capture. A
+      // slider gesture during shutter latency must not change the editor/export.
+      final capturedFilterId = _activeFilterId;
+      final capturedPixelFilterId = _pixelFilterIdForSavedMedia(
+        capturedFilterId,
+      );
+      final capturedFilterStrength = _activeFilterStrength;
+      final capturedFlipHorizontally = _shouldMirrorCapturedMedia;
+      if (capturedFilterId != StoryEditorFilters.none &&
+          !StoryEditorFilters.isNativeLens(capturedFilterId)) {
+        await _cameraFilterLoadFuture;
+        if (_cameraFilterProgram == null) {
+          throw StateError('The selected camera filter is unavailable');
+        }
+      }
+      if (_nativeArPrepared) await _applyNativeArSelection();
       final imagePath = await _capturePhotoPath();
 
       if (mounted &&
@@ -1148,10 +1501,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _latestLifecycleState == AppLifecycleState.resumed) {
         // Add captured photo to list in layout mode
         if (_isLayoutMode) {
-          await _handleLayoutCapture(imagePath);
+          await _handleLayoutCapture(
+            imagePath,
+            filterId: capturedFilterId,
+            filterStrength: capturedFilterStrength,
+            flipHorizontally: capturedFlipHorizontally,
+          );
         } else {
           // Normal mode
-          widget.onImageCaptured?.call(imagePath);
+          final onImageCaptured = widget.onImageCaptured;
+          if (onImageCaptured != null) {
+            final consumerPath = await _finalizePhotoForRawConsumer(
+              imagePath: imagePath,
+              filterId: capturedPixelFilterId,
+              filterStrength: capturedFilterStrength,
+              flipHorizontally: capturedFlipHorizontally,
+            );
+            onImageCaptured(consumerPath);
+            if (!mounted) return;
+          }
 
           if (widget.showEditor) {
             final pendingOverlay = _pendingTextOverlay;
@@ -1165,9 +1533,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   primaryColor: widget.primaryColor,
                   // The live selfie preview is mirrored for interaction only;
                   // native and package-camera captures remain unmirrored.
-                  flipHorizontally: false,
-                  initialFilterPreset: _activeFilterId,
-                  initialFilterStrength: _activeFilterStrength,
+                  flipHorizontally: capturedFlipHorizontally,
+                  initialFilterPreset: capturedPixelFilterId,
+                  initialFilterStrength: capturedFilterStrength,
+                  initialBeautyStrength: _effects.beauty,
                   initialTextOverlay: pendingOverlay,
                   closeFriendsList: widget.closeFriendsList,
                   userProfileImageUrl: widget.userProfileImageUrl,
@@ -1186,9 +1555,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     } catch (e) {
       debugPrint('Capture error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not take photo: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.storyStrings.cameraCouldNotTakePhoto)),
+        );
       }
     }
 
@@ -1198,10 +1567,24 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   /// When photo is captured in layout mode
-  Future<void> _handleLayoutCapture(String imagePath) async {
+  Future<void> _handleLayoutCapture(
+    String imagePath, {
+    required String filterId,
+    required double filterStrength,
+    required bool flipHorizontally,
+  }) async {
+    // Bake each tile with the look that was visible at its own shutter time.
+    // Different tiles may intentionally use different filters.
+    final finalizedPath = await _finalizePhotoForRawConsumer(
+      imagePath: imagePath,
+      filterId: filterId,
+      filterStrength: filterStrength,
+      flipHorizontally: flipHorizontally,
+    );
+    if (!mounted) return;
     // Save photo to active tile
     setState(() {
-      _capturedLayoutPhotos[_activeLayoutIndex] = File(imagePath);
+      _capturedLayoutPhotos[_activeLayoutIndex] = File(finalizedPath);
     });
 
     // Find the next empty tile
@@ -1338,7 +1721,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Could not open gallery'),
+            content: Text(context.storyStrings.cameraCouldNotOpenGallery),
             backgroundColor: Colors.red.shade700,
             behavior: SnackBarBehavior.floating,
           ),
@@ -1411,9 +1794,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _isProcessingVideo = false;
           _isLayoutProcessing = false;
         });
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not create collage: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.storyStrings.cameraCouldNotCreateCollage),
+          ),
+        );
       }
     }
   }
@@ -1697,6 +2082,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     });
 
     try {
+      final capturedFilterId = _activeFilterId;
+      final capturedPixelFilterId = _pixelFilterIdForSavedMedia(
+        capturedFilterId,
+      );
+      final capturedFilterStrength = _activeFilterStrength;
+      final capturedFlipHorizontally = _shouldMirrorCapturedMedia;
+      final capturedDurationMs = _videoRecordingElapsedMs;
       final videoPath = await _endBackendRecording();
 
       if (mounted) {
@@ -1715,9 +2107,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: videoPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
-                flipHorizontally: false,
-                initialFilterPreset: _activeFilterId,
-                initialFilterStrength: _activeFilterStrength,
+                flipHorizontally: capturedFlipHorizontally,
+                initialFilterPreset: capturedPixelFilterId,
+                initialFilterStrength: capturedFilterStrength,
+                initialBeautyStrength: _effects.beauty,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
@@ -1727,10 +2120,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         } else {
-          // No editor - call onStoryShare directly
+          // A no-editor share must still bake the same filter and selfie
+          // orientation shown in the live preview.
+          final finalizedPath = await _finalizeVideoWithoutEditor(
+            videoPath: videoPath,
+            filterId: capturedPixelFilterId,
+            filterStrength: capturedFilterStrength,
+            flipHorizontally: capturedFlipHorizontally,
+          );
           final result = await StoryResult.fromFile(
-            videoPath,
-            durationMs: _videoRecordingElapsedMs,
+            finalizedPath,
+            durationMs: capturedDurationMs,
           );
           widget.onStoryShare?.call(
             StoryShareResult(
@@ -1885,6 +2285,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     });
 
     try {
+      final capturedFilterId = _activeFilterId;
+      final capturedPixelFilterId = _pixelFilterIdForSavedMedia(
+        capturedFilterId,
+      );
+      final capturedFilterStrength = _activeFilterStrength;
+      final capturedFlipHorizontally = _shouldMirrorCapturedMedia;
+      final capturedDurationMs = _boomerangElapsedMs;
       final videoPath = await _endBackendRecording();
 
       debugPrint('Boomerang: Video recorded, creating boomerang effect...');
@@ -1915,9 +2322,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: finalPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
-                flipHorizontally: false,
-                initialFilterPreset: _activeFilterId,
-                initialFilterStrength: _activeFilterStrength,
+                flipHorizontally: capturedFlipHorizontally,
+                initialFilterPreset: capturedPixelFilterId,
+                initialFilterStrength: capturedFilterStrength,
+                initialBeautyStrength: _effects.beauty,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
@@ -1927,10 +2335,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         } else {
-          // No editor - call onStoryShare directly
+          final finalizedPath = await _finalizeVideoWithoutEditor(
+            videoPath: finalPath,
+            filterId: capturedPixelFilterId,
+            filterStrength: capturedFilterStrength,
+            flipHorizontally: capturedFlipHorizontally,
+          );
           final result = await StoryResult.fromFile(
-            finalPath,
-            durationMs: _boomerangElapsedMs,
+            finalizedPath,
+            durationMs: capturedDurationMs,
           );
           widget.onStoryShare?.call(
             StoryShareResult(
@@ -2148,6 +2561,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     });
 
     try {
+      final capturedFilterId = _activeFilterId;
+      final capturedPixelFilterId = _pixelFilterIdForSavedMedia(
+        capturedFilterId,
+      );
+      final capturedFilterStrength = _activeFilterStrength;
+      final capturedFlipHorizontally = _shouldMirrorCapturedMedia;
+      final capturedDurationMs = _handsFreeRecordingElapsed * 1000;
       final videoPath = await _endBackendRecording();
 
       if (mounted) {
@@ -2166,9 +2586,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 imagePath: videoPath,
                 mediaType: MediaType.video,
                 primaryColor: widget.primaryColor,
-                flipHorizontally: false,
-                initialFilterPreset: _activeFilterId,
-                initialFilterStrength: _activeFilterStrength,
+                flipHorizontally: capturedFlipHorizontally,
+                initialFilterPreset: capturedPixelFilterId,
+                initialFilterStrength: capturedFilterStrength,
+                initialBeautyStrength: _effects.beauty,
                 closeFriendsList: widget.closeFriendsList,
                 userProfileImageUrl: widget.userProfileImageUrl,
                 onShare: widget.onStoryShare,
@@ -2178,10 +2599,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _resetFilterSelection();
           // onStoryShare callback is called from StoryEditorScreen
         } else {
-          // No editor - call onStoryShare directly
+          final finalizedPath = await _finalizeVideoWithoutEditor(
+            videoPath: videoPath,
+            filterId: capturedPixelFilterId,
+            filterStrength: capturedFilterStrength,
+            flipHorizontally: capturedFlipHorizontally,
+          );
           final result = await StoryResult.fromFile(
-            videoPath,
-            durationMs: _handsFreeRecordingElapsed * 1000,
+            finalizedPath,
+            durationMs: capturedDurationMs,
           );
           widget.onStoryShare?.call(
             StoryShareResult(
@@ -2217,7 +2643,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         if (await _nativeCameraController.switchCamera()) {
           _zoomLevel = 1;
           _baseZoomLevel = 1;
-          if (mounted) setState(() {});
+          if (!mounted) return;
+          setState(() {});
+          // The selected lens context includes selfie-output mirroring. A
+          // successful back/front switch changes that value, so re-send the
+          // active selection before another frame or capture can use stale
+          // text/graphic orientation.
+          if (_nativeArPrepared) await _applyNativeArSelection();
         }
       } catch (error) {
         debugPrint('Native camera switch error: $error');
@@ -2538,9 +2970,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     borderRadius: BorderRadius.circular(30),
                     border: Border.all(color: Colors.white54),
                   ),
-                  child: const Text(
-                    'Cancel',
-                    style: TextStyle(
+                  child: Text(
+                    context.storyStrings.cameraCancel,
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
@@ -2778,7 +3210,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 height: _usingNativeCamera
                     ? _nativeCameraController.session!.previewWidth
                     : _cameraController!.value.previewSize?.width ?? 1080,
-                child: _buildActiveCameraPreview(),
+                child: _presentCameraPreview(_buildActiveCameraPreview()),
               ),
             ),
           ),
@@ -2816,18 +3248,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.grey.shade900,
-        title: const Text(
-          'Delete Photo',
-          style: TextStyle(color: Colors.white),
+        title: Text(
+          context.storyStrings.cameraDeletePhoto,
+          style: const TextStyle(color: Colors.white),
         ),
-        content: const Text(
-          'Do you want to delete this photo?',
-          style: TextStyle(color: Colors.white70),
+        content: Text(
+          context.storyStrings.cameraDeletePhotoConfirmation,
+          style: const TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(context.storyStrings.cameraCancel),
           ),
           TextButton(
             onPressed: () {
@@ -2837,7 +3269,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 _activeLayoutIndex = index;
               });
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: Text(
+              context.storyStrings.cameraDelete,
+              style: const TextStyle(color: Colors.red),
+            ),
           ),
         ],
       ),
@@ -2851,29 +3286,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
     }
 
-    final config = StoryEditorConfigProvider.read(context);
-    final isFrontCamera = _isFrontCameraActive;
-
     return GestureDetector(
       onScaleStart: _onScaleStart,
       onScaleUpdate: _onScaleUpdate,
       onHorizontalDragEnd: (details) {
-        if (_isVideoRecording ||
-            _isProcessingVideo ||
-            _isHandsFreeCountingDown) {
+        if (_filterSelectionLocked) {
           return;
         }
         final velocity = details.primaryVelocity ?? 0;
         if (velocity.abs() < 120) return;
-        int next = _activeFilterIndex;
-        setState(() {
-          if (velocity < 0 && _activeFilterIndex < _combinedFilterCount - 1) {
-            _activeFilterIndex++;
-          } else if (velocity > 0 && _activeFilterIndex > 0) {
-            _activeFilterIndex--;
-          }
-          next = _activeFilterIndex;
-        });
+        var next = _activeFilterIndex;
+        if (velocity < 0 && _activeFilterIndex < _combinedFilterCount - 1) {
+          next++;
+        } else if (velocity > 0 && _activeFilterIndex > 0) {
+          next--;
+        }
+        if (!_canSelectFilterIndex(next)) return;
+        setState(() => _activeFilterIndex = next);
         unawaited(_applyNativeArSelection());
         _filterPageController.animateToPage(
           next,
@@ -2903,15 +3332,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             child: Transform.scale(
               scale: scale,
               alignment: Alignment.center,
-              child: Center(
-                child: (isFrontCamera && config.mirrorFrontCameraPreview)
-                    ? Transform(
-                        alignment: Alignment.center,
-                        transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
-                        child: preview,
-                      )
-                    : preview,
-              ),
+              child: Center(child: _presentCameraPreview(preview)),
             ),
           );
         },
@@ -2935,6 +3356,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             const SizedBox(height: 24),
             Text(
               config.strings.cameraPermissionRequired,
+              textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 24,
@@ -2949,7 +3371,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
             const SizedBox(height: 32),
             ElevatedButton(
-              onPressed: _requestPermissionsAndInitialize,
+              onPressed: () async {
+                if (config.cameraPermissionManagedByHost) {
+                  await openAppSettings();
+                  return;
+                }
+                await _requestPermissionsAndInitialize();
+              },
               style: ElevatedButton.styleFrom(
                 backgroundColor: widget.primaryColor ?? Colors.blue,
                 padding: const EdgeInsets.symmetric(
@@ -3062,13 +3490,42 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       right: 0,
       bottom: bottomOffset,
       child: Center(
-        child: _buildIntegratedCaptureWithFilters(
-          captureButton,
-          showFilters:
-              !_isBoomerangMode &&
-              !_isVideoRecording &&
-              !_isProcessingVideo &&
-              !_isHandsFreeCountingDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!_filterSelectionLocked)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: FilledButton.tonalIcon(
+                  key: const ValueKey('camera_effects_button'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xDD24232B),
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0x44FFFFFF)),
+                  ),
+                  onPressed: _showEffectsPanel,
+                  icon: const Icon(Icons.auto_awesome, size: 18),
+                  label: Text(
+                    (_effects.faceLens != 'none' &&
+                            !_nativeArController.faceTrackingReady)
+                        ? (_nativeEffectsError != null
+                              ? config.strings.cameraLensUnavailable
+                              : config.strings.cameraLensLoading)
+                        : config.strings.cameraEffectsLabel(
+                            _effects.layerCount,
+                          ),
+                  ),
+                ),
+              ),
+            _buildIntegratedCaptureWithFilters(
+              captureButton,
+              showFilters:
+                  !_isBoomerangMode &&
+                  !_isVideoRecording &&
+                  !_isProcessingVideo &&
+                  !_isHandsFreeCountingDown,
+            ),
+          ],
         ),
       ),
     );
@@ -3108,7 +3565,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         key: const ValueKey<String>('camera_filter_slider'),
         controller: _filterPageController,
         pageSnapping: CameraFilterSliderContract.pageSnapping,
-        physics: const BouncingScrollPhysics(),
+        physics: _filterSelectionLocked
+            ? const NeverScrollableScrollPhysics()
+            : const BouncingScrollPhysics(),
         itemCount: presets.length,
         itemBuilder: (context, index) {
           final preset = presets[index];
@@ -3191,23 +3650,39 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                             ),
                             child: ClipOval(
                               child: Opacity(
-                                opacity: selected ? 0.95 : 0.72,
+                                // The circle is an honest live preview of the
+                                // effect; selection is communicated by scale
+                                // and border, never by darkening the image.
+                                opacity: 1.0,
                                 child:
-                                    StoryEditorFilters.isNativeLens(preset.id)
+                                    (StoryEditorFilters.isNativeLens(
+                                          preset.id,
+                                        ) ||
+                                        StoryEditorFilters.isComposedLens(
+                                          preset.id,
+                                        ))
                                     ? Stack(
                                         fit: StackFit.expand,
                                         children: [
-                                          _buildFilterBubblePreview(preset.id),
-                                          const Center(
+                                          _buildFilterBubblePreview(
+                                            preset.id,
+                                            useGpuEffects: false,
+                                          ),
+                                          Center(
                                             child: Icon(
-                                              Icons.remove_red_eye_outlined,
+                                              StoryEditorFilters.thumbnailIcon(
+                                                preset.id,
+                                              ),
                                               color: Colors.white,
-                                              size: 24,
+                                              size: 21,
                                             ),
                                           ),
                                         ],
                                       )
-                                    : _buildFilterBubblePreview(preset.id),
+                                    : _buildFilterBubblePreview(
+                                        preset.id,
+                                        useGpuEffects: false,
+                                      ),
                               ),
                             ),
                           ),
@@ -3224,20 +3699,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  Widget _buildFilterBubblePreview(String filterId) {
+  Widget _buildFilterBubblePreview(
+    String filterId, {
+    bool useGpuEffects = true,
+  }) {
     if (!_cameraReady) {
       return const DecoratedBox(
         decoration: BoxDecoration(color: Color(0xFF444444)),
       );
     }
 
-    final config = StoryEditorConfigProvider.read(context);
-    final isFrontCamera = _isFrontCameraActive;
-
     final Widget preview = _buildLiveFilteredPreview(
       _buildActiveCameraPreview(),
       filterId,
       _activeFilterStrength,
+      useGpuEffects: useGpuEffects,
     );
 
     return LayoutBuilder(
@@ -3252,15 +3728,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           child: Transform.scale(
             scale: scale,
             alignment: Alignment.center,
-            child: Center(
-              child: (isFrontCamera && config.mirrorFrontCameraPreview)
-                  ? Transform(
-                      alignment: Alignment.center,
-                      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
-                      child: preview,
-                    )
-                  : preview,
-            ),
+            child: Center(child: _presentCameraPreview(preview)),
           ),
         );
       },
@@ -3275,10 +3743,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }) {
     final s = strength.clamp(0.0, 1.0);
     final isColorEffect =
-        filterId != StoryEditorFilters.none &&
-        !StoryEditorFilters.isNativeLens(filterId);
+        _effects.beauty > 0 ||
+        (filterId != StoryEditorFilters.none &&
+            !StoryEditorFilters.isNativeLens(filterId));
     final useShader =
-        useGpuEffects && isColorEffect && _cameraFilterShader != null;
+        useGpuEffects &&
+        isColorEffect &&
+        _cameraFilterProgram != null &&
+        ui.ImageFilter.isShaderFilterSupported;
 
     Widget buildBaseLayer() {
       Widget layer = basePreview;
@@ -3301,9 +3773,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           Positioned.fill(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                _applyCameraFilterShader(constraints.biggest, filterId, s);
+                final shader = _cameraFilterShaderFor(
+                  constraints.biggest,
+                  filterId,
+                  s,
+                );
+                if (shader == null) return const SizedBox.expand();
                 return BackdropFilter(
-                  filter: ui.ImageFilter.shader(_cameraFilterShader!),
+                  filter: ui.ImageFilter.shader(shader),
                   child: const SizedBox.expand(),
                 );
               },
@@ -3320,8 +3797,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         filterId == 'filmicfade' ||
         filterId == 'retro2044' ||
         filterId == 'vhs1993' ||
-        filterId == 'kuwaitgold';
-    if (needsVignette) {
+        filterId == 'kuwaitgold' ||
+        filterId == 'daytime' ||
+        filterId == 'timefocus' ||
+        filterId == 'retrodate';
+    if (needsVignette && !useShader) {
       final vignetteOpacity =
           switch (filterId) {
             'cinematic' => 0.48,
@@ -3347,61 +3827,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     Colors.black.withValues(alpha: vignetteOpacity),
                   ],
                   stops: const [0.0, 0.58, 1.0],
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    if (useGpuEffects && filterId == 'vhs1993') {
-      final now = DateTime.now();
-      final hh = now.hour.toString().padLeft(2, '0');
-      final mm = now.minute.toString().padLeft(2, '0');
-      final dd = now.day.toString().padLeft(2, '0');
-      final month = now.month.toString().padLeft(2, '0');
-      preview = Stack(
-        fit: StackFit.expand,
-        children: [
-          preview,
-          Positioned(
-            left: 24,
-            top: 28,
-            child: IgnorePointer(
-              child: Text(
-                'CAMERA 1\nPLAY  ▶\n$hh:$mm\n$dd.$month.${now.year}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontFamily: 'monospace',
-                  fontSize: 20,
-                  height: 1.05,
-                  shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    } else if (useGpuEffects && filterId == 'kuwaitgold') {
-      preview = Stack(
-        fit: StackFit.expand,
-        children: [
-          preview,
-          const Positioned(
-            left: 0,
-            right: 0,
-            bottom: 120,
-            child: IgnorePointer(
-              child: Text(
-                'KUWAIT',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 6,
-                  shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
                 ),
               ),
             ),
@@ -3647,14 +4072,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             child: _isVideoRecording
                 ? null
                 : Center(
-                    child: SvgPicture.asset(
-                      'packages/story_editor_pro/assets/icons/hand-free.svg',
-                      width: 32,
-                      height: 32,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.black54,
-                        BlendMode.srcIn,
-                      ),
+                    child: const Icon(
+                      Icons.access_time_rounded,
+                      size: 34,
+                      color: Colors.black54,
                     ),
                   ),
           ),
@@ -4388,14 +4809,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 }
               });
             },
-            child: SvgPicture.asset(
-              'packages/story_editor_pro/assets/icons/hand-free.svg',
-              width: 24,
-              height: 24,
-              colorFilter: const ColorFilter.mode(
-                Colors.white,
-                BlendMode.srcIn,
-              ),
+            child: const Icon(
+              Icons.access_time_rounded,
+              size: 25,
+              color: Colors.white,
             ),
           ),
 

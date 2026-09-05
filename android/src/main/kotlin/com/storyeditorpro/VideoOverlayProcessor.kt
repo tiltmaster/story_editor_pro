@@ -39,6 +39,7 @@ class VideoOverlayProcessor {
         outputHeight: Int? = null,
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
+        beautyStrength: Double = 0.0,
         shouldMuteAudio: Boolean = false,
         trimStartMs: Long = 0L,
         trimEndMs: Long = 0L,
@@ -190,8 +191,13 @@ class VideoOverlayProcessor {
                 warpMode   = filter.warpMode,
                 warpAmount = filter.warpAmount,
                 sCurve     = filter.sCurve,
-                beauty     = filter.beauty,
+                beauty     = if (beautyStrength.isFinite()) beautyStrength.coerceIn(0.0, 1.0).toFloat() else 0f,
                 vhs        = filter.vhs,
+                bloom      = filter.bloom,
+                grain      = filter.grain,
+                halation   = filter.halation,
+                splitTone  = filter.splitTone,
+                chroma     = filter.chroma,
             )
             scaledOverlay.recycle()
 
@@ -530,10 +536,19 @@ class VideoOverlayProcessor {
         val sCurve: Float = 0f,
         val beauty: Float = 0f,
         val vhs: Float = 0f,
+        val bloom: Float = 0f,
+        val grain: Float = 0f,
+        val halation: Float = 0f,
+        val splitTone: Float = 0f,
+        val chroma: Float = 0f,
     )
 
     private fun resolveFilterSettings(preset: String, strengthRaw: Double): FilterSettings {
-        val t = strengthRaw.coerceIn(0.0, 1.0).toFloat()
+        val t = if (strengthRaw.isFinite()) {
+            strengthRaw.coerceIn(0.0, 1.0).toFloat()
+        } else {
+            0f
+        }
         val neutral = FilterSettings(0f, 1f, 1f, 1f, 1f, 1f, 0f, 0f, 0f, 0f)
 
         // Field order: brightness, contrast, saturation, red, green, blue, vignette, warpMode, warpAmount, sCurve
@@ -563,10 +578,13 @@ class VideoOverlayProcessor {
             "moody"       -> FilterSettings(-0.06f, 1.28f, 0.82f, 0.98f, 0.98f, 1.06f, 0.20f, 0f, 0f, 0.55f)
             "bleach"      -> FilterSettings(0.08f,  1.35f, 0.55f, 1.02f, 1.02f, 1.00f, 0.24f, 0f, 0f, 0.0f)
             "velvet"      -> FilterSettings(-0.02f, 1.15f, 1.30f, 1.10f, 0.88f, 1.14f, 0.16f, 0f, 0f, 0.40f)
-            "softbeauty"  -> FilterSettings(0.045f, 0.96f, 1.04f, 1.06f, 1.015f,0.985f,0f,    0f, 0f, 0.0f, beauty = 0.42f)
-            "cleanglow"   -> FilterSettings(0.065f, 1.02f, 1.08f, 1.035f,1.02f, 1.0f,  0f,    0f, 0f, 0.12f, beauty = 0.24f)
-            "vhs1993"     -> FilterSettings(0.025f, 1.08f, 0.78f, 1.08f, 1.0f,  0.88f, 0.24f, 0f, 0f, 0.18f, vhs = 0.72f)
-            "kuwaitgold"  -> FilterSettings(0.045f, 1.10f, 1.16f, 1.18f, 1.065f,0.82f, 0.12f, 0f, 0f, 0.22f)
+            "softbeauty"  -> FilterSettings(0.045f, 0.96f, 1.04f, 1.06f, 1.015f,0.985f,0f,    0f, 0f, 0.0f)
+            "cleanglow"   -> FilterSettings(0.065f, 1.02f, 1.08f, 1.035f,1.02f, 1.0f,  0f,    0f, 0f, 0.12f)
+            "vhs1993"     -> FilterSettings(0.010f, 0.94f, 0.82f, 1.055f,1.0f,  0.935f,0.15f, 0f, 0f, 0.08f, vhs = 0.68f, bloom = 0.08f, grain = 0.72f, halation = 0.12f, splitTone = 0.08f, chroma = 0.62f)
+            "kuwaitgold"  -> FilterSettings(0.012f, 1.07f, 1.04f, 1.065f,1.010f,0.940f,0.12f, 0f, 0f, 0.26f, bloom = 0.32f, grain = 0.12f, halation = 0.30f, splitTone = 0.42f, chroma = 0.07f)
+            "daytime"     -> FilterSettings(0.035f, 0.98f, 0.95f, 1.045f,1.015f,0.965f,0.06f, 0f, 0f, 0.08f, bloom = 0.46f, grain = 0.05f, halation = 0.42f, splitTone = 0.15f, chroma = 0.04f)
+            "timefocus"   -> FilterSettings(0.025f, 1.02f, 0.96f, 1.025f,1.010f,0.995f,0.08f, 0f, 0f, 0.10f, bloom = 0.22f, halation = 0.12f, splitTone = -0.04f)
+            "retrodate"   -> FilterSettings(0.018f, 0.96f, 0.88f, 1.060f,1.005f,0.940f,0.18f, 0f, 0f, 0.06f, bloom = 0.30f, grain = 0.36f, halation = 0.34f, splitTone = -0.38f, chroma = 0.24f)
             else -> neutral
         }
 
@@ -585,6 +603,11 @@ class VideoOverlayProcessor {
             sCurve     = lerp(neutral.sCurve,     target.sCurve),
             beauty     = lerp(neutral.beauty,     target.beauty),
             vhs        = lerp(neutral.vhs,        target.vhs),
+            bloom      = lerp(neutral.bloom,      target.bloom),
+            grain      = lerp(neutral.grain,      target.grain),
+            halation   = lerp(neutral.halation,   target.halation),
+            splitTone  = lerp(neutral.splitTone,  target.splitTone),
+            chroma     = lerp(neutral.chroma,     target.chroma),
         )
     }
 

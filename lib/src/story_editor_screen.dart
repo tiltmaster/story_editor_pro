@@ -74,6 +74,7 @@ class StoryEditorScreen extends StatefulWidget {
   final bool flipHorizontally;
   final String initialFilterPreset;
   final double initialFilterStrength;
+  final double initialBeautyStrength;
 
   const StoryEditorScreen({
     super.key,
@@ -90,6 +91,7 @@ class StoryEditorScreen extends StatefulWidget {
     this.flipHorizontally = false,
     this.initialFilterPreset = StoryEditorFilters.none,
     this.initialFilterStrength = 0.95,
+    this.initialBeautyStrength = 0,
   }) : mediaPath = imagePath;
 
   @override
@@ -116,6 +118,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   // GPU filter shader — loaded once, used by BackdropFilter for pixel-accurate preview
   ui.FragmentShader? _filterShader;
+  late final Future<void> _filterShaderLoadFuture;
+  bool _filterShaderLoadFailed = false;
+  String get _effectiveFilterPreset =>
+      StoryEditorFilters.isNativeLens(widget.initialFilterPreset)
+      ? StoryEditorFilters.none
+      : widget.initialFilterPreset;
 
   // Close friends selection
   final Set<CloseFriend> _selectedCloseFriends = {};
@@ -155,51 +163,18 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       _selectedCloseFriends.addAll(widget.closeFriendsList);
     }
 
-    _loadFilterShader();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _installPresetOverlays();
-    });
-  }
-
-  Future<void> _installPresetOverlays() async {
-    if (!mounted) return;
-    if (StoryEditorFilters.addsVhsTimestamp(widget.initialFilterPreset)) {
-      final locale = Localizations.maybeLocaleOf(context)?.toString() ?? 'en';
-      final data = await captureStickerData(SmartStickerType.vhs, locale);
-      if (!mounted) return;
-      setState(() {
-        _smartStickers.add(
-          SmartStickerOverlay(
-            type: SmartStickerType.vhs,
-            data: data,
-            offset: const Offset(24, 92),
-            scale: 0.8,
-          ),
-        );
-      });
-    } else if (widget.initialFilterPreset == 'kuwaitgold') {
-      setState(() {
-        _smartStickers.add(
-          SmartStickerOverlay(
-            type: SmartStickerType.location,
-            skin: 2,
-            data: const {'name': 'KUWAIT'},
-            offset: Offset(
-              MediaQuery.of(context).size.width * 0.29,
-              MediaQuery.of(context).size.height * 0.72,
-            ),
-            scale: 0.9,
-          ),
-        );
-      });
-    }
+    _filterShaderLoadFuture = _loadFilterShader();
   }
 
   /// Loads the GLSL fragment shader that applies colour matrix + S-curve + vignette.
   /// Identical math to Android GLSL export shader → pixel-accurate preview.
-  /// Falls back silently to ColorFiltered if the shader cannot be loaded.
+  /// Fails closed if the shader cannot load; preview/export never substitute
+  /// a materially different ColorFiltered implementation.
   Future<void> _loadFilterShader() async {
     try {
+      if (!ui.ImageFilter.isShaderFilterSupported) {
+        throw UnsupportedError('GPU image filters need Impeller');
+      }
       final program = await ui.FragmentProgram.fromAsset(
         'packages/story_editor_pro/shaders/story_filter.frag',
       );
@@ -209,7 +184,18 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       });
     } catch (e) {
       debugPrint('StoryEditorScreen: shader load failed — $e');
-      // ColorFiltered fallback remains active
+      if (mounted) setState(() => _filterShaderLoadFailed = true);
+    }
+  }
+
+  Future<void> _ensureFilterShaderReady() async {
+    if (_effectiveFilterPreset == StoryEditorFilters.none &&
+        widget.initialBeautyStrength <= 0) {
+      return;
+    }
+    await _filterShaderLoadFuture;
+    if (_filterShader == null) {
+      throw StateError('The selected editor filter is unavailable');
     }
   }
 
@@ -217,7 +203,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// Called each build from within LayoutBuilder so the size is always up to date.
   void _applyShaderUniforms(Size size) {
     final m = StoryEditorFilters.matrix(
-      widget.initialFilterPreset,
+      _effectiveFilterPreset,
       widget.initialFilterStrength,
     );
     // m[4] is Flutter's bias in 0-255 space; shader operates in 0-1 space
@@ -238,28 +224,57 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       ..setFloat(
         12,
         StoryEditorFilters.sCurveStrength(
-          widget.initialFilterPreset,
+          _effectiveFilterPreset,
           widget.initialFilterStrength,
         ),
       )
       ..setFloat(
         13,
         StoryEditorFilters.vignetteStrength(
-          widget.initialFilterPreset,
+          _effectiveFilterPreset,
           widget.initialFilterStrength,
         ),
       )
-      ..setFloat(
-        14,
-        StoryEditorFilters.beautyStrength(
-          widget.initialFilterPreset,
-          widget.initialFilterStrength,
-        ),
-      )
+      ..setFloat(14, widget.initialBeautyStrength.clamp(0, 1))
       ..setFloat(
         15,
         StoryEditorFilters.vhsStrength(
-          widget.initialFilterPreset,
+          _effectiveFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        16,
+        StoryEditorFilters.bloomStrength(
+          _effectiveFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        17,
+        StoryEditorFilters.grainStrength(
+          _effectiveFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        18,
+        StoryEditorFilters.halationStrength(
+          _effectiveFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        19,
+        StoryEditorFilters.splitToneStrength(
+          _effectiveFilterPreset,
+          widget.initialFilterStrength,
+        ),
+      )
+      ..setFloat(
+        20,
+        StoryEditorFilters.chromaStrength(
+          _effectiveFilterPreset,
           widget.initialFilterStrength,
         ),
       );
@@ -346,6 +361,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   @override
   void dispose() {
     _videoController?.dispose();
+    _filterShader?.dispose();
     _overlayTick.dispose();
     super.dispose();
   }
@@ -616,7 +632,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       );
     }
 
-    if (widget.initialFilterPreset != StoryEditorFilters.none) {
+    if (_effectiveFilterPreset != StoryEditorFilters.none ||
+        widget.initialBeautyStrength > 0) {
       if (_filterShader != null) {
         // GPU fragment shader: colour matrix + S-curve + vignette in one pass.
         // Runs the IDENTICAL GLSL as the Android export shader, giving a
@@ -640,13 +657,26 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           ],
         );
       } else {
-        // Shader not yet loaded (first frame) — fall back to ColorFiltered.
-        mediaWidget = ColorFiltered(
-          colorFilter: StoryEditorFilters.colorFilter(
-            widget.initialFilterPreset,
-            widget.initialFilterStrength,
-          ),
-          child: mediaWidget,
+        // Never preview a cheaper algorithm that export will not use. Keep
+        // the media covered until the parity shader is ready, or show an
+        // explicit capability error if compilation failed.
+        mediaWidget = Stack(
+          fit: StackFit.expand,
+          children: [
+            mediaWidget,
+            ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: _filterShaderLoadFailed
+                    ? const Icon(
+                        Icons.error_outline_rounded,
+                        color: Colors.white,
+                        size: 36,
+                      )
+                    : const CircularProgressIndicator(color: Colors.white),
+              ),
+            ),
+          ],
         );
       }
     }
@@ -1072,13 +1102,17 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         _drawings.isNotEmpty ||
         _imageOverlays.isNotEmpty;
     final hasFilter =
-        widget.initialFilterPreset != StoryEditorFilters.none &&
+        _effectiveFilterPreset != StoryEditorFilters.none &&
         widget.initialFilterStrength > 0.01;
     final durationMs = _videoController?.value.duration.inMilliseconds ?? 0;
     final hasTrim =
         _trimStartMs > 0 ||
         (_trimEndMs > 0 && durationMs > 0 && _trimEndMs < durationMs);
-    return hasOverlay || hasFilter || widget.flipHorizontally || hasTrim;
+    return hasOverlay ||
+        hasFilter ||
+        widget.initialBeautyStrength > 0 ||
+        widget.flipHorizontally ||
+        hasTrim;
   }
 
   Future<Uint8List> _captureImageAtStoryCanvas() async {
@@ -3452,6 +3486,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     });
 
     try {
+      await _ensureFilterShaderReady();
+      if (!mounted) return;
       if (_mediaType == MediaType.video) {
         if (!_requiresVideoExport()) {
           debugPrint(
@@ -3492,8 +3528,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               mirrorHorizontally: widget.flipHorizontally,
               outputWidth: context.storyEditorConfig.storyCanvasWidth,
               outputHeight: context.storyEditorConfig.storyCanvasHeight,
-              filterPreset: widget.initialFilterPreset,
+              filterPreset: _effectiveFilterPreset,
               filterStrength: widget.initialFilterStrength,
+              beautyStrength: widget.initialBeautyStrength,
               shouldMuteAudio: _isMuted,
               trimStartMs: _trimStartMs,
               trimEndMs: _trimEndMs,
@@ -3625,6 +3662,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     });
 
     try {
+      await _ensureFilterShaderReady();
+      if (!mounted) return;
       String filePath;
       StoryMediaType resultMediaType;
 
@@ -3652,8 +3691,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             mirrorHorizontally: widget.flipHorizontally,
             outputWidth: context.storyEditorConfig.storyCanvasWidth,
             outputHeight: context.storyEditorConfig.storyCanvasHeight,
-            filterPreset: widget.initialFilterPreset,
+            filterPreset: _effectiveFilterPreset,
             filterStrength: widget.initialFilterStrength,
+            beautyStrength: widget.initialBeautyStrength,
             shouldMuteAudio: _isMuted,
             trimStartMs: _trimStartMs,
             trimEndMs: _trimEndMs,

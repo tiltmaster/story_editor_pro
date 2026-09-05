@@ -9,6 +9,11 @@ A powerful, fully customizable Instagram-style story editor for Flutter. Create 
 
 ## Features
 
+The camera now includes an **Effects** panel for combining color looks, adjustable
+skin smoothing, animated face lenses and place frames. Native artwork is included
+in photos and videos. See the [camera effects review](docs/camera-effects-review.md)
+for setup, implementation details, validation and remaining device checks.
+
 <table>
 <tr>
 <td width="300">
@@ -57,12 +62,14 @@ Set minimum SDK in `android/app/build.gradle`:
 ```gradle
 android {
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion 24
     }
 }
 ```
 
 ### iOS Setup
+
+The native camera and face-tracking dependencies require iOS 15 or later.
 
 Add to `ios/Runner/Info.plist`:
 
@@ -121,6 +128,20 @@ StoryCameraScreen(
 ---
 
 ## Full Customization
+
+Arabic and RTL are supported. In the host app, add the Flutter SDK's
+`flutter_localizations` dependency and configure `MaterialApp` with
+`supportedLocales: const [Locale('en'), Locale('ar')]` and
+`localizationsDelegates: GlobalMaterialLocalizations.delegates` (import
+`package:flutter_localizations/flutter_localizations.dart`). The camera inherits
+the selected locale and text direction. The included Android app follows the
+device language.
+
+Default strings automatically use the built-in Arabic catalog. If your host
+supplies custom strings, select `const StoryEditorStrings.arabic()` for Arabic
+or supply your own translations. Custom strings are preserved. The included
+iOS host also has Arabic permission descriptions; other hosts should localize
+their own `InfoPlist.strings`.
 
 Wrap your app with `StoryEditorConfigProvider` for complete control:
 
@@ -701,7 +722,9 @@ This package uses minimal, well-maintained dependencies:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Story Editor Pro is MIT-licensed; bundled third-party components retain their
+own licenses. See [LICENSE](LICENSE) and
+[assets/ar/THIRD_PARTY_NOTICES.md](assets/ar/THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 
