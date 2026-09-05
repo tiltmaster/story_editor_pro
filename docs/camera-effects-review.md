@@ -70,7 +70,7 @@ Android location permissions are in the plugin manifest. An iOS host must includ
 <string>Show your city in a camera place frame when you choose Use my location.</string>
 ```
 
-The included host has this entry. Location is never requested during camera
+The local development host has this entry; consuming apps must add it themselves. Location is never requested during camera
 startup. Permission, disabled-service, timeout and geocoder failures leave manual
 place entry available. Names and coordinates are not stored by these new controls.
 
@@ -119,7 +119,7 @@ copying the reference project's Dart configuration.
 
 - The host now enables Flutter's Arabic Material/Widgets/Cupertino localizations,
   so Arabic device language selects Arabic text and RTL layout. Android declares
-  RTL support. The iOS project registers Arabic and bundles Arabic camera,
+  RTL support. The local iOS project registers Arabic and bundles Arabic camera,
   microphone, library and location permission descriptions.
 - Added `StoryEditorStrings.arabic()` for camera, settings, editor and filter
   labels. The default configuration follows Arabic automatically; explicit host
@@ -153,3 +153,11 @@ On this Windows host, Java's local socket initialization initially failed.
 Using `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=H:\story_editor_pro\build\java-tmp`
 for the build process resolved it. This is a local build-environment setting,
 not a change required in shipped apps.
+
+## Repository hygiene
+
+The local `example/` app and APK/AAB/IPA packages are excluded from Git. CI now
+generates a disposable integration host with `tool/ci/create_host.py`; the local
+app is preserved, and the generator refuses to overwrite it. Host-specific
+Arabic and permission configuration described above must be supplied by each
+consumer. The reusable library implementation remains versioned.

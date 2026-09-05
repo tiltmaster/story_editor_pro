@@ -134,14 +134,12 @@ Arabic and RTL are supported. In the host app, add the Flutter SDK's
 `supportedLocales: const [Locale('en'), Locale('ar')]` and
 `localizationsDelegates: GlobalMaterialLocalizations.delegates` (import
 `package:flutter_localizations/flutter_localizations.dart`). The camera inherits
-the selected locale and text direction. The included Android app follows the
-device language.
+the selected locale and text direction.
 
 Default strings automatically use the built-in Arabic catalog. If your host
 supplies custom strings, select `const StoryEditorStrings.arabic()` for Arabic
-or supply your own translations. Custom strings are preserved. The included
-iOS host also has Arabic permission descriptions; other hosts should localize
-their own `InfoPlist.strings`.
+or supply your own translations. Custom strings are preserved. iOS hosts should
+also localize their permission descriptions in `InfoPlist.strings`.
 
 Wrap your app with `StoryEditorConfigProvider` for complete control:
 
@@ -694,12 +692,18 @@ class CloseFriend {
 
 ## Example
 
-Check the [example](example/) folder for a complete working demo:
+`example/` is a local, ignored app directory. It is not distributed in this
+repository. If you already have it locally, you can continue running it:
 
 ```bash
 cd example
 flutter run
 ```
+
+CI generates a disposable integration app using `python3 tool/ci/create_host.py`.
+The generator refuses to overwrite an existing local app. Native test sources
+and the minimal CI setup remain versioned under `ios/Tests`, `android/src/test`
+and `tool/ci`; APK, AAB and IPA artifacts are ignored everywhere.
 
 ## Dependencies
 

@@ -316,12 +316,7 @@ void main() {
 
     test('Android camera stack declares the MediaPipe API floor', () {
       final pluginGradle = File('android/build.gradle').readAsStringSync();
-      final exampleGradle = File(
-        'example/android/app/build.gradle.kts',
-      ).readAsStringSync();
-
       expect(pluginGradle, contains('minSdk 24'));
-      expect(exampleGradle, contains('minSdk = 24'));
     });
 
     test('capture freezes the visible filter before camera I/O', () {

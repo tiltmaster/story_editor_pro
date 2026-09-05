@@ -25,6 +25,8 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
+      - name: Generate disposable integration host
+        run: python3 tool/ci/create_host.py
       - run: flutter pub get
         working-directory: example
       # The Flutter build injects the pinned wrapper scripts/JAR from the
@@ -50,6 +52,8 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
+      - name: Generate disposable integration host
+        run: python3 tool/ci/create_host.py
       - run: flutter pub get
         working-directory: example
       - name: Compile the iOS pod

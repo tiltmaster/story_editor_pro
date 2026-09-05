@@ -91,10 +91,11 @@ coverage/
 **/web/favicon.png
 .last_build_id
 
-# Example app specific (if exists)
-example/.flutter-plugins
-example/.flutter-plugins-dependencies
-example/pubspec.lock
+# Local example app and generated application packages
+/example/
+*.apk
+*.aab
+*.ipa
 
 # FVM (Flutter Version Management)
 .fvm/
