@@ -20,6 +20,13 @@ def main():
         raise SystemExit('Flutter must be on PATH')
     subprocess.run([flutter, 'create', '--no-pub', '--project-name', 'story_editor_ci',
                     '--platforms', 'android,ios', str(host)], check=True)
+    # Keep the host compatible with the library's Dart floor even when a newer
+    # Flutter template uses newer language syntax.
+    (host / 'lib/main.dart').write_text(
+        "import 'package:flutter/material.dart';\n"
+        "void main() => runApp(const MaterialApp(home: Scaffold()));\n",
+        encoding='utf-8')
+    (host / 'test/widget_test.dart').unlink(missing_ok=True)
     (host / 'pubspec.yaml').write_text(
         "name: story_editor_ci\npublish_to: none\nenvironment:\n  sdk: ^3.8.1\n"
         "dependencies:\n  flutter:\n    sdk: flutter\n  story_editor_pro:\n"
