@@ -1,9 +1,9 @@
 name: story_editor_pro
 description: "A powerful story editor with camera, boomerang effects, drawing tools, text overlays, collages, and close friends sharing."
-version: 1.0.1+1
-homepage: https://github.com/ahmetbalkan/story_editor_pro
-repository: https://github.com/ahmetbalkan/story_editor_pro
-issue_tracker: https://github.com/ahmetbalkan/story_editor_pro/issues
+version: 1.5.0
+homepage: https://github.com/tiltmaster/story_editor_pro
+repository: https://github.com/tiltmaster/story_editor_pro
+issue_tracker: https://github.com/tiltmaster/story_editor_pro/issues
 
 topics:
   - camera
@@ -14,7 +14,7 @@ topics:
 
 environment:
   sdk: ^3.8.1
-  flutter: ">=1.17.0"
+  flutter: ">=3.38.0"
 
 dependencies:
   flutter:
@@ -26,9 +26,20 @@ dependencies:
   permission_handler: ^12.0.1
   photo_manager: ^3.8.3
   shared_preferences: ^2.5.4
+  # Smart stickers (time/date/battery/speed/location)
+  intl: ^0.20.2
+  battery_plus: ^6.2.1
+  geolocator: ^14.0.0
+  # Built-in reverse geocoding fallback for the location sticker (used when
+  # the host app doesn't inject its own providers)
+  geocoding: ^4.0.0
+  # Full emoji picker for the sticker drawer
+  emoji_picker_flutter: ^4.3.0
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   flutter_lints: ^5.0.0
 
@@ -37,10 +48,25 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.storyeditorpro
+        pluginClass: StoryEditorProPlugin
+      ios:
+        pluginClass: StoryEditorProPlugin
 
   # To add assets to your package, add an assets section, like this:
   assets:
     - assets/icons/
+    - assets/props/
+    - assets/word_art/
+    - assets/ar/glasses_classic/
+    - assets/ar/models/
+    - assets/ar/THIRD_PARTY_NOTICES.md
+
+  shaders:
+    - shaders/story_filter.frag
   #
   # For details regarding assets in packages, see
   # https://flutter.dev/to/asset-from-package

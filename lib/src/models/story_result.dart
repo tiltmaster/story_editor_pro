@@ -2,17 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../config/story_editor_config.dart';
+
 /// Media type for story result
-enum StoryMediaType {
-  image,
-  video,
-}
+enum StoryMediaType { image, video }
 
 /// Share target type
-enum ShareTarget {
-  story,
-  closeFriends,
-}
+enum ShareTarget { story, closeFriends }
 
 /// Close friend model for sharing stories
 class CloseFriend {
@@ -58,7 +54,9 @@ class CloseFriend {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is CloseFriend && runtimeType == other.runtimeType && id == other.id;
+      other is CloseFriend &&
+          runtimeType == other.runtimeType &&
+          id == other.id;
 
   @override
   int get hashCode => id.hashCode;
@@ -94,7 +92,9 @@ class StoryShareResult {
   Map<String, dynamic> toJson() {
     return {
       'story': story.toJson(),
-      'shareTarget': shareTarget == ShareTarget.story ? 'story' : 'closeFriends',
+      'shareTarget': shareTarget == ShareTarget.story
+          ? 'story'
+          : 'closeFriends',
       'selectedFriends': selectedFriends.map((f) => f.toJson()).toList(),
     };
   }
@@ -132,6 +132,10 @@ class StoryResult {
   /// Duration in milliseconds (for video only)
   final int? durationMs;
 
+  /// Host-owned music metadata selected in edit mode. Playback URLs and
+  /// credentials are intentionally never serialized by the package.
+  final StoryEditorMusicSelection? music;
+
   const StoryResult({
     required this.filePath,
     required this.fileName,
@@ -141,6 +145,7 @@ class StoryResult {
     this.width,
     this.height,
     this.durationMs,
+    this.music,
   });
 
   /// Get the File object
@@ -172,7 +177,9 @@ class StoryResult {
       return 'video/mp4';
     } else {
       if (fileName.endsWith('.png')) return 'image/png';
-      if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) return 'image/jpeg';
+      if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) {
+        return 'image/jpeg';
+      }
       return 'image/png';
     }
   }
@@ -186,7 +193,9 @@ class StoryResult {
   /// Get human-readable file size
   String get fileSizeFormatted {
     if (fileSize < 1024) return '$fileSize B';
-    if (fileSize < 1024 * 1024) return '${(fileSize / 1024).toStringAsFixed(1)} KB';
+    if (fileSize < 1024 * 1024) {
+      return '${(fileSize / 1024).toStringAsFixed(1)} KB';
+    }
     return '${(fileSize / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
@@ -214,6 +223,14 @@ class StoryResult {
       if (height != null) 'height': height,
       if (durationMs != null) 'durationMs': durationMs,
       if (durationMs != null) 'durationFormatted': durationFormatted,
+      if (music != null)
+        'music': {
+          'id': music!.id,
+          'title': music!.title,
+          if (music!.artist != null) 'artist': music!.artist,
+          'startMs': music!.startMs,
+          if (music!.durationMs != null) 'durationMs': music!.durationMs,
+        },
     };
   }
 
@@ -224,6 +241,7 @@ class StoryResult {
     int? width,
     int? height,
     int? durationMs,
+    StoryEditorMusicSelection? music,
   }) async {
     final file = File(filePath);
     final stat = await file.stat();
@@ -241,6 +259,7 @@ class StoryResult {
       width: width,
       height: height,
       durationMs: durationMs,
+      music: music,
     );
   }
 

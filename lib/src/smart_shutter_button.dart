@@ -2,6 +2,45 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+/// Fixed geometry for capture controls that may show a timer/status label.
+///
+/// The status is overlaid at the top instead of participating in layout, so the
+/// shutter center never moves when timer or recording state changes.
+class AnchoredShutterControl extends StatelessWidget {
+  const AnchoredShutterControl({
+    super.key,
+    required this.shutter,
+    this.status,
+    this.width = 180,
+    this.height = 126,
+  });
+
+  static const shutterAnchorKey = ValueKey<String>('camera_shutter_anchor');
+
+  final Widget shutter;
+  final Widget? status;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          if (status != null) Positioned(top: 0, child: status!),
+          Center(
+            child: KeyedSubtree(key: shutterAnchorKey, child: shutter),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Instagram/Snapchat style hybrid photo/video capture button.
 ///
 /// - Short tap (< 300ms): Takes photo
@@ -81,31 +120,23 @@ class _SmartShutterButtonState extends State<SmartShutterButton>
     );
 
     // Outer ring: 1.0 -> 1.3 (grows)
-    _outerRingScale = Tween<double>(
-      begin: 1.0,
-      end: 1.3,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOutCubic,
-    ));
+    _outerRingScale = Tween<double>(begin: 1.0, end: 1.3).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
+    );
 
     // Inner circle: 1.0 -> 0.6 (shrinks)
-    _innerCircleScale = Tween<double>(
-      begin: 1.0,
-      end: 0.6,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOutCubic,
-    ));
+    _innerCircleScale = Tween<double>(begin: 1.0, end: 0.6).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
+    );
 
     // Color: White -> Red
-    _colorAnimation = ColorTween(
-      begin: widget.idleColor,
-      end: widget.recordingColor,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeInOut,
-    ));
+    _colorAnimation =
+        ColorTween(begin: widget.idleColor, end: widget.recordingColor).animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeInOut,
+          ),
+        );
   }
 
   @override

@@ -1,3 +1,66 @@
+## 1.4.0
+
+### Added
+- Native Android and iOS camera pipeline for preview, photo, video, audio, and AR compositing
+- On-device face-tracked Classic Glasses lens using MediaPipe and a project-owned Blender asset
+- English and Arabic label support for the AR lens
+
+### Fixed
+- Filter slider geometry and snapping are locked to the existing interaction contract
+- Timer status no longer changes the shutter circle anchor
+- Native camera lifecycle resume falls back safely if reopening fails
+- Interactive camera and editor controls no longer add unintended halo shadows
+
+### Changed
+- Native camera prewarming is adopted by the capture route without reopening the camera
+- Startup telemetry exposes the 700ms warm-start target without collecting media data
+- Location, time, date, battery, and speed smart tags have stronger visual hierarchy
+- Camera and editor labels have improved English and Arabic coverage and RTL behavior
+- Legacy package-camera prewarm getters are deprecated in favor of `takeNativePrepared`
+
+---
+
+## 1.0.3
+
+### Added
+- **Feature toggles** - Camera toolbar features can now be enabled/disabled via `StoryEditorConfig`:
+  - `enableBoomerang` - Boomerang mode button
+  - `enableCollage` - Collage/layout mode button
+  - `enableHandsFree` - Hands-free recording button
+  - `enableGradientTextEditor` - Gradient text editor button
+  - All default to `true` for backward compatibility
+
+---
+
+## 1.0.2
+
+### Added
+- **Native video overlay export** - Video save/share now composites text, drawing, and image overlays directly onto video using native APIs (no FFmpeg dependency)
+  - Android: OpenGL/EGL GPU pipeline with `MediaCodec` + `MediaMuxer`
+  - iOS: `AVMutableComposition` + `AVVideoCompositionCoreAnimationTool` + `AVAssetExportSession`
+- `VideoOverlayExportService` - Flutter-to-native bridge for video overlay compositing
+- `TextureRenderer.kt` - Android EGL context and GLSL shader management for GPU-accelerated video processing
+- `VideoOverlayProcessor.kt` / `VideoOverlayProcessor.swift` - Native video+overlay compositing pipelines
+- Overlay-only `RepaintBoundary` (`_overlayRepaintKey`) for capturing transparent PNG overlays for video export
+- Saving/Sharing progress indicator overlay with localized text (`editorSaving` / `editorSharing` strings)
+- `_isSharing` flag to distinguish save vs share operations in UI
+- Remove background button in text overlay color picker (reset to no background)
+
+### Fixed
+- **Text overlays not visible in exported images** - Text overlays are now rendered inside `RepaintBoundary` for correct capture during save/share
+- **Drawing overlays rendering order** - Drawings now render on top of text and image overlays consistently
+- **Text overlay padding consistency** - Unified padding (`horizontal: 28, vertical: 16`) across editor preview, export, and text input modes
+- **Text overlay width calculation** - Consistent `maxWidth` calculation across all rendering contexts
+- **Interactive overlays blocked during export** - All gesture layers disabled when `_isSaving = true` to prevent modifications during export
+- **Drag-to-trash animation** - Export overlay now mirrors drag-to-trash scale/opacity animation for visual consistency
+
+### Changed
+- Adaptive `pixelRatio` for video overlay capture (clamped 1.0-2.0) instead of fixed 3.0 to optimize performance
+- Audio preserved via single-pass passthrough muxing (no temp file, no double I/O)
+- Overlay aspect ratio handling: cover+center crop to match video dimensions
+
+---
+
 ## 1.0.1
 
 ### Added

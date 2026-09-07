@@ -4,6 +4,26 @@ import 'story_editor_theme.dart';
 import 'story_editor_fonts.dart';
 import 'story_editor_settings.dart';
 
+/// Host-owned music selection returned to the editor.
+///
+/// The package deliberately stores metadata only. Authentication, rights
+/// checks, uploads, and signed playback URLs stay inside the host app.
+class StoryEditorMusicSelection {
+  final String id;
+  final String title;
+  final String? artist;
+  final int startMs;
+  final int? durationMs;
+
+  const StoryEditorMusicSelection({
+    required this.id,
+    required this.title,
+    this.artist,
+    this.startMs = 0,
+    this.durationMs,
+  });
+}
+
 /// Main configuration class for Story Editor Pro
 /// Pass this to StoryEditorConfigProvider to customize the entire plugin
 class StoryEditorConfig {
@@ -18,6 +38,36 @@ class StoryEditorConfig {
 
   /// Settings callbacks (replaces SharedPreferences)
   final StoryEditorSettings settings;
+
+  // ============ Feature Toggles ============
+
+  /// Enable boomerang mode button in camera toolbar (default: true)
+  final bool enableBoomerang;
+
+  /// Enable collage/layout mode button in camera toolbar (default: true)
+  final bool enableCollage;
+
+  /// Enable hands-free recording button in camera toolbar (default: true)
+  final bool enableHandsFree;
+
+  /// Enable gradient text editor button in camera toolbar (default: true)
+  final bool enableGradientTextEditor;
+
+  /// Show gallery picker button on camera screen (default: true)
+  final bool showGalleryButton;
+
+  /// Mirror front camera preview like a selfie camera (default: false).
+  final bool mirrorFrontCameraPreview;
+
+  /// Whether the embedding app resolves camera permission before navigation.
+  /// When true, Story Editor Pro only verifies the permission and never opens
+  /// a second system prompt of its own.
+  final bool cameraPermissionManagedByHost;
+
+  /// Opens the host application's authenticated, rights-gated music picker.
+  /// Null hides the editor music control.
+  final Future<StoryEditorMusicSelection?> Function(BuildContext context)?
+  onPickMusic;
 
   // ============ Hands-Free Configuration ============
 
@@ -103,6 +153,14 @@ class StoryEditorConfig {
     this.theme = const StoryEditorTheme(),
     this.fonts = const StoryEditorFonts(),
     this.settings = const StoryEditorSettings(),
+    this.enableBoomerang = true,
+    this.enableCollage = true,
+    this.enableHandsFree = true,
+    this.enableGradientTextEditor = true,
+    this.showGalleryButton = false,
+    this.mirrorFrontCameraPreview = false,
+    this.cameraPermissionManagedByHost = false,
+    this.onPickMusic,
     this.handsFreeDelayOptions = const [3, 5, 10, 15],
     this.defaultHandsFreeDelay = 3,
     this.maxHandsFreeRecordingSeconds = 60,
@@ -134,6 +192,15 @@ class StoryEditorConfig {
     StoryEditorTheme? theme,
     StoryEditorFonts? fonts,
     StoryEditorSettings? settings,
+    bool? enableBoomerang,
+    bool? enableCollage,
+    bool? enableHandsFree,
+    bool? enableGradientTextEditor,
+    bool? showGalleryButton,
+    bool? mirrorFrontCameraPreview,
+    bool? cameraPermissionManagedByHost,
+    Future<StoryEditorMusicSelection?> Function(BuildContext context)?
+    onPickMusic,
     List<int>? handsFreeDelayOptions,
     int? defaultHandsFreeDelay,
     int? maxHandsFreeRecordingSeconds,
@@ -163,26 +230,48 @@ class StoryEditorConfig {
       theme: theme ?? this.theme,
       fonts: fonts ?? this.fonts,
       settings: settings ?? this.settings,
-      handsFreeDelayOptions: handsFreeDelayOptions ?? this.handsFreeDelayOptions,
-      defaultHandsFreeDelay: defaultHandsFreeDelay ?? this.defaultHandsFreeDelay,
-      maxHandsFreeRecordingSeconds: maxHandsFreeRecordingSeconds ?? this.maxHandsFreeRecordingSeconds,
-      maxVideoRecordingSeconds: maxVideoRecordingSeconds ?? this.maxVideoRecordingSeconds,
+      enableBoomerang: enableBoomerang ?? this.enableBoomerang,
+      enableCollage: enableCollage ?? this.enableCollage,
+      enableHandsFree: enableHandsFree ?? this.enableHandsFree,
+      enableGradientTextEditor:
+          enableGradientTextEditor ?? this.enableGradientTextEditor,
+      showGalleryButton: showGalleryButton ?? this.showGalleryButton,
+      mirrorFrontCameraPreview:
+          mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
+      cameraPermissionManagedByHost:
+          cameraPermissionManagedByHost ?? this.cameraPermissionManagedByHost,
+      onPickMusic: onPickMusic ?? this.onPickMusic,
+      handsFreeDelayOptions:
+          handsFreeDelayOptions ?? this.handsFreeDelayOptions,
+      defaultHandsFreeDelay:
+          defaultHandsFreeDelay ?? this.defaultHandsFreeDelay,
+      maxHandsFreeRecordingSeconds:
+          maxHandsFreeRecordingSeconds ?? this.maxHandsFreeRecordingSeconds,
+      maxVideoRecordingSeconds:
+          maxVideoRecordingSeconds ?? this.maxVideoRecordingSeconds,
       maxBoomerangSeconds: maxBoomerangSeconds ?? this.maxBoomerangSeconds,
       boomerangFps: boomerangFps ?? this.boomerangFps,
       boomerangLoopCount: boomerangLoopCount ?? this.boomerangLoopCount,
-      defaultGradientBalance: defaultGradientBalance ?? this.defaultGradientBalance,
+      defaultGradientBalance:
+          defaultGradientBalance ?? this.defaultGradientBalance,
       // High Priority UI Config
-      recordingIndicatorColor: recordingIndicatorColor ?? this.recordingIndicatorColor,
-      boomerangGradientColors: boomerangGradientColors ?? this.boomerangGradientColors,
+      recordingIndicatorColor:
+          recordingIndicatorColor ?? this.recordingIndicatorColor,
+      boomerangGradientColors:
+          boomerangGradientColors ?? this.boomerangGradientColors,
       storyCanvasWidth: storyCanvasWidth ?? this.storyCanvasWidth,
       storyCanvasHeight: storyCanvasHeight ?? this.storyCanvasHeight,
-      smallScreenBreakpoint: smallScreenBreakpoint ?? this.smallScreenBreakpoint,
-      shutterButtonSizeLarge: shutterButtonSizeLarge ?? this.shutterButtonSizeLarge,
-      shutterButtonSizeSmall: shutterButtonSizeSmall ?? this.shutterButtonSizeSmall,
+      smallScreenBreakpoint:
+          smallScreenBreakpoint ?? this.smallScreenBreakpoint,
+      shutterButtonSizeLarge:
+          shutterButtonSizeLarge ?? this.shutterButtonSizeLarge,
+      shutterButtonSizeSmall:
+          shutterButtonSizeSmall ?? this.shutterButtonSizeSmall,
       galleryPageSize: galleryPageSize ?? this.galleryPageSize,
       // Medium Priority Animation Config
       animationDuration: animationDuration ?? this.animationDuration,
-      savedModalAutoCloseDelay: savedModalAutoCloseDelay ?? this.savedModalAutoCloseDelay,
+      savedModalAutoCloseDelay:
+          savedModalAutoCloseDelay ?? this.savedModalAutoCloseDelay,
       thumbnailSize: thumbnailSize ?? this.thumbnailSize,
       thumbnailQuality: thumbnailQuality ?? this.thumbnailQuality,
       pulseAnimationScale: pulseAnimationScale ?? this.pulseAnimationScale,
@@ -203,13 +292,21 @@ class StoryEditorConfigProvider extends InheritedWidget {
 
   /// Get the config from context
   static StoryEditorConfig of(BuildContext context) {
-    final provider = context.dependOnInheritedWidgetOfExactType<StoryEditorConfigProvider>();
-    return provider?.config ?? const StoryEditorConfig();
+    final provider = context
+        .dependOnInheritedWidgetOfExactType<StoryEditorConfigProvider>();
+    final config = provider?.config ?? const StoryEditorConfig();
+    // Preserve host translations; localize only the untouched default catalog.
+    if (identical(config.strings, const StoryEditorStrings()) &&
+        Localizations.maybeLocaleOf(context)?.languageCode == 'ar') {
+      return config.copyWith(strings: const StoryEditorStrings.arabic());
+    }
+    return config;
   }
 
   /// Get the config from context without listening to changes
   static StoryEditorConfig read(BuildContext context) {
-    final provider = context.getInheritedWidgetOfExactType<StoryEditorConfigProvider>();
+    final provider = context
+        .getInheritedWidgetOfExactType<StoryEditorConfigProvider>();
     return provider?.config ?? const StoryEditorConfig();
   }
 

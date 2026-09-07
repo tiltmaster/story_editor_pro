@@ -46,8 +46,6 @@ class NativeBoomerangService {
       final outputPath = '${tempDir.path}/boomerang_native_$timestamp.mp4';
 
       debugPrint('NativeBoomerangService: Starting native boomerang creation');
-      debugPrint('Input: ${inputVideo.path}');
-      debugPrint('Output: $outputPath');
 
       final result = await _channel.invokeMethod<String>('createBoomerang', {
         'inputPath': inputVideo.path,
@@ -60,7 +58,9 @@ class NativeBoomerangService {
         final outputFile = File(result);
         if (await outputFile.exists()) {
           final fileSize = await outputFile.length();
-          debugPrint('NativeBoomerangService: Success! Output size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB');
+          debugPrint(
+            'NativeBoomerangService: Success! Output size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB',
+          );
           return outputFile;
         }
       }
@@ -92,7 +92,7 @@ class NativeBoomerangService {
       for (final file in files) {
         if (file is File && file.path.contains('boomerang_')) {
           await file.delete();
-          debugPrint('Deleted: ${file.path}');
+          debugPrint('NativeBoomerangService: Deleted temp file');
         }
       }
     } catch (e) {

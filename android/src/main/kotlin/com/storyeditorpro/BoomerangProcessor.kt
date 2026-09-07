@@ -18,6 +18,7 @@ class BoomerangProcessor {
     companion object {
         private const val TAG = "BoomerangProcessor"
         private const val TIMEOUT_US = 10000L
+        private const val MAX_SIDE_PX = 720
     }
 
     fun createBoomerang(
@@ -25,6 +26,7 @@ class BoomerangProcessor {
         outputPath: String,
         loopCount: Int = 3,
         fps: Int = 30,
+        maxDurationSeconds: Double = 2.0,
         onProgress: ((Double) -> Unit)? = null
     ): String? {
         Log.d(TAG, "========================================")
@@ -43,7 +45,15 @@ class BoomerangProcessor {
 
             // Frame'leri çıkar (daha az frame = daha hızlı)
             // 10 fps = saniyede 10 frame, boomerang için yeterli
-            val frames = extractFrames(inputPath, targetFps = 10, maxFrames = 40)
+            val cappedFps = fps.coerceIn(6, 12)
+            val cappedDurationSeconds = maxDurationSeconds.coerceIn(0.5, 4.0)
+            val maxFrames = (cappedFps * cappedDurationSeconds).toInt().coerceIn(8, 32)
+            val frames = extractFrames(
+                inputPath,
+                targetFps = cappedFps,
+                maxFrames = maxFrames,
+                maxDurationSeconds = cappedDurationSeconds
+            )
             if (frames.isEmpty()) {
                 Log.e(TAG, "No frames extracted")
                 return null
@@ -58,7 +68,7 @@ class BoomerangProcessor {
             onProgress?.invoke(0.5)
 
             // Video olarak encode et
-            val success = encodeFramesToVideo(boomerangFrames, outputPath, fps) { progress ->
+            val success = encodeFramesToVideo(boomerangFrames, outputPath, cappedFps) { progress ->
                 onProgress?.invoke(0.5 + progress * 0.5)
             }
 
@@ -83,7 +93,12 @@ class BoomerangProcessor {
     /**
      * MediaMetadataRetriever ile frame çıkar
      */
-    private fun extractFrames(videoPath: String, targetFps: Int, maxFrames: Int = 40): List<Bitmap> {
+    private fun extractFrames(
+        videoPath: String,
+        targetFps: Int,
+        maxFrames: Int = 40,
+        maxDurationSeconds: Double = 2.0
+    ): List<Bitmap> {
         val frames = mutableListOf<Bitmap>()
         val retriever = MediaMetadataRetriever()
 
@@ -102,15 +117,23 @@ class BoomerangProcessor {
 
             // Frame aralığı (ms)
             val frameIntervalMs = 1000L / targetFps
-            val durationUs = durationMs * 1000
+            val cappedDurationMs = minOf(durationMs, (maxDurationSeconds * 1000.0).toLong())
+            val durationUs = cappedDurationMs * 1000
 
             var timeUs = 0L
             var count = 0
 
             while (timeUs < durationUs && count < maxFrames) {
-                val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                val bitmap = retriever.getFrameAtTime(
+                    timeUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                )
                 if (bitmap != null) {
-                    frames.add(bitmap.copy(Bitmap.Config.ARGB_8888, false))
+                    val optimized = resizeBitmapIfNeeded(bitmap, MAX_SIDE_PX)
+                    frames.add(optimized.copy(Bitmap.Config.ARGB_8888, false))
+                    if (optimized !== bitmap && !bitmap.isRecycled) {
+                        bitmap.recycle()
+                    }
                     count++
                 }
                 timeUs += frameIntervalMs * 1000 // ms to us
@@ -127,6 +150,18 @@ class BoomerangProcessor {
         }
 
         return frames
+    }
+
+    private fun resizeBitmapIfNeeded(source: Bitmap, maxSide: Int): Bitmap {
+        val width = source.width
+        val height = source.height
+        val currentMax = maxOf(width, height)
+        if (currentMax <= maxSide) return source
+
+        val scale = maxSide.toFloat() / currentMax.toFloat()
+        val outW = (width * scale).toInt().coerceAtLeast(16)
+        val outH = (height * scale).toInt().coerceAtLeast(16)
+        return Bitmap.createScaledBitmap(source, outW, outH, true)
     }
 
     private fun createBoomerangSequence(frames: List<Bitmap>, loopCount: Int): List<Bitmap> {
@@ -288,7 +323,7 @@ class BoomerangProcessor {
         try {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, 8_000_000)
+                setInteger(MediaFormat.KEY_BIT_RATE, 3_000_000)
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             }

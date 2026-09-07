@@ -148,7 +148,7 @@ class StoryEditorIcons {
     this.collageIconBackgroundColor,
     this.collageIconColor,
     this.handsFreeIcon,
-    this.handsFreeIconData = Icons.timer,
+    this.handsFreeIconData = Icons.access_time_rounded,
     this.handsFreeIconBackgroundColor,
     this.handsFreeIconColor,
     this.gradientTextIcon,

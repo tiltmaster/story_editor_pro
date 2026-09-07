@@ -1,0 +1,646 @@
+package com.storyeditorpro
+
+import android.graphics.Bitmap
+import android.graphics.SurfaceTexture
+import android.opengl.*
+import android.util.Log
+import android.view.Surface
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+
+/**
+ * OpenGL/EGL renderer that composites a video texture (from SurfaceTexture/OES)
+ * with a static overlay texture (from Bitmap) and renders to an encoder Surface.
+ *
+ * Pipeline: Decoder → SurfaceTexture (OES texture) → OpenGL blend overlay → Encoder Surface
+ * Everything runs on GPU - no CPU pixel copying.
+ */
+class TextureRenderer {
+
+    companion object {
+        private const val TAG = "TextureRenderer"
+
+        // Vertex shader - handles both video and overlay quads
+        private const val VERTEX_SHADER = """
+            attribute vec4 aPosition;
+            attribute vec4 aTexCoord;
+            varying vec2 vTexCoord;
+            uniform mat4 uTexMatrix;
+            void main() {
+                gl_Position = aPosition;
+                vTexCoord = (uTexMatrix * aTexCoord).xy;
+            }
+        """
+
+        // Fragment shader for OES texture (video frames from SurfaceTexture).
+        // Uses the same 3×3 colour matrix + bias that Flutter's ColorFilter.matrix()
+        // produces, ensuring the exported video matches the editor preview exactly.
+        // uSCurve: smoothstep S-curve matching CIToneCurve (iOS) and Flutter contrast pass.
+        private const val FRAGMENT_SHADER_OES = """
+            #extension GL_OES_EGL_image_external : require
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform samplerExternalOES uTexture;
+            uniform mat4 uTexMatrix;
+            uniform mat3 uColorMatrix;
+            uniform vec3 uColorBias;
+            uniform float uVignette;
+            uniform float uSCurve;
+            uniform vec2 uOutputSize;
+            uniform float uBeauty;
+            uniform float uVhs;
+            uniform float uBloom;
+            uniform float uGrain;
+            uniform float uHalation;
+            uniform float uSplitTone;
+            uniform float uChroma;
+            void main() {
+                vec2 uv = vTexCoord;
+                vec4 tex = texture2D(uTexture, uv);
+                vec3 source = tex.rgb;
+                vec2 screenUv = gl_FragCoord.xy / max(uOutputSize, vec2(1.0));
+                // FlutterFragCoord is top-left/y-down; OpenGL is bottom-left.
+                // Use this parity coordinate only for procedural phase. Keep
+                // screenUv for outward radial sampling in native GL space.
+                vec2 proceduralUv = vec2(screenUv.x, 1.0 - screenUv.y);
+                if (uVhs > 0.001 || uChroma > 0.001) {
+                    vec2 virtualFrag = proceduralUv * vec2(720.0, 1280.0);
+                    float band = virtualFrag.y / 64.0;
+                    float bandIndex = floor(band);
+                    float bandMix = smoothstep(0.0, 1.0, fract(band));
+                    float noiseA = fract(sin(bandIndex * 91.3458) * 47453.5453) - 0.5;
+                    float noiseB = fract(sin((bandIndex + 1.0) * 91.3458) * 47453.5453) - 0.5;
+                    float bandNoise = mix(noiseA, noiseB, bandMix);
+                    float sourceLuma = dot(source, vec3(0.2126, 0.7152, 0.0722));
+                    source = mix(source, vec3(sourceLuma), 0.08 * uVhs);
+                    source += vec3(0.018, 0.002, -0.014) * bandNoise * uVhs;
+                    float edge = distance(proceduralUv, vec2(0.5));
+                    source += vec3(0.012, -0.004, -0.010)
+                        * (0.35 + edge) * uChroma;
+                }
+                if (uBeauty > 0.001) {
+                    // Edge-aware bilateral smoothing; no full-frame blur or skin whitening.
+                    vec3 original = tex.rgb;
+                    vec3 total = original;
+                    float totalWeight = 1.0;
+                    vec3 n0 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff0 = n0 - original;
+                    float w0 = exp(-dot(diff0, diff0) * 180.0);
+                    total += n0 * w0; totalWeight += w0;
+                    vec3 n1 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff1 = n1 - original;
+                    float w1 = exp(-dot(diff1, diff1) * 180.0);
+                    total += n1 * w1; totalWeight += w1;
+                    vec3 n2 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, 1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff2 = n2 - original;
+                    float w2 = exp(-dot(diff2, diff2) * 180.0);
+                    total += n2 * w2; totalWeight += w2;
+                    vec3 n3 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, -1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff3 = n3 - original;
+                    float w3 = exp(-dot(diff3, diff3) * 180.0);
+                    total += n3 * w3; totalWeight += w3;
+                    vec3 n4 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff4 = n4 - original;
+                    float w4 = exp(-dot(diff4, diff4) * 180.0);
+                    total += n4 * w4; totalWeight += w4;
+                    vec3 n5 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff5 = n5 - original;
+                    float w5 = exp(-dot(diff5, diff5) * 180.0);
+                    total += n5 * w5; totalWeight += w5;
+                    vec3 n6 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff6 = n6 - original;
+                    float w6 = exp(-dot(diff6, diff6) * 180.0);
+                    total += n6 * w6; totalWeight += w6;
+                    vec3 n7 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 diff7 = n7 - original;
+                    float w7 = exp(-dot(diff7, diff7) * 180.0);
+                    total += n7 * w7; totalWeight += w7;
+                    float luma = dot(original, vec3(0.2126, 0.7152, 0.0722));
+                    float cb = 0.5 + dot(original, vec3(-0.168736, -0.331264, 0.5));
+                    float cr = 0.5 + dot(original, vec3(0.5, -0.418688, -0.081312));
+                    float skin = smoothstep(0.49, 0.55, cr) * (1.0 - smoothstep(0.67, 0.77, cr))
+                        * smoothstep(0.20, 0.30, cb) * (1.0 - smoothstep(0.51, 0.58, cb))
+                        * smoothstep(0.015, 0.10, luma);
+                    source += (total / totalWeight - original) * skin * uBeauty * 0.82;
+                }
+                if (uBloom > 0.001 || uHalation > 0.001) {
+                    float highlight = smoothstep(0.62, 0.94,
+                        dot(source, vec3(0.2126, 0.7152, 0.0722)));
+                    source += source * highlight * (0.16 * uBloom);
+                    source += highlight * vec3(0.055, 0.016, -0.008) * uHalation;
+                }
+                vec3 color = uColorMatrix * source + uColorBias;
+                if (uSCurve > 0.001) {
+                    vec3 curved = color * color * (3.0 - 2.0 * color);
+                    color = mix(color, curved, uSCurve);
+                }
+                if (abs(uSplitTone) > 0.001) {
+                    float amount = abs(uSplitTone);
+                    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                    float shadows = 1.0 - smoothstep(0.12, 0.58, luma);
+                    float highlights = smoothstep(0.52, 0.92, luma);
+                    vec3 warmShadow = vec3(-0.022, 0.012, 0.030);
+                    vec3 warmHighlight = vec3(0.070, 0.030, -0.018);
+                    vec3 coolShadow = vec3(0.035, -0.010, 0.055);
+                    vec3 coolHighlight = vec3(0.008, 0.028, 0.042);
+                    vec3 split = uSplitTone > 0.0
+                        ? warmShadow * shadows + warmHighlight * highlights
+                        : coolShadow * shadows + coolHighlight * highlights;
+                    color += split * amount;
+                }
+                if (uGrain > 0.001) {
+                    vec2 grainCell = mod(
+                        floor(proceduralUv * vec2(720.0, 1280.0) * 0.72),
+                        vec2(64.0));
+                    float grain = fract(sin(dot(grainCell,
+                        vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+                    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                    color += vec3(grain * (0.020 + (1.0 - luma) * 0.018) * uGrain);
+                }
+                if (uVignette > 0.001) {
+                    vec2 center = vec2(0.5, 0.5);
+                    float dist = distance(vTexCoord, center);
+                    float vig = smoothstep(0.35, 0.82, dist);
+                    color *= (1.0 - vig * uVignette);
+                }
+                color = clamp(color, 0.0, 1.0);
+                gl_FragColor = vec4(color, tex.a);
+            }
+        """
+
+        // Fragment shader for 2D texture (overlay bitmap)
+        private const val FRAGMENT_SHADER_2D = """
+            precision mediump float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexture;
+            void main() {
+                gl_FragColor = texture2D(uTexture, vTexCoord);
+            }
+        """
+
+        // Fullscreen quad vertices (x, y)
+        private val QUAD_VERTICES = floatArrayOf(
+            -1f, -1f,
+             1f, -1f,
+            -1f,  1f,
+             1f,  1f
+        )
+
+        // Texture coordinates (s, t) - flipped vertically for correct orientation
+        private val QUAD_TEX_COORDS = floatArrayOf(
+            0f, 0f,
+            1f, 0f,
+            0f, 1f,
+            1f, 1f
+        )
+    }
+
+    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+
+    private var programOES = 0
+    private var program2D = 0
+
+    private var videoTextureId = 0
+    private var overlayTextureId = 0
+
+    private var vertexBuffer: FloatBuffer
+    private var texCoordBuffer: FloatBuffer
+
+    // Animated sticker layers: one 2D texture + one quad each, drawn above the
+    // static overlay. Frames are streamed in per video frame via
+    // updateAnimatedStickerFrame (glTexSubImage2D — cheap for small bitmaps).
+    private class StickerQuad(
+        val textureId: Int,
+        val vertexBuffer: FloatBuffer,
+        val widthPx: Int,
+        val heightPx: Int,
+    )
+    private val stickerQuads = mutableListOf<StickerQuad>()
+
+    private var outputWidth = 0
+    private var outputHeight = 0
+    private var mirrorVideoHorizontally = false
+    // Precomputed Flutter-equivalent 3×3 colour matrix (column-major for GLES) + bias.
+    // Initialised to identity (no-op filter).
+    private var colorMatrix = floatArrayOf(
+        1f, 0f, 0f,   // column 0: how input.r contributes to out.rgb
+        0f, 1f, 0f,   // column 1: how input.g contributes to out.rgb
+        0f, 0f, 1f    // column 2: how input.b contributes to out.rgb
+    )
+    private var colorBias = floatArrayOf(0f, 0f, 0f)
+    private var filterVignette = 0f
+    private var filterSCurve = 0f
+    private var filterBeauty = 0f
+    private var filterVhs = 0f
+    private var filterBloom = 0f
+    private var filterGrain = 0f
+    private var filterHalation = 0f
+    private var filterSplitTone = 0f
+    private var filterChroma = 0f
+
+    init {
+        vertexBuffer = createFloatBuffer(QUAD_VERTICES)
+        texCoordBuffer = createFloatBuffer(QUAD_TEX_COORDS)
+    }
+
+    /**
+     * Initialize EGL context and create window surface on the encoder's Surface
+     */
+    fun init(encoderSurface: Surface, width: Int, height: Int) {
+        outputWidth = width
+        outputHeight = height
+
+        // 1. Get EGL display
+        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+        if (eglDisplay == EGL14.EGL_NO_DISPLAY) throw RuntimeException("eglGetDisplay failed")
+
+        val version = IntArray(2)
+        if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
+            throw RuntimeException("eglInitialize failed")
+        }
+
+        // 2. Choose config with recordable flag
+        val configAttribs = intArrayOf(
+            EGL14.EGL_RED_SIZE, 8,
+            EGL14.EGL_GREEN_SIZE, 8,
+            EGL14.EGL_BLUE_SIZE, 8,
+            EGL14.EGL_ALPHA_SIZE, 8,
+            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+            EGLExt.EGL_RECORDABLE_ANDROID, 1,
+            EGL14.EGL_NONE
+        )
+
+        val configs = arrayOfNulls<EGLConfig>(1)
+        val numConfigs = IntArray(1)
+        EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)
+        if (numConfigs[0] <= 0) throw RuntimeException("No EGL config found")
+
+        // 3. Create GLES2 context
+        val contextAttribs = intArrayOf(
+            EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
+            EGL14.EGL_NONE
+        )
+        eglContext = EGL14.eglCreateContext(eglDisplay, configs[0]!!, EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
+        if (eglContext == EGL14.EGL_NO_CONTEXT) throw RuntimeException("eglCreateContext failed")
+
+        // 4. Create window surface on encoder's Surface
+        val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
+        eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, configs[0]!!, encoderSurface, surfaceAttribs, 0)
+        if (eglSurface == EGL14.EGL_NO_SURFACE) throw RuntimeException("eglCreateWindowSurface failed")
+
+        // 5. Make current
+        if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            throw RuntimeException("eglMakeCurrent failed")
+        }
+
+        // 6. Compile shaders
+        programOES = createProgram(VERTEX_SHADER, FRAGMENT_SHADER_OES)
+        program2D = createProgram(VERTEX_SHADER, FRAGMENT_SHADER_2D)
+
+        // 7. Create video texture (OES)
+        val textures = IntArray(2)
+        GLES20.glGenTextures(2, textures, 0)
+
+        videoTextureId = textures[0]
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+        // 8. Create overlay texture (2D)
+        overlayTextureId = textures[1]
+
+        Log.d(TAG, "EGL/OpenGL initialized: ${width}x${height}")
+    }
+
+    /**
+     * Upload overlay bitmap to GPU texture (call once)
+     */
+    fun setOverlayBitmap(bitmap: Bitmap) {
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, overlayTextureId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+
+        Log.d(TAG, "Overlay texture uploaded: ${bitmap.width}x${bitmap.height}")
+    }
+
+    fun setMirrorVideoHorizontally(enabled: Boolean) {
+        mirrorVideoHorizontally = enabled
+    }
+
+    /**
+     * Register an animated sticker layer. [left]/[top]/[width]/[height] are
+     * normalized (0..1) in output space, top-left origin. [widthPx]/[heightPx]
+     * is the streaming texture resolution. Returns the sticker index for
+     * [updateAnimatedStickerFrame]. Must be called with the EGL context
+     * current (i.e. after [init], on the export thread).
+     */
+    fun addAnimatedSticker(
+        left: Float, top: Float, width: Float, height: Float,
+        widthPx: Int, heightPx: Int,
+    ): Int {
+        val tex = IntArray(1)
+        GLES20.glGenTextures(1, tex, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        // Allocate storage once; frames stream in via texSubImage2D.
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, widthPx, heightPx, 0,
+            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null
+        )
+
+        // Quad in NDC: x = n*2-1; y is flipped (top-left origin → GL bottom-up).
+        val x0 = left * 2f - 1f
+        val x1 = (left + width) * 2f - 1f
+        val yTop = 1f - 2f * top
+        val yBot = 1f - 2f * (top + height)
+        val quad = createFloatBuffer(floatArrayOf(
+            x0, yBot,
+            x1, yBot,
+            x0, yTop,
+            x1, yTop
+        ))
+
+        stickerQuads.add(StickerQuad(tex[0], quad, widthPx, heightPx))
+        Log.d(TAG, "Animated sticker #${stickerQuads.size - 1}: rect=($left,$top,$width,$height) tex=${widthPx}x$heightPx")
+        return stickerQuads.size - 1
+    }
+
+    /** Stream the current GIF frame into the sticker's texture. */
+    fun updateAnimatedStickerFrame(index: Int, bitmap: Bitmap) {
+        val quad = stickerQuads.getOrNull(index) ?: return
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, quad.textureId)
+        GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap)
+    }
+
+    fun setColorFilter(
+        brightness: Float,
+        contrast: Float,
+        saturation: Float,
+        red: Float,
+        green: Float,
+        blue: Float,
+        vignette: Float = 0f,
+        warpMode: Float = 0f,
+        warpAmount: Float = 0f,
+        sCurve: Float = 0f,
+        beauty: Float = 0f,
+        vhs: Float = 0f,
+        bloom: Float = 0f,
+        grain: Float = 0f,
+        halation: Float = 0f,
+        splitTone: Float = 0f,
+        chroma: Float = 0f,
+    ) {
+        // Compute the identical 5×4 colour matrix that Flutter's ColorFilter.matrix()
+        // produces, so the exported video matches the editor preview pixel-for-pixel.
+        //
+        // Flutter formula (0–255 space, same additive bias for every channel):
+        //   bOffset = brightness × 255 + (1 − contrast) × 128
+        //   out_R   = r0·R + r1·G + r2·B + bOffset
+        //
+        // GLES works in 0–1 normalised space, so the bias becomes:
+        //   bias = brightness + (1 − contrast) × 0.5
+        val c = contrast
+        val s = saturation
+        // BT.709 luminance weights — same as Flutter
+        val rLum = 0.2126f; val gLum = 0.7152f; val bLum = 0.0722f
+        val sr = (1f - s) * rLum; val sg = (1f - s) * gLum; val sb = (1f - s) * bLum
+
+        val r0 = (sr + s) * c * red;  val r1 = sg * c * red;  val r2 = sb * c * red
+        val g0 = sr * c * green;       val g1 = (sg + s) * c * green; val g2 = sb * c * green
+        val b0 = sr * c * blue;        val b1 = sg * c * blue; val b2 = (sb + s) * c * blue
+        val bias = brightness + (1f - c) * 0.5f
+
+        // GLSL mat3 is column-major: mat3(col0, col1, col2)
+        // col0 = contributions of input.r to output.rgb
+        // col1 = contributions of input.g to output.rgb
+        // col2 = contributions of input.b to output.rgb
+        colorMatrix = floatArrayOf(
+            r0, g0, b0,   // column 0
+            r1, g1, b1,   // column 1
+            r2, g2, b2    // column 2
+        )
+        colorBias = floatArrayOf(bias, bias, bias)
+        filterVignette = vignette
+        filterSCurve = sCurve
+        filterBeauty = beauty
+        filterVhs = vhs
+        filterBloom = bloom
+        filterGrain = grain
+        filterHalation = halation
+        filterSplitTone = splitTone
+        filterChroma = chroma
+    }
+
+    /**
+     * Get the video texture ID for SurfaceTexture
+     */
+    fun getVideoTextureId(): Int = videoTextureId
+
+    /**
+     * Render one frame: draw video texture + overlay texture, then swap
+     */
+    fun drawFrame(surfaceTexture: SurfaceTexture, presentationTimeNs: Long) {
+        // Update the video texture with latest frame
+        surfaceTexture.updateTexImage()
+
+        GLES20.glViewport(0, 0, outputWidth, outputHeight)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        // Draw video frame (OES texture)
+        val texMatrix = FloatArray(16)
+        surfaceTexture.getTransformMatrix(texMatrix)
+        if (mirrorVideoHorizontally) {
+            val mirrorMatrix = FloatArray(16)
+            android.opengl.Matrix.setIdentityM(mirrorMatrix, 0)
+            android.opengl.Matrix.translateM(mirrorMatrix, 0, 1f, 0f, 0f)
+            android.opengl.Matrix.scaleM(mirrorMatrix, 0, -1f, 1f, 1f)
+            val combined = FloatArray(16)
+            android.opengl.Matrix.multiplyMM(combined, 0, texMatrix, 0, mirrorMatrix, 0)
+            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, combined)
+        } else {
+            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texMatrix)
+        }
+
+        // Draw overlay on top (2D texture with alpha blending)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+
+        // Flip Y-axis for overlay: OpenGL texture (0,0)=bottom-left but bitmap (0,0)=top-left
+        // Transform: t_new = 1 - t_old → translate(0,1) then scale(1,-1)
+        val overlayMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(overlayMatrix, 0)
+        android.opengl.Matrix.translateM(overlayMatrix, 0, 0f, 1f, 0f)
+        android.opengl.Matrix.scaleM(overlayMatrix, 0, 1f, -1f, 1f)
+        drawTexture(program2D, overlayTextureId, GLES20.GL_TEXTURE_2D, overlayMatrix)
+
+        // Animated sticker layers on top (same flipped tex matrix — bitmaps
+        // are top-left origin like the overlay)
+        for (quad in stickerQuads) {
+            drawTexture(program2D, quad.textureId, GLES20.GL_TEXTURE_2D, overlayMatrix, quad.vertexBuffer)
+        }
+
+        GLES20.glDisable(GLES20.GL_BLEND)
+
+        // Set presentation timestamp and swap
+        EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, presentationTimeNs)
+        EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+    }
+
+    /**
+     * Draw a textured quad
+     */
+    private fun drawTexture(
+        program: Int, textureId: Int, textureTarget: Int, texMatrix: FloatArray,
+        vertices: FloatBuffer = vertexBuffer,
+    ) {
+        GLES20.glUseProgram(program)
+
+        val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
+        val texLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
+        val texMatLoc = GLES20.glGetUniformLocation(program, "uTexMatrix")
+        val textureLoc = GLES20.glGetUniformLocation(program, "uTexture")
+
+        GLES20.glEnableVertexAttribArray(posLoc)
+        vertices.position(0)
+        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 0, vertices)
+
+        GLES20.glEnableVertexAttribArray(texLoc)
+        texCoordBuffer.position(0)
+        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer)
+
+        GLES20.glUniformMatrix4fv(texMatLoc, 1, false, texMatrix, 0)
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(textureTarget, textureId)
+        GLES20.glUniform1i(textureLoc, 0)
+
+        val colorMatrixLoc = GLES20.glGetUniformLocation(program, "uColorMatrix")
+        if (colorMatrixLoc >= 0) GLES20.glUniformMatrix3fv(colorMatrixLoc, 1, false, colorMatrix, 0)
+        val colorBiasLoc = GLES20.glGetUniformLocation(program, "uColorBias")
+        if (colorBiasLoc >= 0) GLES20.glUniform3fv(colorBiasLoc, 1, colorBias, 0)
+        val vignetteLoc = GLES20.glGetUniformLocation(program, "uVignette")
+        if (vignetteLoc >= 0) GLES20.glUniform1f(vignetteLoc, filterVignette)
+        val sCurveLoc = GLES20.glGetUniformLocation(program, "uSCurve")
+        if (sCurveLoc >= 0) GLES20.glUniform1f(sCurveLoc, filterSCurve)
+        val outputSizeLoc = GLES20.glGetUniformLocation(program, "uOutputSize")
+        if (outputSizeLoc >= 0) {
+            GLES20.glUniform2f(outputSizeLoc, outputWidth.toFloat(), outputHeight.toFloat())
+        }
+        val beautyLoc = GLES20.glGetUniformLocation(program, "uBeauty")
+        if (beautyLoc >= 0) GLES20.glUniform1f(beautyLoc, filterBeauty)
+        val vhsLoc = GLES20.glGetUniformLocation(program, "uVhs")
+        if (vhsLoc >= 0) GLES20.glUniform1f(vhsLoc, filterVhs)
+        val bloomLoc = GLES20.glGetUniformLocation(program, "uBloom")
+        if (bloomLoc >= 0) GLES20.glUniform1f(bloomLoc, filterBloom)
+        val grainLoc = GLES20.glGetUniformLocation(program, "uGrain")
+        if (grainLoc >= 0) GLES20.glUniform1f(grainLoc, filterGrain)
+        val halationLoc = GLES20.glGetUniformLocation(program, "uHalation")
+        if (halationLoc >= 0) GLES20.glUniform1f(halationLoc, filterHalation)
+        val splitToneLoc = GLES20.glGetUniformLocation(program, "uSplitTone")
+        if (splitToneLoc >= 0) GLES20.glUniform1f(splitToneLoc, filterSplitTone)
+        val chromaLoc = GLES20.glGetUniformLocation(program, "uChroma")
+        if (chromaLoc >= 0) GLES20.glUniform1f(chromaLoc, filterChroma)
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+        GLES20.glDisableVertexAttribArray(posLoc)
+        GLES20.glDisableVertexAttribArray(texLoc)
+    }
+
+    /**
+     * Release all GL/EGL resources
+     */
+    fun release() {
+        if (programOES != 0) { GLES20.glDeleteProgram(programOES); programOES = 0 }
+        if (program2D != 0) { GLES20.glDeleteProgram(program2D); program2D = 0 }
+
+        val textures = intArrayOf(videoTextureId, overlayTextureId)
+        GLES20.glDeleteTextures(2, textures, 0)
+
+        if (stickerQuads.isNotEmpty()) {
+            val stickerTextures = stickerQuads.map { it.textureId }.toIntArray()
+            GLES20.glDeleteTextures(stickerTextures.size, stickerTextures, 0)
+            stickerQuads.clear()
+        }
+
+        if (eglSurface != EGL14.EGL_NO_SURFACE) {
+            EGL14.eglDestroySurface(eglDisplay, eglSurface)
+            eglSurface = EGL14.EGL_NO_SURFACE
+        }
+        if (eglContext != EGL14.EGL_NO_CONTEXT) {
+            EGL14.eglDestroyContext(eglDisplay, eglContext)
+            eglContext = EGL14.EGL_NO_CONTEXT
+        }
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+            EGL14.eglTerminate(eglDisplay)
+            eglDisplay = EGL14.EGL_NO_DISPLAY
+        }
+
+        Log.d(TAG, "Released")
+    }
+
+    // ─── Helpers ───────────────────────────────────────────────
+
+    private fun createProgram(vertexSrc: String, fragmentSrc: String): Int {
+        val vs = compileShader(GLES20.GL_VERTEX_SHADER, vertexSrc)
+        val fs = compileShader(GLES20.GL_FRAGMENT_SHADER, fragmentSrc)
+
+        val program = GLES20.glCreateProgram()
+        GLES20.glAttachShader(program, vs)
+        GLES20.glAttachShader(program, fs)
+        GLES20.glLinkProgram(program)
+
+        val status = IntArray(1)
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0)
+        if (status[0] == 0) {
+            val log = GLES20.glGetProgramInfoLog(program)
+            GLES20.glDeleteProgram(program)
+            throw RuntimeException("Program link failed: $log")
+        }
+
+        GLES20.glDeleteShader(vs)
+        GLES20.glDeleteShader(fs)
+        return program
+    }
+
+    private fun compileShader(type: Int, source: String): Int {
+        val shader = GLES20.glCreateShader(type)
+        GLES20.glShaderSource(shader, source)
+        GLES20.glCompileShader(shader)
+
+        val status = IntArray(1)
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0)
+        if (status[0] == 0) {
+            val log = GLES20.glGetShaderInfoLog(shader)
+            GLES20.glDeleteShader(shader)
+            throw RuntimeException("Shader compile failed: $log")
+        }
+        return shader
+    }
+
+    private fun createFloatBuffer(data: FloatArray): FloatBuffer {
+        return ByteBuffer.allocateDirect(data.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .put(data)
+            .apply { position(0) }
+    }
+}

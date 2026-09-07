@@ -23,6 +23,30 @@ void main() {
       expect(strings.editorCloseFriends, 'Close Friends');
     });
 
+    test('legacy AR localization inputs remain source compatible', () {
+      const strings = StoryEditorStrings(
+        cameraFilterArGolden: 'Golden localized',
+        cameraFilterArFrost: 'Frost localized',
+        cameraFilterArNeon: 'Neon localized',
+        cameraFilterArNoir: 'Noir localized',
+        cameraFilterArPrism: 'Prism localized',
+        cameraFilterArRetro: 'Retro localized',
+        cameraFilterArStargaze: 'Stargaze localized',
+        cameraFilterArGlasses: 'Glasses localized',
+        cameraGlassesPhotoOnly: 'Photo only localized',
+      );
+
+      expect(strings.cameraFilterArGolden, 'Golden localized');
+      expect(strings.cameraFilterArGlasses, 'Glasses localized');
+      expect(strings.cameraLensClassicGlasses, 'Classic Glasses');
+      expect(
+        StoryEditorFilters.cameraPresets.where(
+          (preset) => preset.id.startsWith('ar_'),
+        ),
+        isEmpty,
+      );
+    });
+
     test('default theme should have correct primary color', () {
       const theme = StoryEditorTheme();
 

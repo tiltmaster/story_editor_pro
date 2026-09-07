@@ -13,6 +13,7 @@ class BoomerangProcessor {
         outputPath: String,
         loopCount: Int = 3,
         fps: Int = 30,
+        maxDurationSeconds: Double = 2.0,
         completion: @escaping (String?) -> Void
     ) {
         print("BoomerangProcessor: Starting boomerang creation")
@@ -31,8 +32,16 @@ class BoomerangProcessor {
                 return
             }
 
-            // 1. TÜM frame'leri decode et
-            let frames = self.decodeAllFrames(from: inputURL)
+            // 1. Decode sampled frames to keep processing fast
+            let targetDecodeFps = min(max(fps, 6), 12)
+            let clampedDuration = min(max(maxDurationSeconds, 0.5), 4.0)
+            let maxFrames = min(max(Int(Double(targetDecodeFps) * clampedDuration), 8), 32)
+            let frames = self.decodeAllFrames(
+                from: inputURL,
+                targetFps: targetDecodeFps,
+                maxFrames: maxFrames,
+                maxDurationSeconds: clampedDuration
+            )
             guard !frames.isEmpty else {
                 print("BoomerangProcessor: No frames decoded")
                 DispatchQueue.main.async { completion(nil) }
@@ -45,7 +54,7 @@ class BoomerangProcessor {
             print("BoomerangProcessor: Boomerang sequence: \(boomerangFrames.count) frames")
 
             // 3. Video olarak encode et
-            self.encodeFramesToVideo(frames: boomerangFrames, outputURL: outputURL, fps: fps) { success in
+            self.encodeFramesToVideo(frames: boomerangFrames, outputURL: outputURL, fps: targetDecodeFps) { success in
                 DispatchQueue.main.async {
                     if success {
                         print("BoomerangProcessor: Success!")
@@ -59,8 +68,13 @@ class BoomerangProcessor {
         }
     }
 
-    /// AVAssetReader ile TÜM frame'leri decode eder
-    private func decodeAllFrames(from url: URL) -> [CGImage] {
+    /// Decode sampled frames instead of all frames for faster processing
+    private func decodeAllFrames(
+        from url: URL,
+        targetFps: Int,
+        maxFrames: Int,
+        maxDurationSeconds: Double
+    ) -> [CGImage] {
         var frames: [CGImage] = []
 
         let asset = AVAsset(url: url)
@@ -95,28 +109,39 @@ class BoomerangProcessor {
             reader.startReading()
 
             var frameCount = 0
+            var nextCaptureTimeSeconds = 0.0
+            let frameStepSeconds = 1.0 / Double(max(targetFps, 1))
             let context = CIContext(options: nil)
 
-            while reader.status == .reading {
+            var reachedMaxDuration = false
+            while reader.status == .reading && frameCount < maxFrames && !reachedMaxDuration {
                 autoreleasepool {
                     if let sampleBuffer = trackOutput.copyNextSampleBuffer(),
                        let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                        let currentTimeSeconds = CMTimeGetSeconds(pts)
+
+                        if currentTimeSeconds > maxDurationSeconds {
+                            reachedMaxDuration = true
+                            return
+                        }
+
+                        // Skip dense frames and keep evenly sampled timeline.
+                        if currentTimeSeconds + 0.0001 < nextCaptureTimeSeconds {
+                            return
+                        }
 
                         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
                         // Transform uygula (rotation/flip fix)
                         let transformedImage = ciImage.transformed(by: self.transformForTrack(videoTrack))
 
-                        let width = Int(transformedImage.extent.width)
-                        let height = Int(transformedImage.extent.height)
-
                         if let cgImage = context.createCGImage(transformedImage, from: transformedImage.extent) {
-                            frames.append(cgImage)
+                            frames.append(self.resizeImageIfNeeded(cgImage, maxSide: 720))
                             frameCount += 1
-
-                            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                             let timeMs = Int(CMTimeGetSeconds(pts) * 1000)
                             print("BoomerangProcessor: Frame \(frameCount) decoded at \(timeMs)ms")
+                            nextCaptureTimeSeconds += frameStepSeconds
                         }
                     }
                 }
@@ -133,6 +158,34 @@ class BoomerangProcessor {
         }
 
         return frames
+    }
+
+    private func resizeImageIfNeeded(_ image: CGImage, maxSide: Int) -> CGImage {
+        let width = image.width
+        let height = image.height
+        let currentMax = max(width, height)
+        guard currentMax > maxSide else { return image }
+
+        let scale = CGFloat(maxSide) / CGFloat(currentMax)
+        let targetWidth = max(Int(CGFloat(width) * scale), 16)
+        let targetHeight = max(Int(CGFloat(height) * scale), 16)
+
+        guard let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: targetWidth,
+                height: targetHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return image
+        }
+
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+        return context.makeImage() ?? image
     }
 
     /// Video track transform'unu hesapla (rotation fix)
@@ -292,8 +345,8 @@ class BoomerangProcessor {
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 8_000_000,
+                AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 3_000_000,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoMaxKeyFrameIntervalKey: fps
             ]

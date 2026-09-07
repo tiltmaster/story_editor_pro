@@ -9,6 +9,11 @@ A powerful, fully customizable Instagram-style story editor for Flutter. Create 
 
 ## Features
 
+The camera now includes an **Effects** panel for combining color looks, adjustable
+skin smoothing, animated face lenses and place frames. Native artwork is included
+in photos and videos. See the [camera effects review](docs/camera-effects-review.md)
+for setup, implementation details, validation and remaining device checks.
+
 <table>
 <tr>
 <td width="300">
@@ -38,7 +43,7 @@ A powerful, fully customizable Instagram-style story editor for Flutter. Create 
 
 ```yaml
 dependencies:
-  story_editor_pro: ^1.0.1
+  story_editor_pro: ^1.0.3
 ```
 
 ### Android Setup
@@ -57,12 +62,14 @@ Set minimum SDK in `android/app/build.gradle`:
 ```gradle
 android {
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion 24
     }
 }
 ```
 
 ### iOS Setup
+
+The native camera and face-tracking dependencies require iOS 15 or later.
 
 Add to `ios/Runner/Info.plist`:
 
@@ -121,6 +128,18 @@ StoryCameraScreen(
 ---
 
 ## Full Customization
+
+Arabic and RTL are supported. In the host app, add the Flutter SDK's
+`flutter_localizations` dependency and configure `MaterialApp` with
+`supportedLocales: const [Locale('en'), Locale('ar')]` and
+`localizationsDelegates: GlobalMaterialLocalizations.delegates` (import
+`package:flutter_localizations/flutter_localizations.dart`). The camera inherits
+the selected locale and text direction.
+
+Default strings automatically use the built-in Arabic catalog. If your host
+supplies custom strings, select `const StoryEditorStrings.arabic()` for Arabic
+or supply your own translations. Custom strings are preserved. iOS hosts should
+also localize their permission descriptions in `InfoPlist.strings`.
 
 Wrap your app with `StoryEditorConfigProvider` for complete control:
 
@@ -214,6 +233,8 @@ StoryEditorStrings(
   editorYourStory: 'Your Story',                       // Your story share option
   editorFacebookStory: 'And Facebook Story',           // Facebook story option
   editorEnterText: 'Enter text...',                    // Text input placeholder
+  editorSaving: 'Saving...',                           // Saving progress indicator text
+  editorSharing: 'Sharing...',                         // Sharing progress indicator text
 
   // ═══════════════════════════════════════════════════════════════════════
   // BRUSH TYPE NAMES
@@ -530,6 +551,16 @@ StoryEditorGradients(
 ```dart
 StoryEditorConfig(
   // ═══════════════════════════════════════════════════════════════════════
+  // FEATURE TOGGLES
+  // Enable/disable camera toolbar features (default: all true)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  enableBoomerang: true,           // Boomerang mode button
+  enableCollage: true,             // Collage/layout mode button
+  enableHandsFree: true,           // Hands-free recording button
+  enableGradientTextEditor: true,  // Gradient text editor button
+
+  // ═══════════════════════════════════════════════════════════════════════
   // TIMING SETTINGS
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -661,12 +692,18 @@ class CloseFriend {
 
 ## Example
 
-Check the [example](example/) folder for a complete working demo:
+`example/` is a local, ignored app directory. It is not distributed in this
+repository. If you already have it locally, you can continue running it:
 
 ```bash
 cd example
 flutter run
 ```
+
+CI generates a disposable integration app using `python3 tool/ci/create_host.py`.
+The generator refuses to overwrite an existing local app. Native test sources
+and the minimal CI setup remain versioned under `ios/Tests`, `android/src/test`
+and `tool/ci`; APK, AAB and IPA artifacts are ignored everywhere.
 
 ## Dependencies
 
@@ -682,13 +719,16 @@ This package uses minimal, well-maintained dependencies:
 | `shared_preferences` | User preferences |
 | `flutter_svg` | SVG icon support |
 
-**No FFmpeg!** Boomerang video processing is implemented natively:
-- **Android:** MediaCodec + MediaMuxer
-- **iOS:** AVAssetReader + AVAssetWriter
+**No FFmpeg!** All video processing is implemented natively:
+- **Boomerang:** Android `MediaCodec` + `MediaMuxer` / iOS `AVAssetReader` + `AVAssetWriter`
+- **Video overlay export:** Android OpenGL/EGL GPU pipeline / iOS `AVMutableComposition` + `AVAssetExportSession`
+- Text, drawing, and image overlays are composited directly onto video during save/share
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Story Editor Pro is MIT-licensed; bundled third-party components retain their
+own licenses. See [LICENSE](LICENSE) and
+[assets/ar/THIRD_PARTY_NOTICES.md](assets/ar/THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 

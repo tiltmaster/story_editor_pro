@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "asset_id": "ar_glasses_classic",
+  "display_name": "Classic Graphite Glasses",
+  "license": "Procedurally generated in-repository; no external asset dependencies",
+  "units": "meters",
+  "coordinate_system": {
+    "right": "+X",
+    "up": "+Y",
+    "forward": "-Z",
+    "face_depth": "+Z",
+    "gltf_conversion": "+Y up"
+  },
+  "origin": {
+    "position_m": [
+      0,
+      0,
+      0
+    ],
+    "definition": "midpoint_between_eyes"
+  },
+  "dimensions_m": {
+    "width": 0.13680079579353333,
+    "height": 0.04649999737739563,
+    "depth": 0.12658322602510452
+  },
+  "anchor": {
+    "type": "eye_midpoint",
+    "nominal_ipd_m": 0.064,
+    "nominal_frame_width_m": 0.14,
+    "position_offset_m": [
+      0,
+      0,
+      0
+    ],
+    "rotation_offset_euler_deg": [
+      0,
+      0,
+      0
+    ],
+    "scale_multiplier": 1,
+    "recommended_scale_formula": "tracked_ipd_m / 0.064",
+    "smoothing": {
+      "position_half_life_ms": 55,
+      "rotation_half_life_ms": 45,
+      "scale_half_life_ms": 80
+    }
+  },
+  "materials": [
+    {
+      "id": 0,
+      "name": "MAT_Frame_Graphite",
+      "base_color_rgba": [
+        0.006,
+        0.008,
+        0.012,
+        1
+      ]
+    },
+    {
+      "id": 1,
+      "name": "MAT_Lens_Smoke",
+      "base_color_rgba": [
+        0.012,
+        0.045,
+        0.06,
+        0.48
+      ]
+    }
+  ],
+  "lods": [
+    {
+      "id": "LOD1",
+      "triangles": 2300,
+      "vertices": 1164,
+      "glb": "glasses_classic.glb",
+      "target_triangle_range": [
+        1500,
+        3000
+      ]
+    },
+    {
+      "id": "LOD2",
+      "triangles": 1056,
+      "vertices": 542,
+      "mesh_json": "runtime_mesh.json",
+      "target_triangle_range": [
+        700,
+        1200
+      ]
+    }
+  ],
+  "runtime_mesh": {
+    "file": "runtime_mesh.json",
+    "source_lod": "LOD2",
+    "units": "nominal_ipd",
+    "meters_per_unit": 0.064,
+    "maximum_triangles": 1200
+  }
+}
