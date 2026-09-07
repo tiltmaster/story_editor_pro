@@ -28,6 +28,14 @@ void main() {
           'previewWidth': 1080.0,
           'previewHeight': 1920.0,
         },
+        'getCameraControls' => {
+          'minZoom': 1.0,
+          'maxZoom': 4.0,
+          'minExposure': -2.0,
+          'maxExposure': 2.0,
+          'focus': true,
+          'exposure': true,
+        },
         _ => true,
       },
     );
@@ -37,6 +45,7 @@ void main() {
         return {
           'available': true,
           'faceTracking': true,
+          'backgrounds': true,
           'preview': true,
           'recording': true,
           'lensIds': NativeArLensIds.all.toList(),
@@ -129,6 +138,18 @@ void main() {
             .position,
         same(carouselPosition),
         reason: 'The carousel keeps its position while controls are open',
+      );
+      await tester.tap(find.text('المزيد'));
+      await tester.pump();
+      expect(find.text('أقل'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(find.text('المزيد'), findsOneWidget);
+      expect(find.byType(StoryCameraScreen), findsOneWidget);
+      expect(
+        tester.getRect(find.byKey(AnchoredShutterControl.shutterAnchorKey)),
+        shutter,
       );
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 1));

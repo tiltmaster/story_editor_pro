@@ -3,7 +3,7 @@ import 'face_beauty.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, listEquals, mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -18,6 +18,7 @@ import 'video_overlay_export_service.dart';
 import 'models/story_result.dart';
 import 'config/story_editor_config.dart';
 import 'config/story_editor_filters.dart';
+import 'editor_history.dart';
 
 /// Media type - photo or video
 enum MediaType { image, video }
@@ -106,10 +107,15 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   final List<DrawingPath> _drawings = [];
   final List<ImageOverlay> _imageOverlays = [];
   final List<SmartStickerOverlay> _smartStickers = [];
+  late final EditorHistory<_EditorSnapshot> _history;
+  late bool _captureSaved = widget.isFromGallery;
+  bool _allowDiscard = false;
+  bool _discardPromptOpen = false;
 
   // Video player
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
+  bool _videoLoadFailed = false;
   bool _isMuted = false;
   int _trimStartMs = 0;
   int _trimEndMs = 0;
@@ -165,6 +171,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }
 
     _filterShaderLoadFuture = _loadFilterShader();
+    _history = EditorHistory(_snapshot(), equals: (a, b) => a.sameAs(b));
   }
 
   /// Loads the GLSL fragment shader that applies colour matrix + S-curve + vignette.
@@ -295,7 +302,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     final textPainter = TextPainter(
       text: TextSpan(text: overlay.text, style: textStyle),
-      textDirection: TextDirection.ltr,
+      textDirection: Directionality.of(context),
       textAlign: TextAlign.center,
     );
     textPainter.layout(maxWidth: maxTextWidth);
@@ -315,6 +322,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     setState(() {
       _textOverlays.add(overlay.copyWith(offset: Offset(centerX, centerY)));
+      _history.reset(_snapshot());
     });
   }
 
@@ -327,8 +335,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     return MediaType.image;
   }
 
+  String _editorText(String en, String ar) =>
+      Localizations.localeOf(context).languageCode == "ar" ? ar : en;
+
   /// Initialize video player
   Future<void> _initVideoPlayer() async {
+    if (mounted) setState(() => _videoLoadFailed = false);
+    await _videoController?.dispose();
+    if (!mounted) return;
     _videoController = VideoPlayerController.file(File(widget.mediaPath));
     try {
       await _videoController!.initialize();
@@ -340,10 +354,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       if (mounted) {
         setState(() {
           _isVideoInitialized = true;
+          _videoLoadFailed = false;
         });
       }
     } catch (e) {
       debugPrint('Video init error: $e');
+      if (mounted) setState(() => _videoLoadFailed = true);
     }
   }
 
@@ -382,8 +398,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   double _brushSize = 5.0;
   BrushType _currentBrushType = BrushType.normal;
   DrawingPath? _currentPath;
-  int _drawingCountBeforeSession =
-      0; // Drawing count before entering drawing mode
+  List<DrawingPath> _drawingsBeforeSession = [];
 
   // State variables for text overlay dragging and scaling
   int? _draggingTextIndex;
@@ -399,6 +414,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   Offset? _bgFocalPointStart;
   double? _bgStartDistance;
   final Map<int, Offset> _bgPointers = {};
+  bool _bgGestureChanged = false;
 
   bool _isSaving = false;
   bool _isSharing = false;
@@ -426,14 +442,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         : rawTopInset;
 
     return PopScope(
-      canPop: !_isDrawing && !_isTextEditing,
+      canPop:
+          !_isSaving &&
+          !_isDrawing &&
+          !_isTextEditing &&
+          (_allowDiscard || !_hasUnsavedChanges),
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) {
+        if (!didPop && !_isSaving) {
           // If drawing or text editing, just close that mode
           if (_isDrawing) {
             setState(() => _isDrawing = false);
           } else if (_isTextEditing) {
             setState(() => _isTextEditing = false);
+          } else {
+            _confirmDiscard();
           }
         }
       },
@@ -618,8 +640,26 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         // Show loading while video is loading
         mediaWidget = Container(
           color: Colors.black,
-          child: const Center(
-            child: CircularProgressIndicator(color: Colors.white),
+          child: Center(
+            child: _videoLoadFailed
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _editorText(
+                          'Could not open this video',
+                          'تعذّر فتح هذا الفيديو',
+                        ),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      TextButton.icon(
+                        onPressed: _initVideoPlayer,
+                        icon: const Icon(Icons.refresh),
+                        label: Text(_editorText('Try again', 'إعادة المحاولة')),
+                      ),
+                    ],
+                  )
+                : const CircularProgressIndicator(color: Colors.white),
           ),
         );
       }
@@ -731,19 +771,28 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             return;
           }
           final delta = focal - _bgFocalPointStart!;
+          _bgGestureChanged = true;
           setState(() {
             _bgImageOffset = _bgOffsetStart! + delta;
             _bgImageScale = (_bgScaleStart! * (distance / _bgStartDistance!))
-                .clamp(0.3, 10.0);
+                .clamp(0.5, 5.0);
           });
         },
         onPointerUp: (event) {
           _bgPointers.remove(event.pointer);
           _resetBgGestureSession();
+          if (_bgPointers.isEmpty && _bgGestureChanged) {
+            _bgGestureChanged = false;
+            _recordEdit();
+          }
         },
         onPointerCancel: (event) {
           _bgPointers.remove(event.pointer);
           _resetBgGestureSession();
+          if (_bgPointers.isEmpty && _bgGestureChanged) {
+            _bgGestureChanged = false;
+            _recordEdit();
+          }
         },
         child: const SizedBox.expand(),
       ),
@@ -779,6 +828,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       },
       onPanEnd: (details) {
         _currentPath = null;
+        _recordEdit();
+      },
+      onPanCancel: () {
+        _currentPath = null;
+        _recordEdit();
       },
       child: Container(color: Colors.transparent),
     );
@@ -858,6 +912,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             });
             _imageDragStartOffset = null;
             _imageDragStartFocal = null;
+            _recordEdit();
           },
           child: AnimatedScale(
             scale:
@@ -929,8 +984,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             newText,
             newGradient,
           );
-          if (newImagePath != null) {
-            setState(() {
+          if (newImagePath != null &&
+              mounted &&
+              index < _imageOverlays.length) {
+            _edit(() {
               _imageOverlays[index] = overlay.copyWith(
                 imagePath: newImagePath,
                 text: newText,
@@ -970,7 +1027,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               children: [
                 TextButton(
                   onPressed: () {
-                    setState(() => _imageOverlays.removeAt(index));
+                    _edit(() => _imageOverlays.removeAt(index));
                     Navigator.pop(context);
                   },
                   child: Text(
@@ -1098,6 +1155,15 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     }
   }
 
+  Offset get _normalizedMediaOffset {
+    final size = _repaintKey.currentContext?.size;
+    if (size == null || size.isEmpty) return Offset.zero;
+    return Offset(
+      _bgImageOffset.dx / size.width,
+      _bgImageOffset.dy / size.height,
+    );
+  }
+
   bool _requiresVideoExport() {
     final hasOverlay =
         _textOverlays.isNotEmpty ||
@@ -1111,6 +1177,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         _trimStartMs > 0 ||
         (_trimEndMs > 0 && durationMs > 0 && _trimEndMs < durationMs);
     return hasOverlay ||
+        _isMuted ||
+        _bgImageScale != 1 ||
+        _bgImageOffset != Offset.zero ||
+        _smartStickers.isNotEmpty ||
         hasFilter ||
         widget.initialBeautyStrength > 0 ||
         widget.flipHorizontally ||
@@ -1367,6 +1437,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             _textDragStartOffset = null;
             _textDragStartPosition = null;
             _textScaleStart = null;
+            _recordEdit();
           },
           child: AnimatedScale(
             scale:
@@ -1397,6 +1468,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       top: 0,
       left: 0,
       right: 0,
+      bottom: MediaQuery.of(context).viewPadding.bottom + 100,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
@@ -1413,7 +1485,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   BlendMode.srcIn,
                 ),
               ),
-              onTap: () => Navigator.pop(context),
+              onTap: () {
+                if (!_isSaving) Navigator.maybePop(context);
+              },
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -1426,62 +1500,76 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             ),
             const SizedBox(width: 12),
             // Snapchat-style vertical rail on the right
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_mediaType == MediaType.video) ...[
-                  _buildControlButton(
-                    icon: _isMuted ? Icons.volume_off : Icons.volume_up,
-                    onTap: () {
-                      setState(() {
-                        _isMuted = !_isMuted;
-                        _videoController?.setVolume(_isMuted ? 0.0 : 1.0);
-                      });
-                    },
-                    isActive: _isMuted,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildControlButton(
-                    icon: Icons.content_cut_rounded,
-                    onTap: _openVideoTrimmer,
-                    isActive:
-                        _trimStartMs > 0 ||
-                        (_trimEndMs > 0 &&
-                            _trimEndMs <
-                                (_videoController
-                                        ?.value
-                                        .duration
-                                        .inMilliseconds ??
-                                    0)),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                _buildControlButton(icon: Icons.undo, onTap: _undo),
-                const SizedBox(height: 12),
-                _buildControlButton(
-                  icon: _isDrawing ? Icons.edit_off : Icons.edit,
-                  onTap: () => setState(() {
-                    if (!_isDrawing) {
-                      // Save current drawing count when entering drawing mode
-                      _drawingCountBeforeSession = _drawings.length;
-                    }
-                    _isDrawing = !_isDrawing;
-                  }),
-                  isActive: _isDrawing,
+            SizedBox(
+              width: 48,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_mediaType == MediaType.video) ...[
+                      _buildControlButton(
+                        icon: _isMuted ? Icons.volume_off : Icons.volume_up,
+                        onTap: () {
+                          _edit(() {
+                            _isMuted = !_isMuted;
+                            _videoController?.setVolume(_isMuted ? 0.0 : 1.0);
+                          });
+                        },
+                        isActive: _isMuted,
+                      ),
+                      const SizedBox(height: 12),
+                      _buildControlButton(
+                        icon: Icons.content_cut_rounded,
+                        onTap: _openVideoTrimmer,
+                        isActive:
+                            _trimStartMs > 0 ||
+                            (_trimEndMs > 0 &&
+                                _trimEndMs <
+                                    (_videoController
+                                            ?.value
+                                            .duration
+                                            .inMilliseconds ??
+                                        0)),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    _buildControlButton(
+                      icon: Icons.undo,
+                      onTap: _history.canUndo ? _undo : null,
+                    ),
+                    if (_history.canRedo) ...[
+                      const SizedBox(height: 8),
+                      _buildControlButton(icon: Icons.redo, onTap: _redo),
+                    ],
+                    const SizedBox(height: 12),
+                    _buildControlButton(
+                      icon: _isDrawing ? Icons.edit_off : Icons.edit,
+                      onTap: () => setState(() {
+                        if (!_isDrawing) {
+                          _drawingsBeforeSession = List.of(_drawings);
+                        }
+                        _isDrawing = !_isDrawing;
+                      }),
+                      isActive: _isDrawing,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildControlButton(
+                      icon: Icons.text_fields,
+                      onTap: _addText,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildControlButton(
+                      icon: Icons.auto_awesome,
+                      onTap: _addSmartSticker,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildControlButton(
+                      icon: Icons.save,
+                      onTap: _isSaving ? null : () => _saveToGallery(),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                _buildControlButton(icon: Icons.text_fields, onTap: _addText),
-                const SizedBox(height: 12),
-                _buildControlButton(
-                  icon: Icons.auto_awesome,
-                  onTap: _addSmartSticker,
-                ),
-                const SizedBox(height: 12),
-                _buildControlButton(
-                  icon: Icons.save,
-                  onTap: _isSaving ? () {} : () => _saveToGallery(),
-                ),
-              ],
+              ),
             ),
           ],
         ),
@@ -1542,7 +1630,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     if (picker == null || _isSaving) return;
     final selected = await picker(context);
     if (!mounted || selected == null) return;
-    setState(() => _selectedMusic = selected);
+    _edit(() => _selectedMusic = selected);
   }
 
   String _formatTrimTime(int milliseconds) {
@@ -1656,7 +1744,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     );
     if (!mounted) return;
     if (applied == true) {
-      setState(() {
+      _edit(() {
         _trimStartMs = startMs;
         _trimEndMs = endMs;
       });
@@ -2160,8 +2248,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                           child: Text(
                             _shareToCloseFriends &&
                                     _selectedCloseFriends.isNotEmpty
-                                ? 'Share to ${_selectedCloseFriends.length} friends'
-                                : 'Share',
+                                ? _editorText(
+                                    'Share to ${_selectedCloseFriends.length} friends',
+                                    'مشاركة مع ${_selectedCloseFriends.length} أصدقاء',
+                                  )
+                                : context.storyStrings.editorShare,
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -2383,40 +2474,162 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   Widget _buildControlButton({
     IconData? icon,
     Widget? iconWidget,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
     bool isActive = false,
+    String? label,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          // Match the camera screen's icon-button contrast.
-          color: isActive
-              ? Colors.white.withValues(alpha: 0.30)
-              : Colors.black.withValues(alpha: 0.42),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.22),
-            width: 1.0,
+    final title =
+        label ??
+        switch (icon) {
+          Icons.volume_off => _editorText('Unmute video', 'تشغيل صوت الفيديو'),
+          Icons.volume_up => _editorText('Mute video', 'كتم صوت الفيديو'),
+          Icons.content_cut_rounded => _editorText('Trim video', 'قص الفيديو'),
+          Icons.undo => _editorText('Undo', 'تراجع'),
+          Icons.redo => _editorText('Redo', 'إعادة'),
+          Icons.edit || Icons.edit_off => _editorText('Draw', 'رسم'),
+          Icons.text_fields => _editorText('Add text', 'إضافة نص'),
+          Icons.auto_awesome => _editorText('Add sticker', 'إضافة ملصق'),
+          Icons.save => _editorText('Save to gallery', 'حفظ في المعرض'),
+          _ => _editorText('Close', 'إغلاق'),
+        };
+    return Tooltip(
+      message: title,
+      child: Semantics(
+        button: true,
+        label: title,
+        enabled: onTap != null,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              // Match the camera screen's icon-button contrast.
+              color: isActive
+                  ? Colors.white.withValues(alpha: 0.30)
+                  : Colors.black.withValues(alpha: 0.42),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.22),
+                width: 1.0,
+              ),
+            ),
+            child: Center(
+              child: Opacity(
+                opacity: onTap == null ? 0.35 : 1,
+                child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
+              ),
+            ),
           ),
-        ),
-        child: Center(
-          child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
         ),
       ),
     );
   }
 
-  void _undo() {
+  _EditorSnapshot _snapshot() => _EditorSnapshot(
+    texts: _textOverlays,
+    images: _imageOverlays,
+    drawings: _drawings,
+    stickers: _smartStickers,
+    mediaScale: _bgImageScale,
+    mediaOffset: _bgImageOffset,
+    muted: _isMuted,
+    trimStart: _trimStartMs,
+    trimEnd: _trimEndMs == _videoController?.value.duration.inMilliseconds
+        ? 0
+        : _trimEndMs,
+    music: _selectedMusic,
+  );
+
+  void _edit(VoidCallback change) {
     setState(() {
-      if (_drawings.isNotEmpty) {
-        _drawings.removeLast();
-      } else if (_textOverlays.isNotEmpty) {
-        _textOverlays.removeLast();
-      }
+      change();
+      _history.record(_snapshot());
     });
+  }
+
+  void _recordEdit() {
+    if (mounted) setState(() => _history.record(_snapshot()));
+  }
+
+  void _restore(_EditorSnapshot snapshot) {
+    setState(() {
+      _textOverlays
+        ..clear()
+        ..addAll(snapshot.texts);
+      _imageOverlays
+        ..clear()
+        ..addAll(snapshot.images);
+      _drawings
+        ..clear()
+        ..addAll(snapshot.copyDrawings());
+      _smartStickers
+        ..clear()
+        ..addAll(snapshot.copyStickers());
+      _bgImageScale = snapshot.mediaScale;
+      _bgImageOffset = snapshot.mediaOffset;
+      _isMuted = snapshot.muted;
+      _trimStartMs = snapshot.trimStart;
+      _trimEndMs = snapshot.trimEnd == 0
+          ? (_videoController?.value.duration.inMilliseconds ?? 0)
+          : snapshot.trimEnd;
+      _selectedMusic = snapshot.music;
+      _currentPath = null;
+    });
+    _videoController?.setVolume(_isMuted ? 0 : 1);
+    _videoController?.seekTo(Duration(milliseconds: _trimStartMs));
+    HapticFeedback.selectionClick();
+  }
+
+  bool get _hasUnsavedChanges => !_captureSaved || _history.hasUnsavedChanges;
+
+  Future<void> _confirmDiscard() async {
+    if (_discardPromptOpen || _isSaving || !mounted) return;
+    _discardPromptOpen = true;
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF202026),
+        title: Text(
+          _editorText('Discard this edit?', 'تجاهل هذا التعديل؟'),
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          _editorText(
+            'Your unsaved changes will be lost.',
+            'ستفقد التغييرات التي لم تحفظها.',
+          ),
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(_editorText('Keep editing', 'متابعة التعديل')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(
+              _editorText('Discard', 'تجاهل'),
+              style: const TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+    _discardPromptOpen = false;
+    if (!mounted || discard != true) return;
+    setState(() => _allowDiscard = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
+
+  void _undo() {
+    if (_history.canUndo) _restore(_history.undo());
+  }
+
+  void _redo() {
+    if (_history.canRedo) _restore(_history.redo());
   }
 
   /// Drawing mode top bar - X (exit), Undo and Check button
@@ -2428,81 +2641,32 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            // Left side - X button and Undo button
-            Row(
-              children: [
-                // X button - exit drawing mode (cancel drawings from this session)
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      // Only delete drawings from this session, keep previous drawings
-                      while (_drawings.length > _drawingCountBeforeSession) {
-                        _drawings.removeLast();
-                      }
-                      _isDrawing = false;
-                    });
-                  },
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.15),
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.close, color: Colors.white, size: 24),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // Undo button - only show if there are drawings
-                if (_drawings.isNotEmpty)
-                  GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _drawings.removeLast();
-                      });
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withValues(alpha: 0.15),
-                      ),
-                      child: const Center(
-                        child: Icon(Icons.undo, color: Colors.white, size: 24),
-                      ),
-                    ),
-                  ),
-              ],
+            _buildControlButton(
+              icon: Icons.close,
+              label: _editorText('Cancel drawing', 'إلغاء الرسم'),
+              onTap: () => _edit(() {
+                _drawings
+                  ..clear()
+                  ..addAll(_drawingsBeforeSession);
+                _isDrawing = false;
+              }),
             ),
-            // Check button - save drawings and exit mode
-            GestureDetector(
-              onTap: () {
-                setState(() => _isDrawing = false);
-              },
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.15),
-                ),
-                child: Center(
-                  child: SvgPicture.asset(
-                    'packages/story_editor_pro/assets/icons/check.svg',
-                    width: 24,
-                    height: 24,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
-                    ),
-                  ),
-                ),
-              ),
+            const SizedBox(width: 12),
+            _buildControlButton(
+              icon: Icons.undo,
+              onTap: _history.canUndo ? _undo : null,
+            ),
+            const SizedBox(width: 8),
+            _buildControlButton(
+              icon: Icons.redo,
+              onTap: _history.canRedo ? _redo : null,
+            ),
+            const Spacer(),
+            _buildControlButton(
+              icon: Icons.check,
+              label: _editorText('Done drawing', 'تم الرسم'),
+              onTap: () => setState(() => _isDrawing = false),
             ),
           ],
         ),
@@ -2543,7 +2707,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
           final textPainter = TextPainter(
             text: TextSpan(text: testLine, style: style),
-            textDirection: TextDirection.ltr,
+            textDirection: Directionality.of(context),
             maxLines: 1,
           );
           textPainter.layout();
@@ -2593,7 +2757,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
         final textPainter = TextPainter(
           text: TextSpan(text: testText, style: style),
-          textDirection: TextDirection.ltr,
+          textDirection: Directionality.of(context),
           maxLines: 1,
         );
         textPainter.layout();
@@ -2630,7 +2794,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   // ---------------------------------------------------------------------------
 
   Future<void> _addSmartSticker() async {
-    final result = await showStickerDrawer(context);
+    final result = await showStickerDrawer(
+      context,
+      strings: context.storyEditorConfig.strings,
+    );
     if (result == null || !mounted) return;
 
     // Decorative stickers (bundled word-art OR downloaded KLIPY sticker) →
@@ -2642,7 +2809,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             : null);
     if (stickerPath != null) {
       if (!mounted) return;
-      setState(() {
+      _edit(() {
         _imageOverlays.add(
           ImageOverlay(
             imagePath: stickerPath,
@@ -2659,7 +2826,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
     final sticker = result.sticker;
     if (sticker == null) return;
-    setState(() {
+    _edit(() {
       // Spawn centered in the safe middle of the canvas, staggered a touch per
       // existing sticker so stacking is visible (never over the side rails).
       final n = _smartStickers.length;
@@ -2697,7 +2864,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         top: s.offset.dy,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () => setState(() => s.cycleSkin()),
+          onTap: () => _edit(s.cycleSkin),
           onScaleStart: (details) {
             _stickerDragStartOffset = s.offset;
             _stickerDragStartFocal = details.focalPoint;
@@ -2752,6 +2919,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             });
             _stickerDragStartOffset = null;
             _stickerDragStartFocal = null;
+            _recordEdit();
           },
           child: AnimatedScale(
             scale: overTrash ? 0.5 : 1.0,
@@ -2840,28 +3008,20 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               // Close button (X) - cancel and go back to editor
-                              GestureDetector(
+                              _buildControlButton(
+                                icon: Icons.close,
+                                label: _editorText('Cancel text', 'إلغاء النص'),
                                 onTap: () {
                                   Navigator.of(context).pop();
                                 },
-                                child: Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.3),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(
-                                    Icons.close,
-                                    color: Colors.white,
-                                    size: 24,
-                                  ),
-                                ),
                               ),
                               // Done button - save text
-                              GestureDetector(
+                              _buildControlButton(
+                                icon: Icons.check,
+                                label: _editorText('Done text', 'تم النص'),
                                 onTap: () {
                                   if (controller.text.isNotEmpty) {
-                                    setState(() {
+                                    _edit(() {
                                       _isTextEditing = false;
 
                                       final selectedFont = fontsConfig
@@ -2914,7 +3074,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                               height: 1.1,
                                             ),
                                           ),
-                                          textDirection: TextDirection.ltr,
+                                          textDirection: Directionality.of(
+                                            context,
+                                          ),
                                           maxLines: 1,
                                         );
                                         lp.layout();
@@ -2943,6 +3105,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                         fontIndex: selectedFontIndex,
                                         isItalic: isItalic,
                                         textAlign: textAlign,
+                                        scale: existing?.scale ?? 1,
                                         offset:
                                             existing?.offset ??
                                             Offset(
@@ -2958,29 +3121,15 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                       }
                                     });
                                   } else {
-                                    setState(() => _isTextEditing = false);
+                                    _edit(() {
+                                      _isTextEditing = false;
+                                      if (existingIndex != null) {
+                                        _textOverlays.removeAt(existingIndex);
+                                      }
+                                    });
                                   }
                                   Navigator.pop(context);
                                 },
-                                child: Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.white.withValues(alpha: 0.15),
-                                  ),
-                                  child: Center(
-                                    child: SvgPicture.asset(
-                                      'packages/story_editor_pro/assets/icons/check.svg',
-                                      width: 24,
-                                      height: 24,
-                                      colorFilter: const ColorFilter.mode(
-                                        Colors.white,
-                                        BlendMode.srcIn,
-                                      ),
-                                    ),
-                                  ),
-                                ),
                               ),
                             ],
                           ),
@@ -3533,6 +3682,9 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               filterPreset: _effectiveFilterPreset,
               filterStrength: widget.initialFilterStrength,
               beautyStrength: widget.initialBeautyStrength,
+              mediaScale: _bgImageScale,
+              mediaOffsetX: _normalizedMediaOffset.dx,
+              mediaOffsetY: _normalizedMediaOffset.dy,
               shouldMuteAudio: _isMuted,
               trimStartMs: _trimStartMs,
               trimEndMs: _trimEndMs,
@@ -3606,6 +3758,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   /// Show saved modal - closes after configured delay
   void _showSavedModal() {
+    _history.markSaved();
+    _captureSaved = true;
     final config = context.storyEditorConfig;
 
     showDialog(
@@ -3685,23 +3839,35 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
           if (overlayPng == null) throw Exception('Failed to capture overlay');
 
-          // Start export in background — returns predetermined output path immediately (~10ms)
-          filePath = await VideoOverlayExportService.startExportInBackground(
-            videoPath: widget.mediaPath,
-            overlayPngBytes: overlayPng,
-            animatedStickers: animatedStickers,
-            mirrorHorizontally: widget.flipHorizontally,
-            outputWidth: context.storyEditorConfig.storyCanvasWidth,
-            outputHeight: context.storyEditorConfig.storyCanvasHeight,
-            filterPreset: _effectiveFilterPreset,
-            filterStrength: widget.initialFilterStrength,
-            beautyStrength: widget.initialBeautyStrength,
-            shouldMuteAudio: _isMuted,
-            trimStartMs: _trimStartMs,
-            trimEndMs: _trimEndMs,
-          );
+          // Keep the editor and edits available until the output exists. A
+          // failed export must never hand the host a nonexistent file.
+          final exportedPath =
+              await VideoOverlayExportService.exportVideoWithOverlay(
+                videoPath: widget.mediaPath,
+                overlayPngBytes: overlayPng,
+                animatedStickers: animatedStickers,
+                mirrorHorizontally: widget.flipHorizontally,
+                outputWidth: context.storyEditorConfig.storyCanvasWidth,
+                outputHeight: context.storyEditorConfig.storyCanvasHeight,
+                filterPreset: _effectiveFilterPreset,
+                filterStrength: widget.initialFilterStrength,
+                beautyStrength: widget.initialBeautyStrength,
+                mediaScale: _bgImageScale,
+                mediaOffsetX: _normalizedMediaOffset.dx,
+                mediaOffsetY: _normalizedMediaOffset.dy,
+                shouldMuteAudio: _isMuted,
+                trimStartMs: _trimStartMs,
+                trimEndMs: _trimEndMs,
+              );
+          if (exportedPath == null) {
+            throw StateError(
+              VideoOverlayExportService.lastExportError ??
+                  'Video export failed',
+            );
+          }
+          filePath = exportedPath;
           debugPrint(
-            'VideoOverlayProcessor: Background export started in ${stopwatch.elapsedMilliseconds}ms, navigating immediately',
+            'VideoOverlayProcessor: Export finished in ${stopwatch.elapsedMilliseconds}ms',
           );
           resultMediaType = StoryMediaType.video;
         }
@@ -3718,13 +3884,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         resultMediaType = StoryMediaType.image;
       }
 
+      final fileSize = await File(filePath).length();
       if (mounted) {
-        // Build StoryResult directly — file may still be exporting in background
+        // Share only a finished, readable file.
         final storyResult = StoryResult(
           filePath: filePath,
           fileName: filePath.split('/').last,
           mediaType: resultMediaType,
-          fileSize: 0,
+          fileSize: fileSize,
           createdAt: DateTime.now(),
           durationMs: _mediaType == MediaType.video
               ? (_trimEndMs - _trimStartMs)
@@ -3905,6 +4072,142 @@ class DottedBorderPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant DottedBorderPainter oldDelegate) =>
       oldDelegate.color != color;
+}
+
+/// A frozen edit state. Media files are referenced by path, never duplicated.
+class _EditorSnapshot {
+  _EditorSnapshot({
+    required List<TextOverlay> texts,
+    required List<ImageOverlay> images,
+    required List<DrawingPath> drawings,
+    required List<SmartStickerOverlay> stickers,
+    required this.mediaScale,
+    required this.mediaOffset,
+    required this.muted,
+    required this.trimStart,
+    required this.trimEnd,
+    required this.music,
+  }) : texts = List.unmodifiable(texts),
+       images = List.unmodifiable(images),
+       drawings = [for (final path in drawings) _copyPath(path)],
+       stickers = [for (final sticker in stickers) _copySticker(sticker)];
+
+  final List<TextOverlay> texts;
+  final List<ImageOverlay> images;
+  final List<DrawingPath> drawings;
+  final List<SmartStickerOverlay> stickers;
+  final double mediaScale;
+  final Offset mediaOffset;
+  final bool muted;
+  final int trimStart;
+  final int trimEnd;
+  final StoryEditorMusicSelection? music;
+
+  static DrawingPath _copyPath(DrawingPath path) => DrawingPath(
+    points: List.of(path.points),
+    color: path.color,
+    strokeWidth: path.strokeWidth,
+    brushType: path.brushType,
+  );
+
+  static SmartStickerOverlay _copySticker(SmartStickerOverlay s) =>
+      SmartStickerOverlay(
+        type: s.type,
+        skin: s.skin,
+        data: Map.of(s.data),
+        offset: s.offset,
+        scale: s.scale,
+      );
+
+  List<DrawingPath> copyDrawings() => drawings.map(_copyPath).toList();
+  List<SmartStickerOverlay> copyStickers() =>
+      stickers.map(_copySticker).toList();
+
+  bool sameAs(_EditorSnapshot other) {
+    if (mediaScale != other.mediaScale ||
+        mediaOffset != other.mediaOffset ||
+        muted != other.muted ||
+        trimStart != other.trimStart ||
+        trimEnd != other.trimEnd ||
+        (
+              music?.id,
+              music?.title,
+              music?.artist,
+              music?.startMs,
+              music?.durationMs,
+            ) !=
+            (
+              other.music?.id,
+              other.music?.title,
+              other.music?.artist,
+              other.music?.startMs,
+              other.music?.durationMs,
+            )) {
+      return false;
+    }
+    if (texts.length != other.texts.length ||
+        images.length != other.images.length ||
+        drawings.length != other.drawings.length ||
+        stickers.length != other.stickers.length) {
+      return false;
+    }
+    for (var i = 0; i < texts.length; i++) {
+      final a = texts[i], b = other.texts[i];
+      if ((
+            a.text,
+            a.color,
+            a.backgroundColor,
+            a.backgroundGradient,
+            a.fontSize,
+            a.textStyle,
+            a.offset,
+            a.scale,
+            a.fontIndex,
+            a.isItalic,
+            a.textAlign,
+          ) !=
+          (
+            b.text,
+            b.color,
+            b.backgroundColor,
+            b.backgroundGradient,
+            b.fontSize,
+            b.textStyle,
+            b.offset,
+            b.scale,
+            b.fontIndex,
+            b.isItalic,
+            b.textAlign,
+          )) {
+        return false;
+      }
+    }
+    for (var i = 0; i < images.length; i++) {
+      final a = images[i], b = other.images[i];
+      if ((a.imagePath, a.offset, a.scale, a.text, a.gradient) !=
+          (b.imagePath, b.offset, b.scale, b.text, b.gradient)) {
+        return false;
+      }
+    }
+    for (var i = 0; i < drawings.length; i++) {
+      final a = drawings[i], b = other.drawings[i];
+      if (a.color != b.color ||
+          a.strokeWidth != b.strokeWidth ||
+          a.brushType != b.brushType ||
+          !listEquals(a.points, b.points)) {
+        return false;
+      }
+    }
+    for (var i = 0; i < stickers.length; i++) {
+      final a = stickers[i], b = other.stickers[i];
+      if ((a.type, a.skin, a.offset, a.scale) !=
+              (b.type, b.skin, b.offset, b.scale) ||
+          !mapEquals(a.data, b.data)) {
+        return false;
+      }
+    }
+    return true;
+  }
 }
 
 class TextOverlay {

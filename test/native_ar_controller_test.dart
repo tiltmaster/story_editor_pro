@@ -57,6 +57,7 @@ void main() {
       'placeName': '',
       'beautyEyes': 0,
       'beautySlim': 0,
+      'backgroundStyle': 0,
     });
     expect(
       calls.map((call) => call.method),
@@ -134,10 +135,41 @@ void main() {
         'placeName': '',
         'beautyEyes': 0,
         'beautySlim': 0,
+        'backgroundStyle': 0,
       });
       await controller.dispose();
     },
   );
+
+  test('background readiness is distinct from face readiness and errors', () {
+    final ready = NativeArEvent.fromMap({
+      'type': 'background',
+      'backgroundReady': true,
+      'message': 'Ready',
+    });
+    expect(ready.type, NativeArEventType.background);
+    expect(ready.backgroundReady, isTrue);
+    expect(ready.faceTrackingReady, isNull);
+    expect(ready.failure, isNull);
+    final error = NativeArEvent.fromMap({
+      'type': 'background',
+      'backgroundReady': false,
+      'code': 'segmentation_failed',
+      'message': 'Unavailable',
+    });
+    expect(error.failure?.code, 'segmentation_failed');
+    expect(
+      NativeArCapabilities.fromMap({'available': true}).backgrounds,
+      isFalse,
+    );
+    expect(
+      NativeArCapabilities.fromMap({
+        'available': true,
+        'backgrounds': true,
+      }).backgrounds,
+      isTrue,
+    );
+  });
 
   test('platform failures are exposed as typed non-fatal errors', () async {
     messenger.setMockMethodCallHandler(methodChannel, (_) async {

@@ -54,6 +54,7 @@ final class CreativeLensFrameRenderer {
         pose: FaceARPose? = nil,
         time: Double = 0
     ) -> CVPixelBuffer? {
+        if pose == nil { adornments.resetExpressions() }
         if pose == nil && !Self.lensIds.contains(lensId) && !lensContext.hasOverlay { return input }
         return render(source: CIImage(cvPixelBuffer: input), lensId: lensId, intensity: intensity,
                lensContext: lensContext, pose: pose, time: time)
@@ -61,14 +62,15 @@ final class CreativeLensFrameRenderer {
 
     func render(source input: CIImage, lensId: String, intensity: CGFloat,
                 lensContext: CreativeLensContext, pose: FaceARPose? = nil,
-                time: Double = 0) -> CVPixelBuffer? {
+                time: Double = 0, isPhoto: Bool = false) -> CVPixelBuffer? {
         let width = Int(input.extent.width)
         let height = Int(input.extent.height)
         guard let output = outputBuffer(width: width, height: height) else { return nil }
         var source = input
         if let pose = pose, Self.adornmentIds.contains(lensId) {
-            source = adornments.composite(over: source, pose: pose, lensId: lensId, time: time, intensity: intensity)
+            source = adornments.composite(over: source, pose: pose, lensId: lensId, time: time, intensity: intensity, isPhoto: isPhoto)
         }
+        if pose == nil && !isPhoto { adornments.resetExpressions() }
         // Face-only lenses never rasterize a full-frame transparent UIKit image.
         // Static text is composed once and covers the actual upright buffer size.
         if Self.lensIds.contains(lensId) || lensContext.hasOverlay {

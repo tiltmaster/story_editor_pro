@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
 
+export 'camera_effects_session.dart';
+
 /// Independent camera layers. Selecting a look never clears beauty or a lens.
 @immutable
 class CameraEffects {
@@ -9,6 +11,7 @@ class CameraEffects {
     this.beauty = 0,
     this.beautyEyes = 0,
     this.beautySlim = 0,
+    this.backgroundStyle = 0,
     this.faceLens = 'none',
     this.placeStyle = 'none',
     this.placeName = '',
@@ -17,12 +20,16 @@ class CameraEffects {
   final double beauty;
   final double beautyEyes;
   final double beautySlim;
+
+  /// 0: original, 1: studio, 2: sunset, 3: night, 4: background blur.
+  final int backgroundStyle;
   final String faceLens;
   final String placeStyle;
   final String placeName;
 
   int get layerCount =>
       (beauty > 0 || beautyEyes > 0 || beautySlim > 0 ? 1 : 0) +
+      (backgroundStyle != 0 ? 1 : 0) +
       (faceLens != 'none' ? 1 : 0) +
       (placeStyle != 'none' && placeName.isNotEmpty ? 1 : 0);
 
@@ -30,6 +37,7 @@ class CameraEffects {
     double? beauty,
     double? beautyEyes,
     double? beautySlim,
+    int? backgroundStyle,
     String? faceLens,
     String? placeStyle,
     String? placeName,
@@ -37,6 +45,7 @@ class CameraEffects {
     beauty: _amount(beauty, this.beauty),
     beautyEyes: _amount(beautyEyes, this.beautyEyes),
     beautySlim: _amount(beautySlim, this.beautySlim),
+    backgroundStyle: backgroundStyle?.clamp(0, 4) ?? this.backgroundStyle,
     faceLens: faceLens ?? this.faceLens,
     placeStyle: placeStyle ?? this.placeStyle,
     placeName: placeName == null

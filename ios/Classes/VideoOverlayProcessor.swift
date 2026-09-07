@@ -223,6 +223,9 @@ class VideoOverlayProcessor {
         beautyEyes: Double = 0.0,
         beautySlim: Double = 0.0,
         faceTimeline: [[String: Any]] = [],
+        mediaScale: Double = 1,
+        mediaOffsetX: Double = 0,
+        mediaOffsetY: Double = 0,
         shouldMuteAudio: Bool = false,
         trimStartMs: Int64 = 0,
         trimEndMs: Int64 = 0,
@@ -251,6 +254,9 @@ class VideoOverlayProcessor {
                 beautyEyes: beautyEyes,
                 beautySlim: beautySlim,
                 faceTimeline: faceTimeline,
+                mediaScale: mediaScale,
+                mediaOffsetX: mediaOffsetX,
+                mediaOffsetY: mediaOffsetY,
                 shouldMuteAudio: shouldMuteAudio,
                 trimStartMs: trimStartMs,
                 trimEndMs: trimEndMs,
@@ -363,6 +369,9 @@ class VideoOverlayProcessor {
         beautyEyes: Double,
         beautySlim: Double,
         faceTimeline: [[String: Any]],
+        mediaScale: Double,
+        mediaOffsetX: Double,
+        mediaOffsetY: Double,
         shouldMuteAudio: Bool = false,
         trimStartMs: Int64 = 0,
         trimEndMs: Int64 = 0,
@@ -475,6 +484,11 @@ class VideoOverlayProcessor {
                 filtered = source.cropped(to: targetExtent)
             }
 
+            // The editor scales media about the canvas center, then translates
+            // it in screen coordinates. Static and animated overlays stay fixed.
+            let transformedMedia = Self.applyMediaTransform(to: filtered, extent: targetExtent,
+                                                            scale: mediaScale, offsetX: mediaOffsetX, offsetY: mediaOffsetY)
+
             // Scale overlay to cover the requested output extent (aspect fill, centered).
             let scale = max(targetExtent.width / overlayCI.extent.width,
                             targetExtent.height / overlayCI.extent.height)
@@ -484,7 +498,7 @@ class VideoOverlayProcessor {
             scaledOverlay = scaledOverlay.transformed(by: CGAffineTransform(translationX: dx, y: dy))
 
             // Composite overlay on top of filtered video, crop to frame
-            var composited = scaledOverlay.composited(over: filtered).cropped(to: targetExtent)
+            var composited = scaledOverlay.composited(over: transformedMedia).cropped(to: targetExtent)
 
             // Animated GIF stickers on top, advanced to this frame's timestamp
             if !animatedLayers.isEmpty {
@@ -626,6 +640,21 @@ class VideoOverlayProcessor {
     ///
     /// CIColorMatrix works in 0–1 normalised space, so the bias becomes:
     ///   bias = brightness + (1 − contrast) × 0.5
+    static func applyMediaTransform(to image: CIImage, extent: CGRect,
+                                    scale requestedScale: Double, offsetX: Double, offsetY: Double) -> CIImage {
+        let scale = requestedScale.isFinite ? min(5, max(0.5, requestedScale)) : 1
+        let x = offsetX.isFinite ? min(10, max(-10, offsetX)) : 0
+        let y = offsetY.isFinite ? min(10, max(-10, offsetY)) : 0
+        let transformed = image
+            .transformed(by: CGAffineTransform(translationX: -extent.midX, y: -extent.midY))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(by: CGAffineTransform(translationX: extent.midX + CGFloat(x) * extent.width,
+                                              y: extent.midY - CGFloat(y) * extent.height))
+            .cropped(to: extent)
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1)).cropped(to: extent)
+        return transformed.composited(over: black).cropped(to: extent)
+    }
+
     func applyFaceWarp(to image: CIImage, eyes: CIVector, eyeAmount: Double, slimAmount: Double) -> CIImage? {
         if eyeAmount <= 0 && slimAmount <= 0 { return image }
         guard let kernel = faceWarpKernel else { return nil }

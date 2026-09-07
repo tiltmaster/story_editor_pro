@@ -9,15 +9,23 @@ import android.graphics.Shader
 import android.os.SystemClock
 import androidx.camera.effects.Frame
 import kotlin.math.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Vector artwork anchored to the tracked eye axis, animated by capture time. */
 internal class FaceAdornmentRenderer {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
+    private val expressions = FaceExpressionInteraction()
+    private var expressionLens = ""
+    private val expressionResetPending = AtomicBoolean(false)
+    fun clearExpressions() { expressionResetPending.set(true) }
 
     fun draw(frame: Frame, pose: FacePose, lensId: String, intensity: Float) {
-        val age = SystemClock.elapsedRealtime() - pose.receivedAtElapsedMs
+        val now = SystemClock.elapsedRealtime()
+        val age = now - pose.receivedAtElapsedMs
         if (age > 180) return
+        if (expressionResetPending.getAndSet(false) || expressionLens != lensId) { expressionLens = lensId; expressions.reset() }
+        val reaction = expressions.update(pose.expression, pose.receivedAtElapsedMs, now)
         val crop = frame.cropRect
         val rotated = frame.rotationDegrees % 180 != 0
         val width = (if (rotated) crop.height() else crop.width()).toFloat()
@@ -46,9 +54,10 @@ internal class FaceAdornmentRenderer {
             canvas.scale(distance, distance)
             if (lensId == "face_butterflies") {
                 for (i in 0 until 5) {
-                    val x = (i - 2) * .49f
-                    val y = -.86f - .24f * (1 - abs(i - 2) / 2f) + sin(time * 1.5f + i) * .055f
-                    butterfly(canvas, x, y, .20f + .025f * (i % 2), time * 4f + i, alpha)
+                    val x = (i - 2) * .49f * (1f + reaction.winkBurst * .45f)
+                    val y = -.86f - .24f * (1 - abs(i - 2) / 2f) + sin(time * 1.5f + i) * .055f - reaction.winkBurst * .55f
+                    butterfly(canvas, x, y, (.20f + .025f * (i % 2)) * (1f + reaction.winkBurst * .25f),
+                        time * 4f + i + reaction.winkBurst * 7f, alpha)
                 }
             } else if (lensId == "face_freckles") {
                 for (side in intArrayOf(-1, 1)) for (i in 0 until 18) {
@@ -59,9 +68,10 @@ internal class FaceAdornmentRenderer {
                 }
             } else {
                 for (i in 0 until 7) {
-                    val x = (i - 3) * 0.36f
-                    val y = -0.72f - 0.32f * (1 - abs(i - 3) / 3f) + sin(time * 1.8f + i) * 0.045f
-                    val radius = (0.09f + (i % 3) * 0.025f) * (1f + sin(time * 2.2f + i) * 0.12f)
+                    val burst = if (lensId == "face_hearts") reaction.mouthBurst else 0f
+                    val x = (i - 3) * 0.36f * (1f + burst * .55f)
+                    val y = -0.72f - 0.32f * (1 - abs(i - 3) / 3f) + sin(time * 1.8f + i) * 0.045f - burst * .48f
+                    val radius = (0.09f + (i % 3) * 0.025f) * (1f + sin(time * 2.2f + i) * 0.12f) * (1f + burst * .50f)
                     paint.color = if (lensId == "face_hearts")
                         Color.argb((230 * alpha).toInt().coerceIn(0,255), 255, 126 + i*8, 173 + i*7)
                     else Color.argb((235 * alpha).toInt().coerceIn(0,255), 255, 224 + i*3, 155 + i*9)

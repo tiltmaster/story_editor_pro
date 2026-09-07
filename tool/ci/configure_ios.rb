@@ -16,7 +16,10 @@ project.targets.each do |target|
 end
 tests = project.targets.find { |t| t.name == 'RunnerTests' }
 abort 'Generated host is missing RunnerTests' unless tests
-source = File.expand_path('../../ios/Tests/FaceARPipelineTests.swift', __dir__)
-reference = project.main_group.new_file(Pathname(source).relative_path_from(Pathname(File.join(host, 'ios'))).to_s)
-tests.source_build_phase.add_file_reference(reference)
+sources = Dir.glob(File.expand_path('../../ios/Tests/**/*.swift', __dir__)).sort
+abort 'No native XCTest sources found' if sources.empty?
+sources.each do |source|
+  reference = project.main_group.new_file(Pathname(source).relative_path_from(Pathname(File.join(host, 'ios'))).to_s)
+  tests.source_build_phase.add_file_reference(reference)
+end
 project.save

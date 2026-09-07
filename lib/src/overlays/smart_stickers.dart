@@ -808,6 +808,7 @@ class _StickerDrawerState extends State<_StickerDrawer> {
   String _stickerQuery = '';
   Timer? _stickerDebounce;
   String? _downloadingUrl;
+  bool _returningSticker = false;
   final TextEditingController _stickerSearch = TextEditingController();
 
   @override
@@ -880,10 +881,6 @@ class _StickerDrawerState extends State<_StickerDrawer> {
     final time = await captureStickerData(SmartStickerType.time, widget.locale);
     final date = await captureStickerData(SmartStickerType.date, widget.locale);
     final day = await captureStickerData(SmartStickerType.day, widget.locale);
-    final battery = await captureStickerData(
-      SmartStickerType.battery,
-      widget.locale,
-    );
     final greeting = await captureStickerData(
       SmartStickerType.greeting,
       widget.locale,
@@ -893,9 +890,15 @@ class _StickerDrawerState extends State<_StickerDrawer> {
       _time = time;
       _date = date;
       _day = day;
-      _battery = battery;
       _greeting = greeting;
     });
+    // Time/date need no device call. Publish them before waiting for battery,
+    // so a fast tap always adds a visible sticker.
+    final battery = await captureStickerData(
+      SmartStickerType.battery,
+      widget.locale,
+    );
+    if (mounted) setState(() => _battery = battery);
   }
 
   Future<String?> _detectLocation() async {
@@ -1003,12 +1006,31 @@ class _StickerDrawerState extends State<_StickerDrawer> {
     _returnSticker(SmartStickerType.location, {'name': area.trim()});
   }
 
-  void _returnSticker(SmartStickerType type, Map<String, String> data) {
-    HapticFeedback.lightImpact();
-    Navigator.pop(
-      context,
-      StickerDrawerResult.sticker(SmartStickerOverlay(type: type, data: data)),
-    );
+  Future<void> _returnSticker(
+    SmartStickerType type,
+    Map<String, String> data,
+  ) async {
+    if (_returningSticker) return;
+    _returningSticker = true;
+    try {
+      final resolved = data.isEmpty
+          ? await captureStickerData(type, widget.locale)
+          : data;
+      if (!mounted ||
+          resolved.isEmpty ||
+          !resolved.values.any((value) => value.isNotEmpty)) {
+        return;
+      }
+      HapticFeedback.lightImpact();
+      Navigator.pop(
+        context,
+        StickerDrawerResult.sticker(
+          SmartStickerOverlay(type: type, data: Map.of(resolved)),
+        ),
+      );
+    } finally {
+      _returningSticker = false;
+    }
   }
 
   @override

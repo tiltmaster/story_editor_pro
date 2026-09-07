@@ -14,22 +14,31 @@ import androidx.camera.core.CameraEffect
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.effects.OverlayEffect
 import androidx.camera.effects.Frame
+import com.storyeditorpro.CameraMeteringFrame
 import androidx.core.util.Consumer
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 internal class FaceArController(
     private val context: Context,
     private val modelAssetPath: String,
+    private val segmentationAssetPath: String,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler, AutoCloseable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val trackerExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "story-ar-tracker").apply { priority = Thread.NORM_PRIORITY }
     }
+    private val segmentationExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "story-person-segmentation").apply { priority = Thread.NORM_PRIORITY }
+    }
+    private val segmentationInitializing = AtomicBoolean(false)
+    private val backgroundEpoch = AtomicInteger()
+    private val backgroundRenderer = PersonBackgroundRenderer()
     private val supported =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
     private val faceTrackingSupported =
@@ -47,6 +56,9 @@ internal class FaceArController(
     @Volatile private var settings = FaceArSettings(FaceArContract.LENS_NONE, 1f)
     @Volatile private var beautyEyes = 0f
     @Volatile private var beautySlim = 0f
+    @Volatile private var backgroundStyle = 0
+    @Volatile private var segmenter: MediaPipePersonSegmenter? = null
+    private var lastBackgroundReady: Boolean? = null
     @Volatile private var creativeContext = CreativeLensContext()
     @Volatile private var tracker: MediaPipeFaceTracker? = null
     @Volatile private var eventSink: EventChannel.EventSink? = null
@@ -56,6 +68,8 @@ internal class FaceArController(
     @Volatile private var closed = false
     private var lastPoseEventMs = 0L
     private var lastPoseEventTracked = false
+    @Volatile var meteringFrame: CameraMeteringFrame? = null
+        private set
 
     private fun needsFaceTracking(): Boolean = settings.lensId in FaceArContract.faceLensIds ||
         beautyEyes > 0f || beautySlim > 0f
@@ -70,6 +84,7 @@ internal class FaceArController(
                     "supports3D" to false,
                     "supportsRecording" to supported,
                     "faceTracking" to faceTrackingSupported,
+                    "backgrounds" to (supported && assetExists(segmentationAssetPath)),
                     "preview" to supported,
                     "recording" to supported,
                     "lensIds" to if (supported) {
@@ -81,7 +96,10 @@ internal class FaceArController(
             "prepare" -> {
                 val decision = machine.beginPrepare()
                 emitState(decision.state)
-                if (decision.startWork) initializeAsync()
+                if (decision.startWork) {
+                    if (needsFaceTracking()) initializeAsync() else emitState(machine.markReady())
+                    if (backgroundStyle > 0) initializeBackgroundAsync()
+                }
                 result.success(mapOf("accepted" to decision.accepted))
             }
             "setEnabled" -> {
@@ -90,12 +108,13 @@ internal class FaceArController(
                     result.error("INVALID_ARGS", "enabled is required", null)
                 } else {
                     val decision = machine.setEnabled(enabled)
-                    if (!enabled) clearTracking()
+                    if (!enabled) { clearTracking(); clearBackground() }
                     emitState(decision.state)
                     if (decision.startWork) {
                         if (needsFaceTracking()) initializeAsync()
                         else emitState(machine.markReady())
                     }
+                    if (enabled && backgroundStyle > 0) initializeBackgroundAsync()
                     refreshAnalysis()
                     result.success(mapOf("state" to machine.state.wire, "faceReady" to (tracker != null)))
                 }
@@ -114,6 +133,9 @@ internal class FaceArController(
                             }.coerceIn(0f, 1f)
                         val nextBeautyEyes = beautyArgument("beautyEyes")
                         val nextBeautySlim = beautyArgument("beautySlim")
+                        val nextBackgroundStyle = (call.argument<Number>("backgroundStyle")?.toInt() ?: 0).also {
+                            require(it in 0..4)
+                        }
                         val nextContext = CreativeLensContext(
                             languageCode = call.argument<String>("languageCode")
                                 ?.take(8)
@@ -136,10 +158,15 @@ internal class FaceArController(
                         settings = nextSettings
                         beautyEyes = nextBeautyEyes
                         beautySlim = nextBeautySlim
+                        if (backgroundStyle != nextBackgroundStyle) {
+                            backgroundStyle = nextBackgroundStyle
+                            clearBackground()
+                        }
                         creativeContext = nextContext
                         if (!needsFaceTracking()) clearTracking()
                         if (needsFaceTracking() && tracker == null) initializeAsync()
-                        if (settings.lensId in FaceArContract.composedLensIds || creativeContext.hasOverlay) {
+                        if (backgroundStyle > 0 && segmenter == null) initializeBackgroundAsync()
+                        if (settings.lensId in FaceArContract.composedLensIds || creativeContext.hasOverlay || backgroundStyle > 0) {
                             // Static authored lenses never wait for MediaPipe.
                             // They become available as soon as CameraX has an
                             // OverlayEffect surface, while face preparation can
@@ -183,7 +210,8 @@ internal class FaceArController(
 
     private fun refreshAnalysis() {
         val localAnalysis = analysis ?: return
-        if (!machine.isActive() || !needsFaceTracking() || tracker == null) {
+        if (!machine.isActive() ||
+            ((!needsFaceTracking() || tracker == null) && (backgroundStyle == 0 || segmenter == null))) {
             // Normal and text/place effects do not need a YUV stream or ML
             // callback. OverlayEffect now renders directly from camera frames.
             localAnalysis.clearAnalyzer()
@@ -191,10 +219,11 @@ internal class FaceArController(
         }
         localAnalysis.setAnalyzer(trackerExecutor) { image ->
             val localTracker = tracker
-            if (!machine.isActive() || !needsFaceTracking() || localTracker == null) {
+            if (!machine.isActive()) {
                 image.close()
             } else {
-                localTracker.detect(image)
+                if (backgroundStyle > 0) segmenter?.submit(image, backgroundStyle, backgroundEpoch.get())
+                if (needsFaceTracking() && localTracker != null) localTracker.detect(image) else image.close()
             }
         }
     }
@@ -221,6 +250,9 @@ internal class FaceArController(
             }
             try {
                 effect.setOnDrawListener { frame ->
+                    val currentGeometry = OverlayFrameCoordinates.geometry(frame)
+                    val sensorTransform = FloatArray(9).also { frame.sensorToBufferTransform.getValues(it) }
+                    meteringFrame = CameraMeteringFrame(currentGeometry, sensorTransform)
                     val localPose = pose.get()
                     val localSettings = settings
                     val localContext = creativeContext
@@ -229,19 +261,23 @@ internal class FaceArController(
                         (localSettings.lensId in FaceArContract.composedLensIds || localContext.hasOverlay)
                     val drawFace = machine.isActive() && localPose != null &&
                         localSettings.lensId in FaceArContract.adornmentLensIds
+                    val background = if (machine.isActive() && backgroundStyle > 0)
+                        backgroundRenderer.current(backgroundStyle, backgroundEpoch.get()) else null
                     // getOverlayCanvas synchronizes a SurfaceTexture. Calling
                     // it on every unfiltered frame stalled startup unnecessarily.
                     // Clear once after removing artwork; then pass through.
-                    if (drawCreative || drawFace || overlayHadArtwork) {
+                    if (drawCreative || drawFace || background != null || overlayHadArtwork) {
                         frame.overlayCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                        if (background != null) backgroundRenderer.draw(frame, background)
                         if (drawCreative) creativeRenderer.draw(
                             frame, localSettings.lensId, localSettings.intensity, localContext,
                         )
                         if (drawFace) adornmentRenderer.draw(
                             frame, requireNotNull(localPose), localSettings.lensId, localSettings.intensity,
                         )
-                        overlayHadArtwork = drawCreative || drawFace
+                        overlayHadArtwork = drawCreative || drawFace || background != null
                     }
+                    if (backgroundStyle > 0) emitBackground(background != null)
                     true
                 }
             } catch (error: Throwable) {
@@ -298,13 +334,58 @@ internal class FaceArController(
 
     private fun onTrackingResult(@Suppress("UNUSED_PARAMETER") timestampNs: Long, next: FacePose?) {
         val smoothPose = smoother.update(next)
+        if (smoothPose == null) adornmentRenderer.clearExpressions()
         pose.set(smoothPose)
         emitTracking(smoothPose != null)
         // A zero-depth OverlayEffect consumes the freshest pose at render
         // time. Camera delivery is never held behind inference or model setup.
     }
 
+    private fun initializeBackgroundAsync() {
+        if (closed || segmenter != null || !segmentationInitializing.compareAndSet(false, true)) return
+        val expectedGeneration = generation.get()
+        segmentationExecutor.execute {
+            try {
+                if (closed || expectedGeneration != generation.get() || backgroundStyle == 0) return@execute
+                val local = MediaPipePersonSegmenter(context, segmentationAssetPath, segmentationExecutor,
+                    onResult = { background ->
+                        if (!closed && expectedGeneration == generation.get() && machine.isActive() &&
+                            background.epoch == backgroundEpoch.get() && background.style == backgroundStyle) {
+                            backgroundRenderer.update(background)
+                        }
+                    },
+                    onError = {
+                        backgroundRenderer.clear()
+                        emitBackground(false, "BACKGROUND_FAILED")
+                    })
+                if (closed || expectedGeneration != generation.get()) { local.close(); return@execute }
+                segmenter = local
+                emitState(machine.markReady())
+                refreshAnalysis()
+            } catch (_: Throwable) { emitBackground(false, "BACKGROUND_PREPARE_FAILED") }
+            finally { segmentationInitializing.set(false) }
+        }
+    }
+
+    private fun clearBackground() {
+        backgroundEpoch.incrementAndGet()
+        backgroundRenderer.clear()
+        emitBackground(false, force = true)
+    }
+
+    @Synchronized private fun emitBackground(ready: Boolean, code: String? = null, force: Boolean = false) {
+        if (!force && code == null && ready == lastBackgroundReady) return
+        lastBackgroundReady = ready
+        val event = mutableMapOf<String, Any>("type" to "background", "backgroundReady" to ready)
+        if (code != null) {
+            event["code"] = code
+            event["message"] = "Background processing is unavailable"
+        }
+        emit(event)
+    }
+
     private fun clearTracking() {
+        adornmentRenderer.clearExpressions()
         smoother.clear()
         pose.set(null)
         emitTracking(false)
@@ -318,6 +399,8 @@ internal class FaceArController(
         // A previous camera's sensor transform cannot be reused for the next
         // camera, even though its face tracker instance can be kept warm.
         clearTracking()
+        clearBackground()
+        meteringFrame = null
         tracker?.discardPendingFrames()
     }
 
@@ -365,12 +448,16 @@ internal class FaceArController(
         generation.incrementAndGet()
         emitState(machine.reset())
         clearTracking()
+        clearBackground()
         analysis?.clearAnalyzer()
         val staleTracker = tracker
         tracker = null
         if (staleTracker != null) {
             trackerExecutor.execute { staleTracker.close() }
         }
+        val staleSegmenter = segmenter
+        segmenter = null
+        if (staleSegmenter != null) segmentationExecutor.execute { staleSegmenter.close() }
     }
 
     private fun emitState(state: FaceArState) {
@@ -425,6 +512,7 @@ internal class FaceArController(
         eventSink = null
         machine.dispose()
         pose.set(null)
+        backgroundRenderer.clear()
         analysis?.clearAnalyzer()
         overlayEffect?.clearOnDrawListener()
         overlayEffect?.close()
@@ -435,6 +523,10 @@ internal class FaceArController(
         tracker = null
         if (staleTracker != null) trackerExecutor.execute { staleTracker.close() }
         trackerExecutor.shutdown()
+        val staleSegmenter = segmenter
+        segmenter = null
+        if (staleSegmenter != null) segmentationExecutor.execute { staleSegmenter.close() }
+        segmentationExecutor.shutdown()
     }
 
     companion object {

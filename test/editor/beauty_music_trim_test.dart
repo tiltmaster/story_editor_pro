@@ -148,7 +148,7 @@ void main() {
         );
         expect(
           androidController,
-          contains('drawCreative || drawFace || overlayHadArtwork'),
+          contains('drawCreative || drawFace || background != null || overlayHadArtwork'),
         );
         expect(androidController, isNot(contains('drawFrameAsync(')));
         expect(

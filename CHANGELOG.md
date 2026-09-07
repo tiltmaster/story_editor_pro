@@ -1,3 +1,13 @@
+## 1.7.0
+
+- Added native person segmentation and compositing for Studio, Sunset, Night and background blur. Models run locally only when selected; preview, photos and recordings use the native compositor.
+- Added measured mouth-open reactions to hearts and wink reactions to butterflies, with hysteresis and cooldown in native preview/photo/video artwork.
+- Added real focus metering, exposure compensation, device zoom limits, photo flash and recording torch handling on Android/iOS.
+- Added slide-to-lock recording, double-tap camera switching, directly tappable look bubbles, persistent lens favorites, remembered effects categories, and category reset with Undo.
+- Corrected preview aspect fitting and touch-to-camera coordinate mapping; condensed the side rail and localized tool labels and recording guidance for Arabic/RTL.
+- Added chronological editor undo/redo, unsaved capture protection and recoverable video loading errors.
+- Fixed saved-video mute, smart stickers and media crop/position; Share now returns only after export succeeds and the file exists.
+
 ## 1.6.0
 
 ### Camera changes after Galaxy S23 Ultra feedback

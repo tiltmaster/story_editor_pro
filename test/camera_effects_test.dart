@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:story_editor_pro/src/config/story_editor_config.dart';
 import 'package:story_editor_pro/src/config/story_editor_strings.dart';
 import 'package:story_editor_pro/src/camera_effects.dart';
@@ -14,12 +15,200 @@ import 'package:story_editor_pro/src/native_ar_controller.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('favorite effects persist locally and reject empty effects', () async {
+    final session = CameraEffectsUiSession();
+    await session.toggleFavorite('lens', NativeArLensIds.butterflies);
+    await session.toggleFavorite('look', 'nightneon');
+    await session.toggleFavorite('lens', 'none');
+    final reopened = CameraEffectsUiSession();
+    await reopened.loadFavorites();
+    expect(reopened.isFavorite('lens', NativeArLensIds.butterflies), isTrue);
+    expect(reopened.isFavorite('look', 'nightneon'), isTrue);
+    expect(reopened.isFavorite('lens', 'none'), isFalse);
+    await reopened.toggleFavorite('look', 'nightneon');
+    expect(reopened.isFavorite('look', 'nightneon'), isFalse);
+  });
+
+  testWidgets(
+    'lenses open first and category and face controls survive reopening',
+    (tester) async {
+      final session = CameraEffectsUiSession();
+      await tester.pumpWidget(_app(child: _panel(uiSession: session)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('effects-choices-2')), findsOneWidget);
+      expect(find.text('Tap a lens · Swipe for more'), findsOneWidget);
+      await _tap(tester, 'effects-tab-1');
+      await _tap(tester, 'beauty-control-2');
+      await tester.pumpWidget(
+        _app(
+          child: _panel(key: const ValueKey('reopened'), uiSession: session),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(session.category, 1);
+      expect(session.beautyControl, 2);
+      expect(find.text('Contour'), findsNWidgets(2));
+      expect(find.byKey(const ValueKey('effects-choices-2')), findsNothing);
+    },
+  );
+
+  testWidgets('favorite lens pins near the start and stays selected', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final session = CameraEffectsUiSession();
+    CameraEffects latest = const CameraEffects();
+    await tester.pumpWidget(
+      _app(
+        child: _panel(
+          uiSession: session,
+          onChanged: (effects, _, __) => latest = effects,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const ValueKey('effects-choices-2')),
+      const Offset(-250, 0),
+    );
+    await tester.pumpAndSettle();
+    await _tap(tester, 'effects-card-${NativeArLensIds.butterflies}');
+    await tester.tap(find.byTooltip('Save to favorites'));
+    await tester.pumpAndSettle();
+    expect(session.isFavorite('lens', NativeArLensIds.butterflies), isTrue);
+    expect(latest.faceLens, NativeArLensIds.butterflies);
+    expect(
+      tester
+          .getCenter(
+            find.byKey(ValueKey('effects-card-${NativeArLensIds.butterflies}')),
+          )
+          .dx,
+      lessThan(200),
+    );
+    expect(find.byTooltip('Remove from favorites'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('browsing position survives changing category and reopening', (
+    tester,
+  ) async {
+    final session = CameraEffectsUiSession(category: 0);
+    await tester.pumpWidget(_app(child: _panel(uiSession: session)));
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const ValueKey('effects-choices-0')),
+      const Offset(-650, 0),
+    );
+    await tester.pumpAndSettle();
+    final offset = session.scrollOffsets[0]!;
+    expect(offset, greaterThan(100));
+    await _tap(tester, 'effects-tab-2');
+    await _tap(tester, 'effects-tab-0');
+    expect(session.scrollOffsets[0], closeTo(offset, 1));
+    await tester.pumpWidget(
+      _app(
+        child: _panel(key: const ValueKey('reopened'), uiSession: session),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(session.scrollOffsets[0], closeTo(offset, 1));
+  });
+
+  testWidgets('reopening a pending place lookup completes automatically', (
+    tester,
+  ) async {
+    final session = CameraEffectsUiSession();
+    final city = Completer<String>();
+    final location = CameraPlaceSession(resolver: (_) => city.future);
+    CameraEffects latest = const CameraEffects();
+    Widget panel(String key) => _app(
+      child: _panel(
+        key: ValueKey(key),
+        uiSession: session,
+        locationSession: location,
+        onChanged: (effects, _, __) => latest = effects,
+      ),
+    );
+    await tester.pumpWidget(panel('first'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('effects-tab-3')));
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    city.complete('Kuwait City');
+    await tester.pump();
+    await tester.pumpWidget(panel('second'));
+    await tester.pumpAndSettle();
+    expect(latest.placeName, 'Kuwait City');
+    expect(latest.placeStyle, 'postcard');
+    await _tap(tester, 'effects-card-place-none');
+    await tester.pumpWidget(panel('third'));
+    await tester.pumpAndSettle();
+    expect(latest.placeStyle, 'none', reason: 'Explicit Off remains off');
+  });
+
+  testWidgets('reset can be undone without losing any selected layers', (
+    tester,
+  ) async {
+    const original = CameraEffects(
+      beauty: .65,
+      beautyEyes: .3,
+      beautySlim: .2,
+      faceLens: NativeArLensIds.celestial,
+      placeStyle: 'editorial',
+      placeName: 'مدينة الكويت',
+    );
+    CameraEffects latest = original;
+    await tester.pumpWidget(
+      _app(
+        locale: const Locale('ar'),
+        child: _panel(
+          effects: original,
+          onChanged: (effects, _, __) => latest = effects,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('إعادة ضبط التأثيرات'));
+    await tester.pumpAndSettle();
+    expect(latest.layerCount, 0);
+    expect(find.text('تراجع'), findsOneWidget);
+    await tester.tap(find.text('تراجع'));
+    await tester.pumpAndSettle();
+    expect(latest, same(original));
+    expect(find.text('تراجع'), findsNothing);
+  });
+
+  testWidgets('unavailable lens explains why a tap has no camera effect', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        child: _panel(
+          faceLenses: const {},
+          onChanged: (_, __, ___) =>
+              fail('Unsupported lens must not be selected'),
+        ),
+      ),
+    );
+    await _tap(tester, 'effects-tab-2');
+    await _tap(tester, 'effects-card-${NativeArLensIds.celestial}');
+    expect(
+      find.text('This effect is unavailable on this camera.'),
+      findsOneWidget,
+    );
+  });
 
   test('independent beauty controls and layers preserve and bound values', () {
     final effects = const CameraEffects().copyWith(
       beauty: .5,
       beautyEyes: .25,
       beautySlim: .4,
+      backgroundStyle: 2,
       faceLens: NativeArLensIds.heartHalo,
       placeStyle: 'postcard',
       placeName: '  مدينة الكويت  ',
@@ -30,15 +219,129 @@ void main() {
     expect(edited.beautySlim, .4);
     expect(edited.faceLens, NativeArLensIds.heartHalo);
     expect(edited.placeName, 'مدينة الكويت');
-    expect(edited.layerCount, 3);
+    expect(edited.backgroundStyle, 2);
+    expect(edited.layerCount, 4);
+    expect(edited.copyWith(backgroundStyle: 8).backgroundStyle, 4);
+    expect(edited.copyWith(backgroundStyle: -1).backgroundStyle, 0);
     expect(edited.copyWith(beauty: double.nan).beauty, 0);
     expect(edited.copyWith(beautyEyes: double.infinity).beautyEyes, 0);
     expect(edited.copyWith(beautySlim: double.nan).beautySlim, 0);
     expect(edited.copyWith(placeName: '🌍' * 100).placeName.runes.length, 64);
-    expect(edited.copyWith(placeName: '').layerCount, 2);
+    expect(edited.copyWith(placeName: '').layerCount, 3);
     expect(const CameraEffects(beautyEyes: .5).layerCount, 1);
     expect(const CameraEffects(beautySlim: .5).layerCount, 1);
+    expect(const CameraEffects(backgroundStyle: 4).layerCount, 1);
   });
+
+  testWidgets(
+    'background stays independent from lenses and reset can undo it',
+    (tester) async {
+      CameraEffects latest = const CameraEffects(
+        beauty: .35,
+        faceLens: NativeArLensIds.heartHalo,
+      );
+      await tester.pumpWidget(
+        _app(
+          child: _panel(
+            effects: latest,
+            supportsBackground: true,
+            onChanged: (effects, _, __) => latest = effects,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _tap(tester, 'effects-tab-4');
+      await _tap(tester, 'effects-card-background-2');
+      expect(latest.backgroundStyle, 2);
+      expect(latest.faceLens, NativeArLensIds.heartHalo);
+      expect(latest.beauty, .35);
+      await tester.tap(find.byTooltip('Reset effects'));
+      await tester.pumpAndSettle();
+      expect(latest.backgroundStyle, 0);
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(latest.backgroundStyle, 2);
+      expect(latest.faceLens, NativeArLensIds.heartHalo);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'background choices stay unavailable until native capability arrives',
+    (tester) async {
+      await tester.pumpWidget(
+        _app(
+          child: _panel(
+            onChanged: (_, __, ___) => fail(
+              'Background must not activate before capability discovery',
+            ),
+          ),
+        ),
+      );
+      await _tap(tester, 'effects-tab-4');
+      await _tap(tester, 'effects-card-background-1');
+      expect(
+        find.text('This effect is unavailable on this camera.'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'Arabic background readiness survives pose events and explains retry',
+    (tester) async {
+      final events = StreamController<NativeArEvent>.broadcast();
+      addTearDown(events.close);
+      await tester.pumpWidget(
+        _app(
+          locale: const Locale('ar'),
+          child: _panel(
+            supportsBackground: true,
+            effects: const CameraEffects(backgroundStyle: 1),
+            uiSession: CameraEffectsUiSession(category: 4),
+            arEvents: events.stream,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('جارٍ تجهيز الخلفية…'), findsOneWidget);
+      events.add(
+        const NativeArEvent(
+          type: NativeArEventType.background,
+          state: NativeArRuntimeState.active,
+          backgroundReady: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      events.add(
+        const NativeArEvent(
+          type: NativeArEventType.pose,
+          state: NativeArRuntimeState.active,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('يبقى الشخص في المقدمة · صور وفيديو'), findsOneWidget);
+      events.add(
+        const NativeArEvent(
+          type: NativeArEventType.error,
+          state: NativeArRuntimeState.unavailable,
+          failure: NativeArFailure(
+            code: 'background_error',
+            message: 'Native English error',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('اختر إيقاف، ثم خلفية للمحاولة مجدداً.'),
+        findsOneWidget,
+      );
+      expect(find.text('Native English error'), findsNothing);
+      await _tap(tester, 'effects-card-background-0');
+      await _tap(tester, 'effects-card-background-1');
+      expect(find.text('جارٍ تجهيز الخلفية…'), findsOneWidget);
+    },
+  );
 
   test(
     'location session is lazy, deduplicates and caches by language',
@@ -138,7 +441,7 @@ void main() {
       tester.getCenter(find.text('ألوان')).dx,
       greaterThan(tester.getCenter(find.text('جمال')).dx),
     );
-    for (final tab in [1, 2, 3, 0]) {
+    for (final tab in [1, 2, 3, 4, 0]) {
       await _tap(tester, 'effects-tab-$tab');
       expect(
         tester.takeException(),
@@ -463,21 +766,28 @@ CameraEffectsPanel _panel({
   CameraEffects effects = const CameraEffects(),
   bool supportsBeauty = true,
   bool supportsFaceBeauty = false,
+  bool supportsBackground = false,
   bool supportsPlaces = true,
   CameraPlaceSession? locationSession,
+  CameraEffectsUiSession? uiSession,
+  Set<String> faceLenses = NativeArLensIds.face,
   VoidCallback? onClose,
+  Stream<NativeArEvent>? arEvents,
   void Function(CameraEffects, String, double)? onChanged,
 }) => CameraEffectsPanel(
   key: key,
   effects: effects,
   lookId: 'none',
   lookStrength: .85,
-  supportedFaceLenses: NativeArLensIds.face,
+  supportedFaceLenses: faceLenses,
   supportsPlaces: supportsPlaces,
   supportsBeauty: supportsBeauty,
   supportsFaceBeauty: supportsFaceBeauty,
+  supportsBackground: supportsBackground,
   locationSession: locationSession,
+  uiSession: uiSession,
   onClose: onClose,
+  arEvents: arEvents,
   onChanged: onChanged ?? (_, __, ___) {},
 );
 

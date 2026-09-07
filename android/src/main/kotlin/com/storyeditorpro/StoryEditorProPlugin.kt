@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.graphics.PointF
+import android.hardware.camera2.CameraCharacteristics
 import android.media.ExifInterface
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +16,8 @@ import android.util.Rational
 import android.util.Range
 import android.view.Surface
 import androidx.camera.core.*
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.video.*
 import androidx.camera.video.VideoCapture
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -37,6 +41,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import com.google.common.util.concurrent.ListenableFuture
 
 class StoryEditorProPlugin :
     FlutterPlugin,
@@ -69,6 +75,9 @@ class StoryEditorProPlugin :
     private var previewWidth = 0
     private var previewHeight = 0
     private var cameraTargetRotation = Surface.ROTATION_0
+    private var requestedFlashMode = ImageCapture.FLASH_MODE_OFF
+    private var recordingStartPending = false
+    private var cancelRecordingStart: (() -> Unit)? = null
 
     companion object {
         private const val CAMERA_PERMISSION_REQUEST_CODE = 1001
@@ -88,7 +97,9 @@ class StoryEditorProPlugin :
             flutterAssets,
             "assets/ar/models/face_landmarker.task",
         )
-        arController = FaceArController(context, modelAssetPath)
+        arController = FaceArController(context, modelAssetPath, resolveFlutterAsset(
+            flutterAssets, "assets/ar/models/selfie_segmenter.tflite",
+        ))
         arMethodChannel = MethodChannel(
             flutterPluginBinding.binaryMessenger,
             FaceArContract.METHOD_CHANNEL,
@@ -129,6 +140,9 @@ class StoryEditorProPlugin :
             "switchCamera" -> switchCamera(result)
             "setFlashMode" -> setFlashMode(call, result)
             "setZoomLevel" -> setZoomLevel(call, result)
+            "getCameraControls" -> getCameraControls(result)
+            "setFocusPoint" -> setFocusPoint(call, result)
+            "setExposureOffset" -> setExposureOffset(call, result)
             "getLastGalleryImage" -> getLastGalleryImage(result)
             "startVideoRecording" -> startVideoRecording(call, result)
             "stopVideoRecording" -> stopVideoRecording(result)
@@ -617,7 +631,7 @@ class StoryEditorProPlugin :
                 result.error("CAMERA_NOT_INITIALIZED", "Camera not initialized", null)
                 return
             }
-            if (recording != null) {
+            if (recording != null || recordingStartPending) {
                 result.error(
                     "RECORDING_ACTIVE",
                     "Camera cannot be switched while recording",
@@ -698,7 +712,10 @@ class StoryEditorProPlugin :
         imageAnalysis?.let { group.addUseCase(it) }
         arController.cameraEffectOrNull()?.let { group.addEffect(it) }
         arController.onCameraRebound()
-        return cameraProvider?.bindToLifecycle(owner, selector, group.build())
+        return cameraProvider?.bindToLifecycle(owner, selector, group.build())?.also {
+            if (!it.cameraInfo.hasFlashUnit()) requestedFlashMode = ImageCapture.FLASH_MODE_OFF
+            localImageCapture.flashMode = requestedFlashMode
+        }
     }
 
     private fun Int.toCameraLens(): CameraLens =
@@ -711,21 +728,106 @@ class StoryEditorProPlugin :
             CameraSelector.LENS_FACING_BACK
         }
 
+    private fun getCameraControls(result: Result) {
+        val localCamera = camera ?: return result.error("NOT_INITIALIZED", "Camera is not initialized", null)
+        val info = localCamera.cameraInfo
+        val zoom = info.zoomState.value
+        val exposure = info.exposureState
+        val step = exposure.exposureCompensationStep.toDouble()
+        val exposureSupported = exposure.isExposureCompensationSupported && step > 0.0
+        val point = SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(.5f, .5f)
+        val focus = info.isFocusMeteringSupported(FocusMeteringAction.Builder(point).build())
+        result.success(mapOf(
+            "minZoom" to (zoom?.minZoomRatio?.toDouble() ?: 1.0),
+            "maxZoom" to (zoom?.maxZoomRatio?.toDouble() ?: 1.0),
+            "minExposure" to if (exposureSupported) exposure.exposureCompensationRange.lower * step else 0.0,
+            "maxExposure" to if (exposureSupported) exposure.exposureCompensationRange.upper * step else 0.0,
+            "exposureStep" to if (exposureSupported) step else 0.0,
+            "focus" to focus,
+            "exposure" to exposureSupported,
+            "torch" to info.hasFlashUnit(),
+        ))
+    }
+
+    @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
+    private fun setFocusPoint(call: MethodCall, result: Result) {
+        val localCamera = camera ?: return result.error("NOT_INITIALIZED", "Camera is not initialized", null)
+        val x = call.argument<Number>("x")?.toDouble()
+        val y = call.argument<Number>("y")?.toDouble()
+        if (x == null || y == null || !x.isFinite() || !y.isFinite()) {
+            result.error("INVALID_ARGS", "A finite focus point is required", null); return
+        }
+        val frame = arController.meteringFrame ?: run {
+            result.error("CAMERA_NOT_READY", "Wait for the camera preview before focusing", null); return
+        }
+        val active = Camera2CameraInfo.from(localCamera.cameraInfo)
+            .getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            ?: run { result.success(false); return }
+        try {
+            val sensor = CameraSensorBounds(active.left.toFloat(), active.top.toFloat(), active.width().toFloat(), active.height().toFloat())
+            val normalized = CameraControlPolicy.focusPoint(x, y, frame, sensor)
+            val factory = object : MeteringPointFactory(Rational(active.width(), active.height())) {
+                override fun convertPoint(x: Float, y: Float): PointF = PointF(x, y)
+            }
+            val point = factory.createPoint(normalized.first, normalized.second, .12f)
+            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+                .setAutoCancelDuration(4, TimeUnit.SECONDS).build()
+            if (!localCamera.cameraInfo.isFocusMeteringSupported(action)) { result.success(false); return }
+            completeCameraOperation(localCamera.cameraControl.startFocusAndMetering(action), result, "FOCUS_FAILED")
+        } catch (_: IllegalArgumentException) {
+            result.error("FOCUS_FAILED", "Could not map the focus point", null)
+        }
+    }
+
+    private fun setExposureOffset(call: MethodCall, result: Result) {
+        val localCamera = camera ?: return result.error("NOT_INITIALIZED", "Camera is not initialized", null)
+        val value = call.argument<Number>("value")?.toDouble()
+        if (value == null || !value.isFinite()) { result.error("INVALID_ARGS", "A finite exposure value is required", null); return }
+        val state = localCamera.cameraInfo.exposureState
+        val step = state.exposureCompensationStep.toDouble()
+        if (!state.isExposureCompensationSupported || step <= 0.0) { result.success(false); return }
+        val index = CameraControlPolicy.exposureIndex(value, step,
+            state.exposureCompensationRange.lower, state.exposureCompensationRange.upper)
+        completeCameraOperation(localCamera.cameraControl.setExposureCompensationIndex(index), result, "EXPOSURE_FAILED")
+    }
+
     private fun setFlashMode(call: MethodCall, result: Result) {
-        val mode = call.argument<String>("mode") ?: "off"
-        val flashMode = when (mode) {
+        val localCamera = camera ?: return result.error("NOT_INITIALIZED", "Camera is not initialized", null)
+        val mode = when (call.argument<String>("mode")) {
             "on" -> ImageCapture.FLASH_MODE_ON
             "auto" -> ImageCapture.FLASH_MODE_AUTO
-            else -> ImageCapture.FLASH_MODE_OFF
+            "off" -> ImageCapture.FLASH_MODE_OFF
+            else -> { result.error("INVALID_ARGS", "Unsupported flash mode", null); return }
         }
-        imageCapture?.flashMode = flashMode
-        result.success(true)
+        if (mode != ImageCapture.FLASH_MODE_OFF && !localCamera.cameraInfo.hasFlashUnit()) {
+            result.success(false); return
+        }
+        requestedFlashMode = mode
+        imageCapture?.flashMode = mode
+        if (recording != null || recordingStartPending) {
+            completeCameraOperation(localCamera.cameraControl.enableTorch(mode == ImageCapture.FLASH_MODE_ON), result, "TORCH_FAILED")
+        } else result.success(true)
     }
 
     private fun setZoomLevel(call: MethodCall, result: Result) {
-        val level = call.argument<Double>("level") ?: 1.0
-        camera?.cameraControl?.setZoomRatio(level.toFloat())
-        result.success(true)
+        val localCamera = camera ?: return result.error("NOT_INITIALIZED", "Camera is not initialized", null)
+        val level = call.argument<Number>("level")?.toDouble()
+        if (level == null || !level.isFinite()) { result.error("INVALID_ARGS", "A finite zoom value is required", null); return }
+        val state = localCamera.cameraInfo.zoomState.value ?: run { result.success(false); return }
+        val zoom = CameraControlPolicy.zoom(level, state.minZoomRatio, state.maxZoomRatio)
+        completeCameraOperation(localCamera.cameraControl.setZoomRatio(zoom), result, "ZOOM_FAILED")
+    }
+
+    private fun <T> completeCameraOperation(future: ListenableFuture<T>, result: Result, code: String) {
+        future.addListener({
+            try { future.get(); result.success(true) }
+            catch (_: Exception) { result.error(code, "The camera could not apply this control", null) }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    private fun turnOffRecordingTorch(localCamera: Camera? = camera) {
+        if (localCamera?.cameraInfo?.hasFlashUnit() != true) return
+        try { localCamera.cameraControl.enableTorch(false) } catch (_: Exception) { }
     }
 
     private fun exportVideoWithOverlay(call: MethodCall, result: Result) {
@@ -741,6 +843,9 @@ class StoryEditorProPlugin :
         val beautyEyes = call.argument<Number>("beautyEyes")?.toDouble() ?: 0.0
         val beautySlim = call.argument<Number>("beautySlim")?.toDouble() ?: 0.0
         val faceTimeline = call.argument<List<Map<String, Any?>>>("faceTimeline") ?: emptyList()
+        val mediaScale = call.argument<Number>("mediaScale")?.toDouble() ?: 1.0
+        val mediaOffsetX = call.argument<Number>("mediaOffsetX")?.toDouble() ?: 0.0
+        val mediaOffsetY = call.argument<Number>("mediaOffsetY")?.toDouble() ?: 0.0
         val shouldMuteAudio = call.argument<Boolean>("shouldMuteAudio") ?: false
         val trimStartMs = call.argument<Number>("trimStartMs")?.toLong() ?: 0L
         val trimEndMs = call.argument<Number>("trimEndMs")?.toLong() ?: 0L
@@ -755,6 +860,10 @@ class StoryEditorProPlugin :
         if (trimStartMs < 0L || trimEndMs < 0L ||
             (trimEndMs > 0L && trimEndMs <= trimStartMs)) {
             result.error("INVALID_TRIM", "The video trim range is invalid", null)
+            return
+        }
+        if (!mediaScale.isFinite() || !mediaOffsetX.isFinite() || !mediaOffsetY.isFinite()) {
+            result.error("INVALID_TRANSFORM", "The media transform must be finite", null)
             return
         }
 
@@ -776,6 +885,9 @@ class StoryEditorProPlugin :
                     beautyEyes = beautyEyes,
                     beautySlim = beautySlim,
                     faceTimeline = faceTimeline,
+                    mediaScale = mediaScale,
+                    mediaOffsetX = mediaOffsetX,
+                    mediaOffsetY = mediaOffsetY,
                     shouldMuteAudio = shouldMuteAudio,
                     trimStartMs = trimStartMs,
                     trimEndMs = trimEndMs
@@ -809,12 +921,14 @@ class StoryEditorProPlugin :
             return
         }
 
-        if (videoCapture == null) {
+        val localVideoCapture = videoCapture
+        val localCamera = camera
+        if (localVideoCapture == null || localCamera == null) {
             result.error("NOT_INITIALIZED", "Video capture not initialized", null)
             return
         }
 
-        if (recording != null) {
+        if (recording != null || recordingStartPending) {
             result.error("ALREADY_RECORDING", "Already recording", null)
             return
         }
@@ -837,12 +951,23 @@ class StoryEditorProPlugin :
         val outputFile = File(outputPath)
         val outputOptions = FileOutputOptions.Builder(outputFile).build()
         val startCompletion = SingleCompletionGate()
+        var startCancelled = false
+        recordingStartPending = true
         fun failStart(code: String, message: String) {
-            if (startCompletion.tryComplete()) result.error(code, message, null)
+            if (startCompletion.tryComplete()) {
+                startCancelled = true
+                recordingStartPending = false
+                cancelRecordingStart = null
+                turnOffRecordingTorch(localCamera)
+                result.error(code, message, null)
+            }
         }
+        cancelRecordingStart = { failStart("RECORDING_CANCELLED", "Recording start was cancelled") }
 
-        try {
-            recording = videoCapture!!.output
+        fun beginRecording() {
+          if (startCancelled || !recordingStartPending || camera !== localCamera) return
+          try {
+            recording = localVideoCapture.output
                 .prepareRecording(context, outputOptions)
                 .withAudioEnabled()
                 .start(ContextCompat.getMainExecutor(context)) { event ->
@@ -852,10 +977,15 @@ class StoryEditorProPlugin :
                             // and audio readiness by hundreds of milliseconds.
                             // Align Flutter's pose timeline to the actual
                             // recorder start and expose the same native clock.
-                            arController.onRecordingStarted(SystemClock.elapsedRealtime())
-                            if (startCompletion.tryComplete()) result.success(true)
+                            if (startCompletion.tryComplete()) {
+                                arController.onRecordingStarted(SystemClock.elapsedRealtime())
+                                recordingStartPending = false
+                                cancelRecordingStart = null
+                                result.success(true)
+                            }
                         }
                         is VideoRecordEvent.Finalize -> {
+                            turnOffRecordingTorch(localCamera)
                             failStart("RECORDING_ERROR", "Video recording could not start")
                             if (event.hasError()) {
                                 videoResultCallback?.error(
@@ -871,20 +1001,36 @@ class StoryEditorProPlugin :
                         }
                     }
                 }
-        } catch (_: SecurityException) {
+          } catch (_: SecurityException) {
             recording = null
             failStart(
                 "AUDIO_PERMISSION_REQUIRED",
                 "Microphone permission is required before video recording",
             )
-        } catch (_: IllegalStateException) {
+          } catch (_: Exception) {
             recording = null
             failStart("RECORDING_ERROR", "Unable to start video recording")
+          }
+        }
+        if (requestedFlashMode == ImageCapture.FLASH_MODE_ON && localCamera.cameraInfo.hasFlashUnit()) {
+            try {
+                val torch = localCamera.cameraControl.enableTorch(true)
+                torch.addListener({
+                    try { torch.get(); beginRecording() }
+                    catch (_: Exception) { failStart("TORCH_FAILED", "Could not enable the recording light") }
+                }, ContextCompat.getMainExecutor(context))
+            } catch (_: Exception) {
+                failStart("TORCH_FAILED", "Could not enable the recording light")
+            }
+        } else {
+            beginRecording()
         }
     }
 
     private fun stopVideoRecording(result: Result) {
+        turnOffRecordingTorch()
         if (recording == null) {
+            cancelRecordingStart?.invoke()
             result.error("NOT_RECORDING", "Not recording", null)
             return
         }
@@ -894,6 +1040,8 @@ class StoryEditorProPlugin :
     }
 
     private fun dispose(result: Result) {
+        cancelRecordingStart?.invoke()
+        turnOffRecordingTorch()
         recording?.stop()
         recording = null
         cameraProvider?.unbindAll()
@@ -917,6 +1065,10 @@ class StoryEditorProPlugin :
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        cancelRecordingStart?.invoke()
+        turnOffRecordingTorch()
+        recording?.stop()
+        recording = null
         channel.setMethodCallHandler(null)
         arMethodChannel.setMethodCallHandler(null)
         arEventChannel.setStreamHandler(null)

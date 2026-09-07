@@ -6,6 +6,41 @@ enum NativeStoryCameraFacing { front, back }
 enum NativeStoryFlashMode { off, on, auto }
 
 @immutable
+class NativeCameraControls {
+  const NativeCameraControls({
+    this.minZoom = 1,
+    this.maxZoom = 1,
+    this.minExposure = 0,
+    this.maxExposure = 0,
+    this.exposureStep = 0,
+    this.focus = false,
+    this.exposure = false,
+    this.torch = false,
+  });
+  final double minZoom, maxZoom, minExposure, maxExposure, exposureStep;
+  final bool focus, exposure, torch;
+
+  factory NativeCameraControls.fromMap(Map<Object?, Object?> map) {
+    double number(String key, double fallback) {
+      final value = map[key];
+      return value is num && value.isFinite ? value.toDouble() : fallback;
+    }
+
+    final minZoom = number('minZoom', 1).clamp(.1, 100.0);
+    return NativeCameraControls(
+      minZoom: minZoom,
+      maxZoom: number('maxZoom', minZoom).clamp(minZoom, 100.0),
+      minExposure: number('minExposure', 0),
+      maxExposure: number('maxExposure', 0),
+      exposureStep: number('exposureStep', 0),
+      focus: map['focus'] == true,
+      exposure: map['exposure'] == true,
+      torch: map['torch'] == true,
+    );
+  }
+}
+
+@immutable
 class NativeStoryCameraSession {
   const NativeStoryCameraSession({
     required this.textureId,
@@ -177,19 +212,24 @@ class NativeStoryCameraController {
   }
 
   Future<String> _stopVideoRecording() async {
-    final starting = _startRecordingRequest;
-    if (starting != null) await starting;
-    final path = await _methodChannel.invokeMethod<String>(
-      'stopVideoRecording',
-    );
-    _recording = false;
-    if (path == null || path.isEmpty) {
-      throw PlatformException(
-        code: 'empty_recording_path',
-        message: 'Native camera did not return a recording path',
+    try {
+      final starting = _startRecordingRequest;
+      if (starting != null) await starting;
+      final path = await _methodChannel.invokeMethod<String>(
+        'stopVideoRecording',
       );
+      if (path == null || path.isEmpty) {
+        throw PlatformException(
+          code: 'empty_recording_path',
+          message: 'Native camera did not return a recording path',
+        );
+      }
+      return path;
+    } finally {
+      // Finalize errors are terminal too. Never report the next start as an
+      // already-running recording when the native recorder has stopped.
+      _recording = false;
     }
-    return path;
   }
 
   Future<bool> switchCamera() {
@@ -254,6 +294,35 @@ class NativeStoryCameraController {
     });
     _zoomRequest = request;
     return request;
+  }
+
+  Future<NativeCameraControls> getCameraControls() async {
+    _checkInitialized();
+    final result = await _methodChannel.invokeMapMethod<Object?, Object?>(
+      'getCameraControls',
+    );
+    return NativeCameraControls.fromMap(result ?? const {});
+  }
+
+  Future<bool> setFocusPoint(double x, double y) async {
+    _checkInitialized();
+    if (!x.isFinite || !y.isFinite) {
+      throw ArgumentError('Focus coordinates must be finite');
+    }
+    return await _methodChannel.invokeMethod<bool>('setFocusPoint', {
+          'x': x.clamp(0, 1),
+          'y': y.clamp(0, 1),
+        }) ==
+        true;
+  }
+
+  Future<bool> setExposureOffset(double value) async {
+    _checkInitialized();
+    if (!value.isFinite) throw ArgumentError('Exposure must be finite');
+    return await _methodChannel.invokeMethod<bool>('setExposureOffset', {
+          'value': value,
+        }) ==
+        true;
   }
 
   Future<bool> _drainZoomRequests() async {

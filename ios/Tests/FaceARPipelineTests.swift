@@ -339,6 +339,65 @@ final class FaceARPipelineTests: XCTestCase {
         XCTAssertEqual(timestamps.first, first)
     }
 
+    func testFocusPointRemovesVisibleCropBeforeSensorRotation() throws {
+        let point = CGPoint(x: 0.25, y: 0.75)
+        let portrait = try XCTUnwrap(NativeCameraControlGeometry.focusPoint(point,
+            sourceSize: CGSize(width: 1080, height: 1920), orientation: .portrait))
+        XCTAssertEqual(portrait.x, 0.75, accuracy: 0.000001)
+        XCTAssertEqual(portrait.y, 0.75, accuracy: 0.000001)
+        let cropped = try XCTUnwrap(NativeCameraControlGeometry.focusPoint(point,
+            sourceSize: CGSize(width: 1080, height: 1440), orientation: .portrait))
+        XCTAssertEqual(cropped.x, 0.75, accuracy: 0.000001)
+        XCTAssertEqual(cropped.y, 0.6875, accuracy: 0.000001)
+        let inverted = try XCTUnwrap(NativeCameraControlGeometry.focusPoint(point,
+            sourceSize: CGSize(width: 1080, height: 1440), orientation: .portraitUpsideDown))
+        XCTAssertEqual(inverted.x, 0.25, accuracy: 0.000001)
+        XCTAssertEqual(inverted.y, 0.3125, accuracy: 0.000001)
+        let landscape = try XCTUnwrap(NativeCameraControlGeometry.focusPoint(CGPoint(x: 0, y: 0.25),
+            sourceSize: CGSize(width: 1920, height: 1080), orientation: .landscapeRight))
+        XCTAssertEqual(landscape.x, (1 - (9.0 / 16) / (16.0 / 9)) / 2, accuracy: 0.000001)
+        XCTAssertEqual(landscape.y, 0.25, accuracy: 0.000001)
+        let opposite = try XCTUnwrap(NativeCameraControlGeometry.focusPoint(CGPoint(x: 0, y: 0.25),
+            sourceSize: CGSize(width: 1920, height: 1080), orientation: .landscapeLeft))
+        XCTAssertEqual(opposite.x, 1 - landscape.x, accuracy: 0.000001)
+        XCTAssertEqual(opposite.y, 0.75, accuracy: 0.000001)
+    }
+
+    func testCameraControlsRejectNonfiniteInputsAndUseReportedDeviceBounds() {
+        XCTAssertNil(NativeCameraControlGeometry.focusPoint(CGPoint(x: CGFloat.nan, y: 0), sourceSize: CGSize(width: 1080, height: 1920), orientation: .portrait))
+        XCTAssertNil(NativeCameraControlGeometry.focusPoint(.zero, sourceSize: .zero, orientation: .portrait))
+        XCTAssertNil(NativeCameraControlGeometry.bounded(.infinity, minimum: -3, maximum: 3))
+        XCTAssertEqual(NativeCameraControlGeometry.bounded(20, minimum: 1, maximum: 8), 8)
+        XCTAssertEqual(NativeCameraControlGeometry.bounded(-1, minimum: 0.5, maximum: 8), 0.5)
+        XCTAssertEqual(NativeCameraControlGeometry.bounded(-4, minimum: -2, maximum: 3), -2)
+        XCTAssertEqual(NativeCameraControlGeometry.bounded(1.25, minimum: -2, maximum: 3), 1.25)
+    }
+
+    func testMediaTransformMatchesCenteredScaleThenScreenTranslation() throws {
+        let extent = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let source = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1)).cropped(to: extent)
+        let transformed = VideoOverlayProcessor.applyMediaTransform(to: source, extent: extent,
+                                                                   scale: 0.5, offsetX: 0.1, offsetY: 0.2)
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        func pixel(_ image: CIImage, x: Int, y: Int) -> [UInt8] {
+            var bytes = [UInt8](repeating: 0, count: 4)
+            bytes.withUnsafeMutableBytes { buffer in
+                context.render(image, toBitmap: buffer.baseAddress!, rowBytes: 4,
+                               bounds: CGRect(x: x, y: y, width: 1, height: 1),
+                               format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+            }
+            return bytes
+        }
+        // Half-size image is x35...85, y5...55 in Core Image coordinates;
+        // positive editor Y moves it down, not up.
+        XCTAssertEqual(pixel(transformed, x: 50, y: 20), [255, 0, 0, 255])
+        XCTAssertEqual(pixel(transformed, x: 20, y: 20), [0, 0, 0, 255])
+        XCTAssertEqual(pixel(transformed, x: 50, y: 80), [0, 0, 0, 255])
+        let neutral = VideoOverlayProcessor.applyMediaTransform(to: source, extent: extent,
+                                                               scale: .nan, offsetX: .infinity, offsetY: .nan)
+        XCTAssertEqual(pixel(neutral, x: 50, y: 50), [255, 0, 0, 255])
+    }
+
     func testRecordingEncodingContract() {
         XCTAssertEqual(FaceARRecordingContract.framesPerSecond, 30)
         XCTAssertEqual(FaceARRecordingContract.audioSampleRate, 44_100)

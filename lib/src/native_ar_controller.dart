@@ -44,6 +44,7 @@ enum NativeArEventType {
   tracking,
   pose,
   recordingStarted,
+  background,
   error,
   unknown,
 }
@@ -53,6 +54,7 @@ class NativeArCapabilities {
   const NativeArCapabilities({
     required this.available,
     this.faceTracking = false,
+    this.backgrounds = false,
     this.preview = false,
     this.recording = false,
     this.lensIds = const <String>{},
@@ -61,12 +63,14 @@ class NativeArCapabilities {
   const NativeArCapabilities.unavailable()
     : available = false,
       faceTracking = false,
+      backgrounds = false,
       preview = false,
       recording = false,
       lensIds = const <String>{};
 
   final bool available;
   final bool faceTracking;
+  final bool backgrounds;
   final bool preview;
   final bool recording;
   final Set<String> lensIds;
@@ -79,6 +83,7 @@ class NativeArCapabilities {
     return NativeArCapabilities(
       available: map['available'] == true || map['supported'] == true,
       faceTracking: map['faceTracking'] == true,
+      backgrounds: map['backgrounds'] == true,
       preview: map['preview'] == true,
       recording: map['recording'] == true,
       lensIds: lenses is Iterable
@@ -108,6 +113,8 @@ class NativeArEvent {
     required this.state,
     this.faceTracked,
     this.faceTrackingReady,
+    this.backgroundReady,
+    this.message,
     this.failure,
     this.facePose,
     this.timestampMs,
@@ -118,6 +125,8 @@ class NativeArEvent {
   final NativeArRuntimeState state;
   final bool? faceTracked;
   final bool? faceTrackingReady;
+  final bool? backgroundReady;
+  final String? message;
   final NativeArFailure? failure;
   final FaceBeautyPose? facePose;
   final double? timestampMs;
@@ -134,16 +143,19 @@ class NativeArEvent {
         'tracking' => NativeArEventType.tracking,
         'pose' => NativeArEventType.pose,
         'recordingStarted' => NativeArEventType.recordingStarted,
+        'background' => NativeArEventType.background,
         'error' => NativeArEventType.error,
         _ => NativeArEventType.unknown,
       },
       state: NativeArController.parseState(stateName),
       faceTracked: map['faceTracked'] as bool?,
       faceTrackingReady: map['faceReady'] as bool?,
+      backgroundReady: map['backgroundReady'] as bool?,
+      message: message,
       facePose: FaceBeautyPose.fromMap(map['facePose']),
       timestampMs: (map['timestampMs'] as num?)?.toDouble(),
       isPhoto: map['isPhoto'] == true,
-      failure: code == null && message == null
+      failure: code == null && (message == null || typeName == 'background')
           ? null
           : NativeArFailure(
               code: code ?? 'native_error',
@@ -179,12 +191,15 @@ class NativeArController {
   Future<void>? _prepareRequest;
   bool _disposed = false;
   bool _faceTrackingReady = false;
+  bool _backgroundReady = false;
+  int _backgroundStyle = 0;
 
   Stream<NativeArEvent> get events => _events.stream;
   NativeArCapabilities get capabilities => _capabilities;
   NativeArRuntimeState get state => _state;
   NativeArFailure? get lastFailure => _lastFailure;
   bool get faceTrackingReady => _faceTrackingReady;
+  bool get backgroundReady => _backgroundReady;
 
   Future<NativeArCapabilities> getCapabilities() {
     _checkNotDisposed();
@@ -262,7 +277,10 @@ class NativeArController {
         _faceTrackingReady = response['faceReady'] == true;
         _emitState(parseState(response['state'] as String));
       }
-      if (!enabled) _emitState(NativeArRuntimeState.disabled);
+      if (!enabled) {
+        _backgroundReady = false;
+        _emitState(NativeArRuntimeState.disabled);
+      }
       return true;
     } on MissingPluginException catch (error) {
       _markUnavailable('missing_plugin', error.message ?? 'AR is unavailable');
@@ -287,6 +305,7 @@ class NativeArController {
     String placeName = '',
     double beautyEyes = 0,
     double beautySlim = 0,
+    int backgroundStyle = 0,
   }) async {
     _checkNotDisposed();
     if (!intensity.isFinite) throw ArgumentError.value(intensity, 'intensity');
@@ -297,6 +316,10 @@ class NativeArController {
     }
     if (!_capabilities.available) return false;
     try {
+      _listenToNativeEvents();
+      final style = backgroundStyle.clamp(0, 4);
+      if (_backgroundStyle != style) _backgroundReady = false;
+      _backgroundStyle = style;
       await _methodChannel.invokeMethod<void>('setLens', <String, Object?>{
         'lensId': lensId,
         'intensity': normalizedIntensity,
@@ -308,6 +331,7 @@ class NativeArController {
         'placeName': String.fromCharCodes(placeName.trim().runes.take(64)),
         'beautyEyes': beautyEyes.isFinite ? beautyEyes.clamp(0, 1) : 0,
         'beautySlim': beautySlim.isFinite ? beautySlim.clamp(0, 1) : 0,
+        'backgroundStyle': style,
       });
       return true;
     } on MissingPluginException catch (error) {
@@ -328,6 +352,9 @@ class NativeArController {
       (Object? raw) {
         if (_disposed || raw is! Map) return;
         final event = NativeArEvent.fromMap(raw);
+        if (event.backgroundReady != null) {
+          _backgroundReady = event.backgroundReady!;
+        }
         if (event.faceTrackingReady != null) {
           _faceTrackingReady = event.faceTrackingReady!;
         }

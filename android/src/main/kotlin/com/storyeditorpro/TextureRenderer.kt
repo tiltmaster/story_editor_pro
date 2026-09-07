@@ -26,10 +26,12 @@ class TextureRenderer {
             attribute vec4 aPosition;
             attribute vec4 aTexCoord;
             varying vec2 vTexCoord;
+            varying vec2 vFrameCoord;
             uniform mat4 uTexMatrix;
             void main() {
                 gl_Position = aPosition;
                 vTexCoord = (uTexMatrix * aTexCoord).xy;
+                vFrameCoord = aTexCoord.xy;
             }
         """
 
@@ -45,6 +47,7 @@ class TextureRenderer {
             precision mediump float;
             #endif
             varying vec2 vTexCoord;
+            varying vec2 vFrameCoord;
             uniform samplerExternalOES uTexture;
             uniform mat4 uTexMatrix;
             uniform mat3 uColorMatrix;
@@ -89,7 +92,9 @@ class TextureRenderer {
                 return clamp(p / metric, vec2(0.0), vec2(1.0));
             }
             void main() {
-                vec2 screenUv = gl_FragCoord.xy / max(uOutputSize, vec2(1.0));
+                // Local media coordinates preserve the look and face anchors
+                // when its quad is scaled/translated inside the editor canvas.
+                vec2 screenUv = vFrameCoord;
                 vec2 shapedUv = shapeFace(vec2(screenUv.x, 1.0 - screenUv.y));
                 vec2 uv = (uTexMatrix * vec4(shapedUv.x, 1.0 - shapedUv.y, 0.0, 1.0)).xy;
                 vec4 tex = texture2D(uTexture, uv);
@@ -241,6 +246,7 @@ class TextureRenderer {
     private var overlayTextureId = 0
 
     private var vertexBuffer: FloatBuffer
+    private var mediaVertexBuffer = createFloatBuffer(QUAD_VERTICES)
     private var texCoordBuffer: FloatBuffer
 
     // Animated sticker layers: one 2D texture + one quad each, drawn above the
@@ -378,6 +384,10 @@ class TextureRenderer {
         mirrorVideoHorizontally = enabled
     }
 
+    fun setMediaTransform(scale: Double, offsetX: Double, offsetY: Double) {
+        mediaVertexBuffer = createFloatBuffer(MediaTransform.vertices(scale, offsetX, offsetY))
+    }
+
     /**
      * Register an animated sticker layer. [left]/[top]/[width]/[height] are
      * normalized (0..1) in output space, top-left origin. [widthPx]/[heightPx]
@@ -512,9 +522,9 @@ class TextureRenderer {
             android.opengl.Matrix.scaleM(mirrorMatrix, 0, -1f, 1f, 1f)
             val combined = FloatArray(16)
             android.opengl.Matrix.multiplyMM(combined, 0, texMatrix, 0, mirrorMatrix, 0)
-            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, combined)
+            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, combined, mediaVertexBuffer)
         } else {
-            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texMatrix)
+            drawTexture(programOES, videoTextureId, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texMatrix, mediaVertexBuffer)
         }
 
         // Draw overlay on top (2D texture with alpha blending)

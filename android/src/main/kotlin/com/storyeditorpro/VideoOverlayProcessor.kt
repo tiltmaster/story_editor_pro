@@ -43,6 +43,9 @@ class VideoOverlayProcessor {
         beautyEyes: Double = 0.0,
         beautySlim: Double = 0.0,
         faceTimeline: List<Map<String, Any?>> = emptyList(),
+        mediaScale: Double = 1.0,
+        mediaOffsetX: Double = 0.0,
+        mediaOffsetY: Double = 0.0,
         shouldMuteAudio: Boolean = false,
         trimStartMs: Long = 0L,
         trimEndMs: Long = 0L,
@@ -180,6 +183,7 @@ class VideoOverlayProcessor {
 
             // 3. Setup OpenGL renderer (connects to encoder's Surface)
             renderer = TextureRenderer()
+            renderer.setMediaTransform(mediaScale, mediaOffsetX, mediaOffsetY)
             renderer.init(encoderInputSurface, resolvedOutputWidth, resolvedOutputHeight)
             renderer.setOverlayBitmap(scaledOverlay)
             renderer.setMirrorVideoHorizontally(mirrorHorizontally)

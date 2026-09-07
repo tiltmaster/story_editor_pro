@@ -110,7 +110,15 @@ internal class MediaPipeFaceTracker private constructor(
             val landmarks = result.faceLandmarks().firstOrNull()
             onResult(
                 frame.timestampNs,
-                landmarks?.let { poseFrom(it, frame.rotation).copy(frameGeometry = frame.geometry) },
+                landmarks?.let { poseFrom(it, frame.rotation).copy(
+                    frameGeometry = frame.geometry,
+                    expression = FaceExpression.fromLandmarks { index ->
+                        val point = it[index]
+                        val raw = FaceCoordinateTransform.detectorToBuffer(Point3f(point.x(), point.y(), point.z()), frame.rotation)
+                        val geometry = requireNotNull(frame.geometry)
+                        Point3f(raw.x * geometry.width, raw.y * geometry.height, raw.z)
+                    },
+                ) },
             )
         } catch (error: Throwable) {
             onError(error)

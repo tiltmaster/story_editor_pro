@@ -10,14 +10,27 @@ final class FaceAdornmentCompositor {
     private var cachedNeonClosed = true
     private var cachedNeonEyeDistance: CGFloat = 0
     private var cachedNeonImage: CIImage?
+    private var expressionReactions = FaceExpressionReactions()
+    private var expressionLens = ""
+
+    func resetExpressions() {
+        expressionReactions.reset(); expressionLens = ""
+    }
 
     func composite(over source: CIImage, pose: FaceARPose, lensId: String,
-                   time: Double, intensity: CGFloat) -> CIImage {
+                   time: Double, intensity: CGFloat, isPhoto: Bool = false) -> CIImage {
         let eyeAxis = pose.pixelEyeAxis(in: source.extent.size)
         let distance = hypot(eyeAxis.x, eyeAxis.y)
         let pixelRoll = atan2(eyeAxis.y, eyeAxis.x)
         guard distance > 8 else { return source }
         let center = CGPoint(x: pose.center.x * source.extent.width, y: pose.center.y * source.extent.height)
+        let reaction: FaceExpressionReaction
+        if isPhoto {
+            reaction = FaceExpressionReactions.still(pose.expressions)
+        } else {
+            if expressionLens != lensId { resetExpressions(); expressionLens = lensId }
+            reaction = expressionReactions.sample(pose.expressions, at: time)
+        }
         var output = source
         func place(_ sprite: CIImage, x: CGFloat, y: CGFloat, radius: CGFloat, angle: CGFloat = 0, widthScale: CGFloat = 1, opacity: CGFloat = 1) {
             // The sprite origin is centered, so rotation never moves the anchor.
@@ -41,13 +54,13 @@ final class FaceAdornmentCompositor {
         } else if lensId == "face_butterflies" {
             for i in 0..<5 {
                 let index = CGFloat(i)
-                let phase = CGFloat(time) * 5.4 + index * 1.9
-                let x = (index - 2) * 0.44 + sin(CGFloat(time) * 0.8 + index) * 0.035
-                let y = -0.85 - (1 - abs(index - 2) / 2) * 0.38 + sin(phase * 0.3) * 0.045
+                let phase = CGFloat(time) * 4 + index + reaction.butterflies * 7
+                let x = (index - 2) * 0.49 * (1 + 0.45 * reaction.butterflies) + sin(CGFloat(time) * 0.8 + index) * 0.035
+                let y = -0.85 - (1 - abs(index - 2) / 2) * 0.38 + sin(phase * 0.3) * 0.045 - 0.55 * reaction.butterflies
                 // The wing span oscillates around the anchored body. All five
                 // butterflies retain their own phase as the head moves.
                 place(sprite(i % 2 == 0 ? "butterflyLilac" : "butterflyBlue"),
-                      x: x, y: y, radius: i == 2 ? 0.22 : 0.17,
+                      x: x, y: y, radius: (i == 2 ? 0.22 : 0.17) * (1 + 0.25 * reaction.butterflies),
                       angle: (index - 2) * 0.14,
                       widthScale: 0.42 + 0.58 * abs(sin(phase)))
             }
@@ -58,11 +71,12 @@ final class FaceAdornmentCompositor {
             place(patch.transformed(by: CGAffineTransform(scaleX: -1, y: 1)), x: 0.55, y: 0.4, radius: 0.32)
         } else {
             let icon = sprite(lensId == "face_hearts" ? "heart" : "star")
+            let burst = lensId == "face_hearts" ? reaction.hearts : 0
             for i in 0..<7 {
                 let index = CGFloat(i)
-                let x = (index - 3) * 0.36
-                let y = -0.72 - 0.32 * (1 - abs(index - 3) / 3) + sin(CGFloat(time) * 1.8 + index) * 0.045
-                let radius = (0.09 + CGFloat(i % 3) * 0.025) * (1 + sin(CGFloat(time) * 2.2 + index) * 0.12)
+                let x = (index - 3) * 0.36 * (1 + 0.55 * burst)
+                let y = -0.72 - 0.32 * (1 - abs(index - 3) / 3) + sin(CGFloat(time) * 1.8 + index) * 0.045 - 0.48 * burst
+                let radius = (0.09 + CGFloat(i % 3) * 0.025) * (1 + sin(CGFloat(time) * 2.2 + index) * 0.12) * (1 + 0.50 * burst)
                 place(icon, x: x, y: y, radius: radius,
                       angle: lensId == "face_hearts" ? 0 : CGFloat(time) * 0.16 + index)
             }

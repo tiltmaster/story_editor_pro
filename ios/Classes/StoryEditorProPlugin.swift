@@ -9,6 +9,37 @@ struct NativeCameraSessionReuseContract {
     }
 }
 
+/// Converts taps from the visible upright 9:16 story crop to AVFoundation's
+/// fixed, unmirrored landscape-right sensor coordinates.
+enum NativeCameraControlGeometry {
+    static func focusPoint(_ point: CGPoint, sourceSize: CGSize,
+                           orientation: AVCaptureVideoOrientation) -> CGPoint? {
+        guard point.x.isFinite, point.y.isFinite,
+              sourceSize.width.isFinite, sourceSize.height.isFinite,
+              sourceSize.width > 0, sourceSize.height > 0 else { return nil }
+        var x = min(1, max(0, point.x)), y = min(1, max(0, point.y))
+        let sourceAspect = sourceSize.width / sourceSize.height
+        let canvasAspect: CGFloat = 9.0 / 16.0
+        if sourceAspect > canvasAspect {
+            x = 0.5 + (x - 0.5) * canvasAspect / sourceAspect
+        } else {
+            y = 0.5 + (y - 0.5) * sourceAspect / canvasAspect
+        }
+        switch orientation {
+        case .portrait: return CGPoint(x: y, y: 1 - x)
+        case .portraitUpsideDown: return CGPoint(x: 1 - y, y: x)
+        case .landscapeLeft: return CGPoint(x: 1 - x, y: 1 - y)
+        case .landscapeRight: return CGPoint(x: x, y: y)
+        @unknown default: return nil
+        }
+    }
+
+    static func bounded(_ value: Double, minimum: Double, maximum: Double) -> Double? {
+        guard value.isFinite, minimum.isFinite, maximum.isFinite, minimum <= maximum else { return nil }
+        return max(minimum, min(maximum, value))
+    }
+}
+
 public class StoryEditorProPlugin: NSObject, FlutterPlugin {
     private var registrar: FlutterPluginRegistrar?
     private var textureRegistry: FlutterTextureRegistry?
@@ -70,6 +101,22 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             stopVideoRecording(result: result)
         case "switchCamera":
             switchCamera(result: result)
+        case "getCameraControls":
+            guard let manager = cameraManager else {
+                result(FlutterError(code: "CAMERA_NOT_INITIALIZED", message: "Camera is not ready", details: nil)); return
+            }
+            manager.getCameraControls { controls in DispatchQueue.main.async { result(controls) } }
+        case "setFocusPoint":
+            let args = call.arguments as? [String: Any]
+            guard let manager = cameraManager,
+                  let x = args?["x"] as? NSNumber, let y = args?["y"] as? NSNumber else { result(false); return }
+            manager.setFocusPoint(CGPoint(x: x.doubleValue, y: y.doubleValue)) { success in
+                DispatchQueue.main.async { result(success) }
+            }
+        case "setExposureOffset":
+            let args = call.arguments as? [String: Any]
+            guard let manager = cameraManager, let value = args?["value"] as? NSNumber else { result(false); return }
+            manager.setExposureOffset(value.doubleValue) { success in DispatchQueue.main.async { result(success) } }
         case "setFlashMode":
             let args = call.arguments as? [String: Any]
             let mode = args?["mode"] as? String ?? "off"
@@ -112,6 +159,9 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let beautyEyes = args["beautyEyes"] as? Double ?? 0.0
         let beautySlim = args["beautySlim"] as? Double ?? 0.0
         let faceTimeline = args["faceTimeline"] as? [[String: Any]] ?? []
+        let mediaScale = args["mediaScale"] as? Double ?? 1
+        let mediaOffsetX = args["mediaOffsetX"] as? Double ?? 0
+        let mediaOffsetY = args["mediaOffsetY"] as? Double ?? 0
         let shouldMuteAudio = args["shouldMuteAudio"] as? Bool ?? false
         let trimStartMs = (args["trimStartMs"] as? NSNumber)?.int64Value ?? 0
         let trimEndMs = (args["trimEndMs"] as? NSNumber)?.int64Value ?? 0
@@ -142,6 +192,9 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             beautyEyes: beautyEyes,
             beautySlim: beautySlim,
             faceTimeline: faceTimeline,
+            mediaScale: mediaScale,
+            mediaOffsetX: mediaOffsetX,
+            mediaOffsetY: mediaOffsetY,
             shouldMuteAudio: shouldMuteAudio,
             trimStartMs: trimStartMs,
             trimEndMs: trimEndMs
@@ -447,13 +500,13 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
     }
 
     private func setFlashMode(mode: String, result: @escaping FlutterResult) {
-        cameraManager?.setFlashMode(mode: mode)
-        result(true)
+        guard let manager = cameraManager else { result(false); return }
+        manager.setFlashMode(mode: mode) { success in DispatchQueue.main.async { result(success) } }
     }
 
     private func setZoomLevel(level: Double, result: @escaping FlutterResult) {
-        cameraManager?.setZoomLevel(level: CGFloat(level))
-        result(true)
+        guard let manager = cameraManager else { result(false); return }
+        manager.setZoomLevel(level: CGFloat(level)) { success in DispatchQueue.main.async { result(success) } }
     }
 
     private func dispose(result: @escaping FlutterResult) {
@@ -490,8 +543,10 @@ class CameraManager: NSObject {
     private var microphoneReady = false
 
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
+    private let photoProcessingQueue = DispatchQueue(label: "camera.photo.processing", qos: .userInitiated)
     private var photoCompletionHandler: ((String?, Error?) -> Void)?
     private var photoRequiresEffectProcessing = false
+    private var selectedFlashMode: AVCaptureDevice.FlashMode = .off
 
     init(
         textureRegistry: FlutterTextureRegistry,
@@ -735,7 +790,7 @@ class CameraManager: NSObject {
         }
         settings.isHighResolutionPhotoEnabled = photoOutput.isHighResolutionCaptureEnabled
         if let device = currentDevice, device.hasFlash {
-            settings.flashMode = photoOutput.supportedFlashModes.contains(.auto) ? .auto : .off
+            settings.flashMode = photoOutput.supportedFlashModes.contains(selectedFlashMode) ? selectedFlashMode : .off
         }
 
         photoOutput.capturePhoto(with: settings, delegate: self)
@@ -749,22 +804,28 @@ class CameraManager: NSObject {
                 return
             }
             if let microphoneError = microphoneError { completion(microphoneError); return }
-            self.pixelBufferLock.lock()
-            let frame = self.latestPixelBuffer
-            self.pixelBufferLock.unlock()
-            guard let frame = frame else {
-                completion(NSError(domain: "CameraManager", code: 6,
-                                   userInfo: [NSLocalizedDescriptionKey: "Camera preview is not ready"]))
-                return
+            self.sessionQueue.async {
+                self.pixelBufferLock.lock()
+                let frame = self.latestPixelBuffer
+                self.pixelBufferLock.unlock()
+                guard let frame = frame else {
+                    completion(NSError(domain: "CameraManager", code: 6,
+                                       userInfo: [NSLocalizedDescriptionKey: "Camera preview is not ready"]))
+                    return
+                }
+                let path = outputPath ?? (NSTemporaryDirectory() as NSString)
+                    .appendingPathComponent("story_\(Int(Date().timeIntervalSince1970 * 1000)).mp4")
+                do { try self.applyTorch(enabled: self.selectedFlashMode == .on) }
+                catch { completion(error); return }
+                let error = self.videoRecorder.start(outputPath: path,
+                                                    width: CVPixelBufferGetWidth(frame),
+                                                    height: CVPixelBufferGetHeight(frame),
+                                                    onStarted: { [weak self] timestamp in
+                                                        self?.faceARCoordinator?.recordingStarted(at: timestamp)
+                                                    })
+                if error != nil { try? self.applyTorch(enabled: false) }
+                completion(error)
             }
-            let path = outputPath ?? (NSTemporaryDirectory() as NSString)
-                .appendingPathComponent("story_\(Int(Date().timeIntervalSince1970 * 1000)).mp4")
-            completion(self.videoRecorder.start(outputPath: path,
-                                                width: CVPixelBufferGetWidth(frame),
-                                                height: CVPixelBufferGetHeight(frame),
-                                                onStarted: { [weak self] timestamp in
-                                                    self?.faceARCoordinator?.recordingStarted(at: timestamp)
-                                                }))
         }
     }
 
@@ -801,7 +862,11 @@ class CameraManager: NSObject {
     }
 
     func stopVideoRecording(completion: @escaping (String?, Error?) -> Void) {
-        videoRecorder.stop(completion: completion)
+        sessionQueue.async { [weak self] in
+            guard let self = self else { completion(nil, NSError(domain: "CameraManager", code: 9)); return }
+            try? self.applyTorch(enabled: false)
+            self.videoRecorder.stop(completion: completion)
+        }
     }
 
     private func writePhotoData(_ data: Data, completion: @escaping (String?, Error?) -> Void) {
@@ -822,6 +887,7 @@ class CameraManager: NSObject {
                 return
             }
 
+            try? self.applyTorch(enabled: false)
             self.faceARCoordinator?.resetTracking()
             session.beginConfiguration()
 
@@ -886,20 +952,109 @@ class CameraManager: NSObject {
         }
     }
 
-    func setFlashMode(mode: String) {
-        // Flash mode is set during photo capture
+    func getCameraControls(completion: @escaping ([String: Any]) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let device = self?.currentDevice else { completion([:]); return }
+            let focus = device.isFocusPointOfInterestSupported &&
+                (device.isFocusModeSupported(.autoFocus) || device.isFocusModeSupported(.continuousAutoFocus))
+            let exposure = device.isExposureModeSupported(.continuousAutoExposure) &&
+                device.minExposureTargetBias < device.maxExposureTargetBias
+            completion(["minZoom": Double(device.minAvailableVideoZoomFactor),
+                        "maxZoom": Double(device.maxAvailableVideoZoomFactor),
+                        "minExposure": Double(device.minExposureTargetBias),
+                        "maxExposure": Double(device.maxExposureTargetBias),
+                        "exposureStep": 0.0, "focus": focus, "exposure": exposure,
+                        "torch": device.hasTorch && device.isTorchAvailable && device.isTorchModeSupported(.on)])
+        }
     }
 
-    func setZoomLevel(level: CGFloat) {
-        guard let device = currentDevice else { return }
+    func setFocusPoint(_ point: CGPoint, completion: @escaping (Bool) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.currentDevice else { completion(false); return }
+            self.pixelBufferLock.lock()
+            let frame = self.latestPixelBuffer
+            self.pixelBufferLock.unlock()
+            let size = frame.map { CGSize(width: CVPixelBufferGetWidth($0), height: CVPixelBufferGetHeight($0)) }
+                ?? CGSize(width: self.previewWidth, height: self.previewHeight)
+            let orientation = self.videoOutput?.connection(with: .video)?.videoOrientation ?? .portrait
+            guard let converted = NativeCameraControlGeometry.focusPoint(point, sourceSize: size, orientation: orientation) else { completion(false); return }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                var applied = false
+                if device.isFocusPointOfInterestSupported {
+                    if device.isFocusModeSupported(.autoFocus) {
+                        device.focusPointOfInterest = converted; device.focusMode = .autoFocus; applied = true
+                    } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusPointOfInterest = converted; device.focusMode = .continuousAutoFocus; applied = true
+                    }
+                }
+                if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposurePointOfInterest = converted; device.exposureMode = .continuousAutoExposure; applied = true
+                }
+                completion(applied)
+            } catch { completion(false) }
+        }
+    }
 
-        do {
-            try device.lockForConfiguration()
-            let maxZoom = min(device.activeFormat.videoMaxZoomFactor, 10.0)
-            device.videoZoomFactor = min(max(level, 1.0), maxZoom)
-            device.unlockForConfiguration()
-        } catch {
-            print("Failed to set zoom: \(error)")
+    func setExposureOffset(_ value: Double, completion: @escaping (Bool) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let device = self?.currentDevice,
+                  device.isExposureModeSupported(.continuousAutoExposure),
+                  let bounded = NativeCameraControlGeometry.bounded(value, minimum: Double(device.minExposureTargetBias),
+                                                                    maximum: Double(device.maxExposureTargetBias)) else { completion(false); return }
+            do {
+                try device.lockForConfiguration()
+                device.exposureMode = .continuousAutoExposure
+                device.setExposureTargetBias(Float(bounded), completionHandler: nil)
+                device.unlockForConfiguration()
+                completion(true)
+            } catch { completion(false) }
+        }
+    }
+
+    func setFlashMode(mode: String, completion: @escaping (Bool) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.currentDevice else { completion(false); return }
+            let requested: AVCaptureDevice.FlashMode
+            switch mode { case "off": requested = .off; case "auto": requested = .auto; case "on": requested = .on
+            default: completion(false); return }
+            if requested != .off && !device.hasFlash && !(requested == .on && device.hasTorch) { completion(false); return }
+            do {
+                try self.applyTorch(enabled: requested == .on && self.videoRecorder.isRecording)
+                self.selectedFlashMode = requested
+                completion(true)
+            } catch { completion(false) }
+        }
+    }
+
+    /// Called on sessionQueue. The torch never remains on after a recording.
+    private func applyTorch(enabled: Bool) throws {
+        guard let device = currentDevice else { return }
+        if !device.hasTorch {
+            if enabled { throw NSError(domain: "CameraManager", code: 13, userInfo: [NSLocalizedDescriptionKey: "This camera has no torch"]) }
+            return
+        }
+        guard !enabled || (device.isTorchAvailable && device.isTorchModeSupported(.on)) else {
+            throw NSError(domain: "CameraManager", code: 14, userInfo: [NSLocalizedDescriptionKey: "The camera torch is unavailable"])
+        }
+        try device.lockForConfiguration()
+        defer { device.unlockForConfiguration() }
+        if enabled { try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel) }
+        else if device.isTorchModeSupported(.off) { device.torchMode = .off }
+    }
+
+    func setZoomLevel(level: CGFloat, completion: @escaping (Bool) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let device = self?.currentDevice,
+                  let bounded = NativeCameraControlGeometry.bounded(Double(level), minimum: Double(device.minAvailableVideoZoomFactor),
+                                                                    maximum: Double(device.maxAvailableVideoZoomFactor)) else { completion(false); return }
+            do {
+                try device.lockForConfiguration()
+                device.videoZoomFactor = CGFloat(bounded)
+                device.unlockForConfiguration()
+                completion(true)
+            } catch { completion(false) }
         }
     }
 
@@ -925,6 +1080,7 @@ class CameraManager: NSObject {
     func dispose(completion: (() -> Void)? = nil) {
         sessionQueue.async { [weak self] in
             guard let self = self else { DispatchQueue.main.async { completion?() }; return }
+            try? self.applyTorch(enabled: false)
             self.videoRecorder.cancel()
             self.audioStateLock.lock(); self.microphoneReady = false; self.audioStateLock.unlock()
             self.videoOutput?.setSampleBufferDelegate(nil, queue: nil)
@@ -1003,18 +1159,21 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
                 ))
                 return
             }
-            guard let rendered = coordinator.processPhoto(
-                pixelBuffer: photoBuffer,
-                metadata: photo.metadata
-            ), let data = coordinator.jpegData(from: rendered) else {
-                completion(nil, NSError(
-                    domain: "CameraManager",
-                    code: 12,
-                    userInfo: [NSLocalizedDescriptionKey: "Filtered photo encoding failed"]
-                ))
-                return
+            let metadata = photo.metadata
+            // Full-resolution Vision inference must not stall preview rendering
+            // or depend on which queue AVFoundation uses for this delegate.
+            photoProcessingQueue.async {
+                guard let rendered = coordinator.processPhoto(pixelBuffer: photoBuffer, metadata: metadata),
+                      let data = coordinator.jpegData(from: rendered) else {
+                    completion(nil, NSError(
+                        domain: "CameraManager",
+                        code: 12,
+                        userInfo: [NSLocalizedDescriptionKey: "Filtered photo encoding failed"]
+                    ))
+                    return
+                }
+                self.writePhotoData(data, completion: completion)
             }
-            writePhotoData(data, completion: completion)
             return
         }
 

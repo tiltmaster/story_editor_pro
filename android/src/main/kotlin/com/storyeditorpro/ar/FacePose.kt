@@ -13,6 +13,7 @@ internal data class FacePose(
     val receivedAtElapsedMs: Long = SystemClock.elapsedRealtime(),
     val frameGeometry: FaceFrameGeometry? = null,
     val contour: List<Point3f> = emptyList(),
+    val expression: FaceExpression = FaceExpression(),
 )
 
 /** The analysis buffer can differ in crop, scale and rotation from the effect buffer. */
@@ -100,6 +101,7 @@ internal class FacePoseSmoother(private val alpha: Float = 0.58f) {
             next.receivedAtElapsedMs,
             next.frameGeometry,
             if (old.contour.size == next.contour.size) old.contour.zip(next.contour, ::point) else next.contour,
+            next.expression,
         ).also { previous = it }
     }
 

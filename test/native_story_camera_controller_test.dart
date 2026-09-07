@@ -100,6 +100,41 @@ void main() {
     },
   );
 
+  test(
+    'a failed finalization allows the next recording to start natively',
+    () async {
+      var starts = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'initializeCamera') {
+          return {
+            'textureId': 1,
+            'previewWidth': 1080.0,
+            'previewHeight': 1920.0,
+          };
+        }
+        if (call.method == 'startVideoRecording') {
+          starts++;
+          return true;
+        }
+        if (call.method == 'stopVideoRecording') {
+          throw PlatformException(code: 'recording_failed');
+        }
+        return true;
+      });
+      final controller = NativeStoryCameraController();
+      await controller.initialize(NativeStoryCameraFacing.front);
+      await controller.startVideoRecording('first.mp4');
+      await expectLater(
+        controller.stopVideoRecording(),
+        throwsA(isA<PlatformException>()),
+      );
+      expect(controller.isRecording, isFalse);
+      expect(await controller.startVideoRecording('second.mp4'), isTrue);
+      expect(starts, 2);
+      await controller.dispose();
+    },
+  );
+
   test('concurrent recording starts issue one native call', () async {
     final startGate = Completer<bool>();
     var startCalls = 0;
