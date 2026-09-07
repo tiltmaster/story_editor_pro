@@ -37,15 +37,4 @@ class FacePoseEstimatorTest {
         assertTrue(abs(roll) < Math.PI / 2)
     }
 
-    @Test
-    fun templeDepthHasBoundedHorizontalContributionDuringYaw() {
-        val temple = MeshVertex(x = -1.0f, y = 0f, z = 1.66f)
-        val frontal = GlassesYawProjection.rotate(temple, 0f)
-        val turned = GlassesYawProjection.rotate(temple, 0.6f)
-
-        assertEquals(-1.0f, frontal.x, 0.0001f)
-        // Regression: the former 1:1 depth projection displaced this vertex by
-        // almost a full eye distance and produced the photographed spike.
-        assertTrue(abs(turned.x - frontal.x) < 0.55f)
-    }
 }

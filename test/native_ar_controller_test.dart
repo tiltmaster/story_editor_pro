@@ -25,7 +25,7 @@ void main() {
           'faceTracking': true,
           'preview': true,
           'recording': true,
-          'lensIds': NativeArLensIds.glasses.toList(),
+          'lensIds': NativeArLensIds.face.toList(),
         };
       }
       return null;
@@ -35,25 +35,28 @@ void main() {
     final controller = NativeArController();
     final capabilities = await controller.getCapabilities();
     expect(capabilities.available, isTrue);
-    expect(capabilities.supportsLens(NativeArLensIds.classicGlasses), isTrue);
-    expect(NativeArLensIds.glasses, {NativeArLensIds.classicGlasses});
+    expect(capabilities.supportsLens(NativeArLensIds.neonContour), isTrue);
+    expect(capabilities.supportsLens(NativeArLensIds.classicGlasses), isFalse);
+    expect(NativeArLensIds.glasses, isEmpty);
 
     await controller.prepare();
     expect(controller.state, NativeArRuntimeState.preparing);
     expect(
-      await controller.setLens(NativeArLensIds.classicGlasses, intensity: 4),
+      await controller.setLens(NativeArLensIds.neonContour, intensity: 4),
       isTrue,
     );
     expect(await controller.setEnabled(true), isTrue);
 
     final lensCall = calls.singleWhere((call) => call.method == 'setLens');
     expect(lensCall.arguments, <String, Object?>{
-      'lensId': NativeArLensIds.classicGlasses,
+      'lensId': NativeArLensIds.neonContour,
       'intensity': 1.0,
       'mirrorOutput': false,
       'compositionId': 'none',
       'placeStyle': 'none',
       'placeName': '',
+      'beautyEyes': 0,
+      'beautySlim': 0,
     });
     expect(
       calls.map((call) => call.method),
@@ -129,6 +132,8 @@ void main() {
         'compositionId': 'none',
         'placeStyle': 'none',
         'placeName': '',
+        'beautyEyes': 0,
+        'beautySlim': 0,
       });
       await controller.dispose();
     },
@@ -169,4 +174,42 @@ void main() {
     expect(error.state, NativeArRuntimeState.unavailable);
     expect(error.failure?.code, 'model_load_failed');
   });
+
+  test(
+    'pose and recording metadata preserve active tracker readiness',
+    () async {
+      messenger.setMockMethodCallHandler(methodChannel, (call) async {
+        if (call.method == 'getCapabilities') {
+          return {'available': true, 'faceTracking': true};
+        }
+        if (call.method == 'setEnabled') {
+          return {'state': 'active', 'faceReady': true};
+        }
+        return null;
+      });
+      messenger.setMockMethodCallHandler(
+        eventControlChannel,
+        (_) async => null,
+      );
+      final controller = NativeArController();
+      await controller.getCapabilities();
+      await controller.setEnabled(true);
+      for (final type in ['pose', 'recordingStarted']) {
+        final received = controller.events.first;
+        messenger.handlePlatformMessage(
+          eventControlChannel.name,
+          const StandardMethodCodec().encodeSuccessEnvelope({
+            'type': type,
+            'timestampMs': 500,
+            'faceTracked': true,
+          }),
+          (_) {},
+        );
+        await received;
+        expect(controller.state, NativeArRuntimeState.active);
+        expect(controller.faceTrackingReady, isTrue);
+      }
+      await controller.dispose();
+    },
+  );
 }

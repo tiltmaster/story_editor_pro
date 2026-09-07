@@ -9,7 +9,9 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Rational
+import android.util.Range
 import android.view.Surface
 import androidx.camera.core.*
 import androidx.camera.video.*
@@ -86,13 +88,7 @@ class StoryEditorProPlugin :
             flutterAssets,
             "assets/ar/models/face_landmarker.task",
         )
-        val meshAssetPaths = mapOf(
-            FaceArContract.LENS_GLASSES_CLASSIC to resolveFlutterAsset(
-                flutterAssets,
-                "assets/ar/glasses_classic/runtime_mesh.json",
-            ),
-        )
-        arController = FaceArController(context, modelAssetPath, meshAssetPaths)
+        arController = FaceArController(context, modelAssetPath)
         arMethodChannel = MethodChannel(
             flutterPluginBinding.binaryMessenger,
             FaceArContract.METHOD_CHANNEL,
@@ -449,6 +445,10 @@ class StoryEditorProPlugin :
                     preview = Preview.Builder()
                         .setTargetResolution(android.util.Size(1080, 1920))
                         .setTargetRotation(targetRotation)
+                        // Flutter owns the optional selfie mirror. CameraX's
+                        // front-only default flipped text a second time.
+                        .setMirrorMode(MirrorMode.MIRROR_MODE_OFF)
+                        .setTargetFrameRate(Range(30, 30))
                         .build()
                         .also {
                             it.setSurfaceProvider { request ->
@@ -485,7 +485,11 @@ class StoryEditorProPlugin :
                             )
                         )
                         .build()
-                    videoCapture = VideoCapture.withOutput(recorder)
+                    videoCapture = VideoCapture.Builder(recorder)
+                        .setTargetRotation(targetRotation)
+                        .setMirrorMode(MirrorMode.MIRROR_MODE_OFF)
+                        .setTargetFrameRate(Range(30, 30))
+                        .build()
 
                     imageAnalysis = arController.createImageAnalysis(targetRotation)
 
@@ -683,12 +687,17 @@ class StoryEditorProPlugin :
             .addUseCase(localVideoCapture)
             .setViewPort(
                 ViewPort.Builder(
-                    Rational(previewWidth.coerceAtLeast(1), previewHeight.coerceAtLeast(1)),
+                    // SurfaceRequest dimensions are sensor/buffer dimensions.
+                    // They may be landscape even with a portrait target. Never
+                    // feed them back into the viewport when switching cameras.
+                    if (CameraViewportPolicy.isLandscape(cameraTargetRotation))
+                        Rational(16, 9) else Rational(9, 16),
                     cameraTargetRotation,
                 ).setScaleType(ViewPort.FILL_CENTER).build(),
             )
         imageAnalysis?.let { group.addUseCase(it) }
         arController.cameraEffectOrNull()?.let { group.addEffect(it) }
+        arController.onCameraRebound()
         return cameraProvider?.bindToLifecycle(owner, selector, group.build())
     }
 
@@ -729,6 +738,9 @@ class StoryEditorProPlugin :
         val filterPreset = call.argument<String>("filterPreset") ?: "none"
         val filterStrength = call.argument<Double>("filterStrength") ?: 1.0
         val beautyStrength = call.argument<Double>("beautyStrength") ?: 0.0
+        val beautyEyes = call.argument<Number>("beautyEyes")?.toDouble() ?: 0.0
+        val beautySlim = call.argument<Number>("beautySlim")?.toDouble() ?: 0.0
+        val faceTimeline = call.argument<List<Map<String, Any?>>>("faceTimeline") ?: emptyList()
         val shouldMuteAudio = call.argument<Boolean>("shouldMuteAudio") ?: false
         val trimStartMs = call.argument<Number>("trimStartMs")?.toLong() ?: 0L
         val trimEndMs = call.argument<Number>("trimEndMs")?.toLong() ?: 0L
@@ -761,6 +773,9 @@ class StoryEditorProPlugin :
                     filterPreset = filterPreset,
                     filterStrength = filterStrength,
                     beautyStrength = beautyStrength,
+                    beautyEyes = beautyEyes,
+                    beautySlim = beautySlim,
+                    faceTimeline = faceTimeline,
                     shouldMuteAudio = shouldMuteAudio,
                     trimStartMs = trimStartMs,
                     trimEndMs = trimEndMs
@@ -821,6 +836,10 @@ class StoryEditorProPlugin :
         currentVideoPath = outputPath
         val outputFile = File(outputPath)
         val outputOptions = FileOutputOptions.Builder(outputFile).build()
+        val startCompletion = SingleCompletionGate()
+        fun failStart(code: String, message: String) {
+            if (startCompletion.tryComplete()) result.error(code, message, null)
+        }
 
         try {
             recording = videoCapture!!.output
@@ -828,8 +847,16 @@ class StoryEditorProPlugin :
                 .withAudioEnabled()
                 .start(ContextCompat.getMainExecutor(context)) { event ->
                     when (event) {
-                        is VideoRecordEvent.Start -> Unit
+                        is VideoRecordEvent.Start -> {
+                            // PendingRecording submission can precede encoder
+                            // and audio readiness by hundreds of milliseconds.
+                            // Align Flutter's pose timeline to the actual
+                            // recorder start and expose the same native clock.
+                            arController.onRecordingStarted(SystemClock.elapsedRealtime())
+                            if (startCompletion.tryComplete()) result.success(true)
+                        }
                         is VideoRecordEvent.Finalize -> {
+                            failStart("RECORDING_ERROR", "Video recording could not start")
                             if (event.hasError()) {
                                 videoResultCallback?.error(
                                     "RECORDING_ERROR",
@@ -844,17 +871,15 @@ class StoryEditorProPlugin :
                         }
                     }
                 }
-            result.success(true)
         } catch (_: SecurityException) {
             recording = null
-            result.error(
+            failStart(
                 "AUDIO_PERMISSION_REQUIRED",
                 "Microphone permission is required before video recording",
-                null,
             )
         } catch (_: IllegalStateException) {
             recording = null
-            result.error("RECORDING_ERROR", "Unable to start video recording", null)
+            failStart("RECORDING_ERROR", "Unable to start video recording")
         }
     }
 

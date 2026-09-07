@@ -12,7 +12,7 @@ class CameraEffectsStackTest {
     }
 
     @Test fun allTrackedArtworkIsValidatedIndependentlyOfComposition() {
-        for (id in listOf("face_celestial", "face_hearts", "face_freckles")) {
+        for (id in listOf("face_celestial", "face_hearts", "face_freckles", "face_neon", "face_butterflies")) {
             assertTrue(id in FaceArContract.faceLensIds)
             assertEquals(id, FaceArSettings.validated(id, 0.7).lensId)
             val context = CreativeLensContext(compositionId="retrodate", placeStyle="editorial", placeName="Paris")

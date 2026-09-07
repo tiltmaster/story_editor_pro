@@ -11,9 +11,8 @@ internal object FaceArContract {
     const val LENS_STUDIO_GLOW = "timefocus"
     const val LENS_DESERT_LUXE = "kuwaitgold"
     const val LENS_FILM_AURA = "retrodate"
-    val glassesLensIds = setOf(
-        LENS_GLASSES_CLASSIC,
-    )
+    // Retained symbol for source compatibility; the retired mesh is not offered.
+    val glassesLensIds = emptySet<String>()
     val composedLensIds = setOf(
         LENS_ANALOG_TAPE,
         LENS_GOLDEN_BLOOM,
@@ -21,8 +20,8 @@ internal object FaceArContract {
         LENS_DESERT_LUXE,
         LENS_FILM_AURA,
     )
-    val adornmentLensIds = setOf("face_celestial", "face_hearts", "face_freckles")
-    val faceLensIds = glassesLensIds + adornmentLensIds
+    val adornmentLensIds = setOf("face_celestial", "face_hearts", "face_freckles", "face_neon", "face_butterflies")
+    val faceLensIds = adornmentLensIds
     val placeStyles = setOf("none", "postcard", "editorial", "stamp")
     val lensIds = faceLensIds + composedLensIds + LENS_NONE
 }

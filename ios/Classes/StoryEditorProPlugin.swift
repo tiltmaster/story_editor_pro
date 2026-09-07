@@ -33,10 +33,7 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             return Bundle.main.path(forResource: applicationKey, ofType: nil)
         }
         let coordinator = FaceARCoordinator(
-            modelPath: bundledAssetPath("assets/ar/models/face_landmarker.task"),
-            meshPaths: [
-                "glasses_classic": bundledAssetPath("assets/ar/glasses_classic/runtime_mesh.json")
-            ].compactMapValues { $0 }
+            modelPath: bundledAssetPath("assets/ar/models/face_landmarker.task")
         )
         let arHandler = FaceARMethodHandler(coordinator: coordinator)
         let eventHandler = FaceAREventStreamHandler(coordinator: coordinator)
@@ -112,6 +109,9 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         let filterPreset = args["filterPreset"] as? String ?? "none"
         let filterStrength = args["filterStrength"] as? Double ?? 1.0
         let beautyStrength = args["beautyStrength"] as? Double ?? 0.0
+        let beautyEyes = args["beautyEyes"] as? Double ?? 0.0
+        let beautySlim = args["beautySlim"] as? Double ?? 0.0
+        let faceTimeline = args["faceTimeline"] as? [[String: Any]] ?? []
         let shouldMuteAudio = args["shouldMuteAudio"] as? Bool ?? false
         let trimStartMs = (args["trimStartMs"] as? NSNumber)?.int64Value ?? 0
         let trimEndMs = (args["trimEndMs"] as? NSNumber)?.int64Value ?? 0
@@ -139,6 +139,9 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             filterPreset: filterPreset,
             filterStrength: filterStrength,
             beautyStrength: beautyStrength,
+            beautyEyes: beautyEyes,
+            beautySlim: beautySlim,
+            faceTimeline: faceTimeline,
             shouldMuteAudio: shouldMuteAudio,
             trimStartMs: trimStartMs,
             trimEndMs: trimEndMs
@@ -578,8 +581,10 @@ class CameraManager: NSObject {
             captureSession?.startRunning()
 
             let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-            previewWidth = Int(dimensions.width)
-            previewHeight = Int(dimensions.height)
+            // AVCaptureConnection delivers upright portrait buffers. Sensor
+            // format dimensions are landscape and must not describe the texture.
+            previewWidth = Int(min(dimensions.width, dimensions.height))
+            previewHeight = Int(max(dimensions.width, dimensions.height))
             completion(textureId, previewWidth, previewHeight, nil)
 
         } catch {
@@ -756,7 +761,10 @@ class CameraManager: NSObject {
                 .appendingPathComponent("story_\(Int(Date().timeIntervalSince1970 * 1000)).mp4")
             completion(self.videoRecorder.start(outputPath: path,
                                                 width: CVPixelBufferGetWidth(frame),
-                                                height: CVPixelBufferGetHeight(frame)))
+                                                height: CVPixelBufferGetHeight(frame),
+                                                onStarted: { [weak self] timestamp in
+                                                    self?.faceARCoordinator?.recordingStarted(at: timestamp)
+                                                }))
         }
     }
 
@@ -814,6 +822,7 @@ class CameraManager: NSObject {
                 return
             }
 
+            self.faceARCoordinator?.resetTracking()
             session.beginConfiguration()
 
             let previousVideoInput = session.inputs
@@ -898,6 +907,7 @@ class CameraManager: NSObject {
         guard connection.isVideoOrientationSupported,
               let orientation = Self.captureOrientation(for: UIDevice.current.orientation),
               connection.videoOrientation != orientation else { return }
+        faceARCoordinator?.resetTracking()
         connection.videoOrientation = orientation
     }
 
@@ -971,12 +981,12 @@ extension CameraManager: FlutterTexture {
 
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        let completion = photoCompletionHandler
+        guard let completion = photoCompletionHandler else { return }
         photoCompletionHandler = nil
         let requiresEffectProcessing = photoRequiresEffectProcessing
         photoRequiresEffectProcessing = false
         if let error = error {
-            completion?(nil, error)
+            completion(nil, error)
             return
         }
 
@@ -986,20 +996,18 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         if requiresEffectProcessing {
             guard let coordinator = faceARCoordinator,
                   let photoBuffer = photo.pixelBuffer else {
-                completion?(nil, NSError(
+                completion(nil, NSError(
                     domain: "CameraManager",
                     code: 11,
                     userInfo: [NSLocalizedDescriptionKey: "Filtered photo buffer is unavailable"]
                 ))
                 return
             }
-            let timestamp = CMClockGetTime(CMClockGetHostTimeClock())
-            let rendered = coordinator.process(
+            guard let rendered = coordinator.processPhoto(
                 pixelBuffer: photoBuffer,
-                timestamp: timestamp
-            )
-            guard let data = coordinator.jpegData(from: rendered) else {
-                completion?(nil, NSError(
+                metadata: photo.metadata
+            ), let data = coordinator.jpegData(from: rendered) else {
+                completion(nil, NSError(
                     domain: "CameraManager",
                     code: 12,
                     userInfo: [NSLocalizedDescriptionKey: "Filtered photo encoding failed"]
@@ -1011,7 +1019,7 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         }
 
         guard let imageData = photo.fileDataRepresentation() else {
-            completion?(nil, NSError(domain: "CameraManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to get image data"]))
+            completion(nil, NSError(domain: "CameraManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to get image data"]))
             return
         }
 
@@ -1021,9 +1029,9 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
 
         do {
             try imageData.write(to: URL(fileURLWithPath: filePath))
-            completion?(filePath, nil)
+            completion(filePath, nil)
         } catch {
-            completion?(nil, error)
+            completion(nil, error)
         }
     }
 }

@@ -9,9 +9,10 @@ A powerful, fully customizable Instagram-style story editor for Flutter. Create 
 
 ## Features
 
-The camera now includes an **Effects** panel for combining color looks, adjustable
-skin smoothing, animated face lenses and place frames. Native artwork is included
-in photos and videos. See the [camera effects review](docs/camera-effects-review.md)
+The camera includes compact **Effects** controls on the side rail for stacking
+color looks, skin smoothing, tracked eye/contour adjustments, animated face lenses
+and automatically located city frames. Effects survive photo and video capture,
+and controls support Arabic/RTL. See the [camera effects review](docs/camera-effects-review.md)
 for setup, implementation details, validation and remaining device checks.
 
 <table>

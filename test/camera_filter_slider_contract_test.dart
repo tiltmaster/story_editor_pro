@@ -20,35 +20,36 @@ void main() {
     );
   });
 
-  test('only the approved glasses lens is appended', () {
-    final unsupported = StoryEditorFilters.cameraPresetsFor(
-      supportsClassicGlasses: false,
-    );
-    final supported = StoryEditorFilters.cameraPresetsFor(
-      supportedNativeLensIds: NativeArLensIds.glasses,
-    );
+  test(
+    'retired glasses never appear even when a host reports old capabilities',
+    () {
+      final unsupported = StoryEditorFilters.cameraPresetsFor();
+      final legacyHost = StoryEditorFilters.cameraPresetsFor(
+        supportedNativeLensIds: {NativeArLensIds.classicGlasses},
+      );
+      expect(unsupported, same(StoryEditorFilters.presets));
+      expect(legacyHost, orderedEquals(StoryEditorFilters.presets));
+      expect(
+        legacyHost.map((preset) => preset.id),
+        isNot(contains(NativeArLensIds.classicGlasses)),
+      );
+      expect(
+        StoryEditorFilters.isNativeLens(NativeArLensIds.classicGlasses),
+        isFalse,
+      );
+      expect(
+        NativeArLensIds.all,
+        isNot(contains(NativeArLensIds.classicGlasses)),
+      );
+    },
+  );
 
-    expect(unsupported, same(StoryEditorFilters.presets));
-    expect(supported.length, StoryEditorFilters.presets.length + 1);
-    expect(
-      supported.take(StoryEditorFilters.presets.length),
-      orderedEquals(StoryEditorFilters.presets),
-    );
-    expect(
-      supported
-          .skip(StoryEditorFilters.presets.length)
-          .map((preset) => preset.id),
-      orderedEquals(<String>[NativeArLensIds.classicGlasses]),
-    );
-  });
-
-  test('legacy capability flag exposes only classic glasses', () {
+  test('legacy glasses flag cannot re-enable the removed lens', () {
     final supported = StoryEditorFilters.cameraPresetsFor(
       supportsClassicGlasses: true,
     );
-
-    expect(supported.length, StoryEditorFilters.presets.length + 1);
-    expect(supported.last.id, NativeArLensIds.classicGlasses);
+    expect(supported, orderedEquals(StoryEditorFilters.presets));
+    expect(StoryEditorFilters.nativeLensPresets, isEmpty);
   });
 
   test('classic glasses label is localized for English and Arabic', () {

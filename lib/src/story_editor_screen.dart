@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'face_beauty.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
@@ -202,6 +203,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   /// Uploads uniforms to the shader for the current preset/strength and canvas size.
   /// Called each build from within LayoutBuilder so the size is always up to date.
   void _applyShaderUniforms(Size size) {
+    applyFaceBeautyUniforms(_filterShader!);
     final m = StoryEditorFilters.matrix(
       _effectiveFilterPreset,
       widget.initialFilterStrength,

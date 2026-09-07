@@ -30,7 +30,7 @@ final class CreativeLensFrameRenderer {
         "vhs1993", "daytime", "timefocus", "kuwaitgold", "retrodate"
     ]
 
-    static let adornmentIds: Set<String> = ["face_celestial", "face_hearts", "face_freckles"]
+    static let adornmentIds: Set<String> = ["face_celestial", "face_hearts", "face_freckles", "face_neon", "face_butterflies"]
     private let context: CIContext
     private let adornments = FaceAdornmentCompositor()
     private var pool: CVPixelBufferPool?
@@ -54,21 +54,29 @@ final class CreativeLensFrameRenderer {
         pose: FaceARPose? = nil,
         time: Double = 0
     ) -> CVPixelBuffer? {
-        guard Self.lensIds.contains(lensId) || lensContext.hasOverlay || Self.adornmentIds.contains(lensId) else { return nil }
-        let width = CVPixelBufferGetWidth(input)
-        let height = CVPixelBufferGetHeight(input)
+        if pose == nil && !Self.lensIds.contains(lensId) && !lensContext.hasOverlay { return input }
+        return render(source: CIImage(cvPixelBuffer: input), lensId: lensId, intensity: intensity,
+               lensContext: lensContext, pose: pose, time: time)
+    }
+
+    func render(source input: CIImage, lensId: String, intensity: CGFloat,
+                lensContext: CreativeLensContext, pose: FaceARPose? = nil,
+                time: Double = 0) -> CVPixelBuffer? {
+        let width = Int(input.extent.width)
+        let height = Int(input.extent.height)
         guard let output = outputBuffer(width: width, height: height) else { return nil }
-        var source = CIImage(cvPixelBuffer: input)
+        var source = input
         if let pose = pose, Self.adornmentIds.contains(lensId) {
             source = adornments.composite(over: source, pose: pose, lensId: lensId, time: time, intensity: intensity)
         }
-        let overlay = overlayImage(
-            size: CGSize(width: width, height: height),
-            lensId: lensId,
-            intensity: min(max(intensity, 0), 1),
-            lensContext: lensContext
-        )
-        let composed = overlay.composited(over: source).cropped(to: source.extent)
+        // Face-only lenses never rasterize a full-frame transparent UIKit image.
+        // Static text is composed once and covers the actual upright buffer size.
+        if Self.lensIds.contains(lensId) || lensContext.hasOverlay {
+            source = overlayImage(size: CGSize(width: width, height: height),
+                                  lensId: lensId, intensity: min(max(intensity, 0), 1),
+                                  lensContext: lensContext).composited(over: source)
+        }
+        let composed = source.cropped(to: input.extent)
         context.render(
             composed,
             to: output,

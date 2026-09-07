@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import CoreImage
 import CoreVideo
@@ -10,7 +11,11 @@ final class FaceARPipelineTests: XCTestCase {
         let extent = CGRect(x: 0, y: 0, width: 360, height: 640)
         let source = CIImage(color: CIColor(red: 0.2, green: 0.3, blue: 0.4)).cropped(to: extent)
         let compositor = FaceAdornmentCompositor()
-        let pose = FaceARPose(center: CGPoint(x: 0.5, y: 0.55), eyeDistance: 0.25, rollRadians: 0)
+        let contour = (0..<36).map { index -> CGPoint in
+            let angle = CGFloat(index) * .pi * 2 / 36
+            return CGPoint(x: 0.5 + cos(angle) * 0.28, y: 0.52 + sin(angle) * 0.21)
+        }
+        let pose = FaceARPose(center: CGPoint(x: 0.5, y: 0.55), eyeDistance: 0.25, rollRadians: 0, contour: contour)
         let context = CIContext(options: [.useSoftwareRenderer: true])
         func pixels(_ image: CIImage) throws -> Data {
             let result = try XCTUnwrap(context.createCGImage(image, from: extent))
@@ -27,8 +32,39 @@ final class FaceARPipelineTests: XCTestCase {
         }
     }
 
+    func testNeonRequiresDetectedContourAndFollowsItsShape() throws {
+        let extent = CGRect(x: 0, y: 0, width: 360, height: 640)
+        let source = CIImage(color: CIColor(red: 0.2, green: 0.3, blue: 0.4)).cropped(to: extent)
+        let compositor = FaceAdornmentCompositor()
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        func pixels(_ image: CIImage) throws -> Data {
+            let result = try XCTUnwrap(context.createCGImage(image, from: extent))
+            return try XCTUnwrap(result.dataProvider?.data) as Data
+        }
+        let absent = FaceARPose(center: CGPoint(x: 0.5, y: 0.55), eyeDistance: 0.25, rollRadians: 0)
+        let baseline = try pixels(source)
+        XCTAssertEqual(try pixels(compositor.composite(over: source, pose: absent, lensId: "face_neon", time: 0, intensity: 1)), baseline)
+        func jaw(width: CGFloat) -> [CGPoint] {
+            (0..<17).map { index in
+                let angle = CGFloat(index) * .pi / 16
+                return CGPoint(x: 0.5 + cos(angle) * width, y: 0.58 - sin(angle) * 0.21)
+            }
+        }
+        let narrow = FaceARPose(center: absent.center, eyeDistance: absent.eyeDistance, rollRadians: 0,
+                                contour: jaw(width: 0.2), contourClosed: false)
+        let wide = FaceARPose(center: absent.center, eyeDistance: absent.eyeDistance, rollRadians: 0,
+                              contour: jaw(width: 0.3), contourClosed: false)
+        let narrowPixels = try pixels(compositor.composite(over: source, pose: narrow, lensId: "face_neon", time: 0, intensity: 1))
+        let widePixels = try pixels(compositor.composite(over: source, pose: wide, lensId: "face_neon", time: 0, intensity: 1))
+        XCTAssertNotEqual(narrowPixels, baseline)
+        XCTAssertNotEqual(narrowPixels, widePixels)
+        let smoothed = narrow.smoothed(toward: wide, alpha: 0.5)
+        XCTAssertEqual(smoothed.contour[0].x, 0.75, accuracy: 0.000001)
+        XCTAssertFalse(smoothed.contourClosed)
+    }
+
     func testStackKeepsFaceArtworkAndLocationIndependent() throws {
-        let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: [:])
+        let coordinator = FaceARCoordinator(modelPath: nil)
         for id in CreativeLensFrameRenderer.adornmentIds {
             XCTAssertNoThrow(try coordinator.setLens(id: id, intensity: 0.8,
                 compositionId: "daytime", placeStyle: "postcard", placeName: "Kyoto"))
@@ -40,7 +76,7 @@ final class FaceARPipelineTests: XCTestCase {
     }
 
     func testLocationOnlyBecomesActiveWithoutFacePreparation() throws {
-        let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: [:])
+        let coordinator = FaceARCoordinator(modelPath: nil)
         try coordinator.setLens(id: "none", intensity: 1, placeStyle: "editorial", placeName: "Paris")
         coordinator.setEnabled(true)
         XCTAssertTrue(coordinator.hasActiveEffect)
@@ -132,36 +168,175 @@ final class FaceARPipelineTests: XCTestCase {
 
     func testOperationalStateContract() {
         XCTAssertEqual(FaceARCoordinator.operationalState(
-            enabled: false, lensId: "glasses_classic", trackerAvailable: true
+            enabled: false, lensId: "face_neon", trackerAvailable: true
         ), .disabled)
         XCTAssertEqual(FaceARCoordinator.operationalState(
-            enabled: true, lensId: "glasses_classic", trackerAvailable: false
+            enabled: true, lensId: "face_neon", trackerAvailable: false
         ), .preparing)
         XCTAssertEqual(FaceARCoordinator.operationalState(
             enabled: true, lensId: "none", trackerAvailable: true
         ), .ready)
         XCTAssertEqual(FaceARCoordinator.operationalState(
-            enabled: true, lensId: "glasses_classic", trackerAvailable: true
+            enabled: true, lensId: "face_neon", trackerAvailable: true
         ), .active)
     }
 
     func testAllAuthoredLensIdentifiersAreAcceptedAndAdvertised() throws {
-        let paths = [
-            "glasses_classic": "/classic.json"
-        ]
-        let coordinator = FaceARCoordinator(modelPath: nil, meshPaths: paths)
-
-        for lensId in paths.keys {
+        let coordinator = FaceARCoordinator(modelPath: nil)
+        for lensId in CreativeLensFrameRenderer.adornmentIds {
             XCTAssertNoThrow(try coordinator.setLens(id: lensId, intensity: 1))
         }
+        XCTAssertThrowsError(try coordinator.setLens(id: "glasses_classic", intensity: 1))
         for lensId in CreativeLensFrameRenderer.lensIds {
             XCTAssertNoThrow(try coordinator.setLens(id: lensId, intensity: 1))
         }
         XCTAssertThrowsError(try coordinator.setLens(id: "fake_color_preset", intensity: 1))
         XCTAssertEqual(
             coordinator.capabilities["lensIds"] as? [String],
-            Array(Set(paths.keys).union(CreativeLensFrameRenderer.lensIds).union(CreativeLensFrameRenderer.adornmentIds)).sorted()
+            Array(CreativeLensFrameRenderer.lensIds.union(CreativeLensFrameRenderer.adornmentIds)).sorted()
         )
+    }
+
+    func testEyeCentersAreBetweenCornersRatherThanAtTemples() throws {
+        let left = FaceARPoseGeometry.eyeCenter(outer: CGPoint(x: 0.2, y: 0.6), inner: CGPoint(x: 0.4, y: 0.62))
+        let right = FaceARPoseGeometry.eyeCenter(outer: CGPoint(x: 0.8, y: 0.58), inner: CGPoint(x: 0.6, y: 0.6))
+        let pose = try XCTUnwrap(FaceARPoseGeometry.make(firstEye: left, secondEye: right, nose: nil))
+        XCTAssertEqual(left.x, 0.3, accuracy: 0.000001)
+        XCTAssertEqual(right.x, 0.7, accuracy: 0.000001)
+        XCTAssertEqual(pose.eyeDistance, hypot(0.4, 0.02), accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(pose.normalizedTopLeftEyes["leftY"]), 0.39, accuracy: 0.000001)
+    }
+
+    func testEyeEventsUseUprightUnmirroredTopLeftCoordinates() throws {
+        let pose = try XCTUnwrap(FaceARPoseGeometry.make(
+            firstEye: CGPoint(x: 0.25, y: 0.6), secondEye: CGPoint(x: 0.75, y: 0.4), nose: nil))
+        let points = pose.normalizedTopLeftEyes
+        XCTAssertEqual(try XCTUnwrap(points["leftX"]), 0.25, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(points["leftY"]), 0.4, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(points["rightX"]), 0.75, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(points["rightY"]), 0.6, accuracy: 0.000001)
+        let axis = pose.pixelEyeAxis(in: CGSize(width: 360, height: 640))
+        XCTAssertEqual(axis.x, 180, accuracy: 0.000001)
+        XCTAssertEqual(axis.y, -128, accuracy: 0.000001)
+    }
+
+    func testBeautyTrackingSettingsRejectNonfiniteValuesAndAllowNoLens() {
+        let coordinator = FaceARCoordinator(modelPath: nil)
+        XCTAssertNoThrow(try coordinator.setLens(id: "none", intensity: 1, beautyEyes: 0.4, beautySlim: 0.5))
+        XCTAssertThrowsError(try coordinator.setLens(id: "none", intensity: 1, beautyEyes: .infinity))
+        XCTAssertThrowsError(try coordinator.setLens(id: "none", intensity: 1, beautySlim: .nan))
+    }
+
+    func testLocationMirroringCompensatesOnlyForFinalTextureFlip() throws {
+        let extent = CGRect(x: 0, y: 0, width: 360, height: 640)
+        let source = CIImage(color: CIColor(red: 0.2, green: 0.3, blue: 0.4)).cropped(to: extent)
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        func pixels(_ image: CIImage) throws -> Data {
+            let result = try XCTUnwrap(context.createCGImage(image, from: extent))
+            return try XCTUnwrap(result.dataProvider?.data) as Data
+        }
+        for style in ["postcard", "editorial", "stamp"] {
+            let renderer = CreativeLensFrameRenderer()
+            let normal = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
+                lensContext: CreativeLensContext(languageCode: "ar", placeStyle: style, placeName: "الكويت")))
+            let mirrored = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
+                lensContext: CreativeLensContext(languageCode: "ar", mirrorOutput: true, placeStyle: style, placeName: "الكويت")))
+            XCTAssertEqual(CVPixelBufferGetWidth(normal), 360)
+            XCTAssertEqual(CVPixelBufferGetHeight(normal), 640)
+            let restored = CIImage(cvPixelBuffer: mirrored).transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 360, ty: 0))
+            // Rasterizing text under a mirrored CGContext can round glyph edges
+            // differently. Compare with a tiny tolerance using actual pixels.
+            let normalBytes = Array(try pixels(CIImage(cvPixelBuffer: normal)))
+            let restoredBytes = Array(try pixels(restored))
+            XCTAssertEqual(normalBytes.count, restoredBytes.count)
+            let difference = zip(normalBytes, restoredBytes).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+            XCTAssertLessThan(Double(difference) / Double(normalBytes.count), 1.0)
+        }
+    }
+
+    func testFaceOnlyLensWithoutFacePreservesInputPixels() throws {
+        let extent = CGRect(x: 0, y: 0, width: 360, height: 640)
+        let source = CIImage(color: CIColor(red: 0.2, green: 0.3, blue: 0.4)).cropped(to: extent)
+        let renderer = CreativeLensFrameRenderer()
+        let input = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
+                                                 lensContext: CreativeLensContext()))
+        for lens in CreativeLensFrameRenderer.adornmentIds {
+            let output = try XCTUnwrap(renderer.render(input: input, lensId: lens, intensity: 1,
+                                                      lensContext: CreativeLensContext(), pose: nil))
+            XCTAssertTrue(output === input)
+        }
+    }
+
+    func testPoseTimelineUsesAbsoluteSourceTimeAndClearsLostOrStaleFaces() throws {
+        let eye: [String: Any] = ["timeMs": 2000, "leftX": 0.3, "leftY": 0.4, "rightX": 0.7, "rightY": 0.4]
+        let timeline = FacePoseTimeline([eye, ["timeMs": 2150]])
+        XCTAssertNil(timeline.eyes(at: 0))
+        XCTAssertNil(timeline.eyes(at: 1999))
+        XCTAssertEqual(try XCTUnwrap(timeline.eyes(at: 2100)).x, 0.3, accuracy: 0.000001)
+        XCTAssertNil(timeline.eyes(at: 2150))
+        let stale = FacePoseTimeline([eye])
+        XCTAssertNotNil(stale.eyes(at: 2250))
+        XCTAssertNil(stale.eyes(at: 2251))
+        XCTAssertNil(stale.eyes(at: .nan))
+        // Last input entry wins at equal timestamps, including a loss marker.
+        XCTAssertNil(FacePoseTimeline([eye, ["timeMs": 2000]]).eyes(at: 2000))
+        XCTAssertNotNil(FacePoseTimeline([["timeMs": 2000], eye]).eyes(at: 2000))
+    }
+
+    func testFaceWarpChangesEyeAndJawPixelsAndZeroControlsPassThrough() throws {
+        let extent = CGRect(x: 0, y: 0, width: 360, height: 640)
+        let source = try XCTUnwrap(CIFilter(name: "CICheckerboardGenerator", parameters: [
+            "inputWidth": 11, "inputSharpness": 1,
+            "inputColor0": CIColor(red: 0.15, green: 0.2, blue: 0.25),
+            "inputColor1": CIColor(red: 0.8, green: 0.75, blue: 0.7)
+        ])?.outputImage).cropped(to: extent)
+        let processor = VideoOverlayProcessor()
+        let eyes = CIVector(x: 0.32, y: 0.35, z: 0.68, w: 0.36)
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        func pixels(_ image: CIImage) throws -> Data {
+            let result = try XCTUnwrap(context.createCGImage(image, from: extent))
+            return try XCTUnwrap(result.dataProvider?.data) as Data
+        }
+        let baseline = try pixels(source)
+        let neutral = try XCTUnwrap(processor.applyFaceWarp(to: source, eyes: eyes, eyeAmount: 0, slimAmount: 0))
+        XCTAssertEqual(try pixels(neutral), baseline)
+        let eyeResult = try XCTUnwrap(processor.applyFaceWarp(to: source, eyes: eyes, eyeAmount: 1, slimAmount: 0))
+        let jawResult = try XCTUnwrap(processor.applyFaceWarp(to: source, eyes: eyes, eyeAmount: 0, slimAmount: 1))
+        XCTAssertNotEqual(try pixels(eyeResult), baseline)
+        XCTAssertNotEqual(try pixels(jawResult), baseline)
+        XCTAssertNotEqual(try pixels(eyeResult), try pixels(jawResult))
+    }
+
+    func testPhotoExifOrientationDeterminesFullFrameCanvas() throws {
+        let source = CIImage(color: CIColor(red: 0.2, green: 0.3, blue: 0.4))
+            .cropped(to: CGRect(x: 0, y: 0, width: 640, height: 360))
+        let input = try XCTUnwrap(CreativeLensFrameRenderer().render(source: source,
+            lensId: "none", intensity: 1, lensContext: CreativeLensContext()))
+        let coordinator = FaceARCoordinator(modelPath: nil)
+        try coordinator.setLens(id: "none", intensity: 1, placeStyle: "editorial", placeName: "Paris")
+        coordinator.setEnabled(true)
+        let photo = try XCTUnwrap(coordinator.processPhoto(pixelBuffer: input, metadata: ["Orientation": 6]))
+        XCTAssertEqual(CVPixelBufferGetWidth(photo), 360)
+        XCTAssertEqual(CVPixelBufferGetHeight(photo), 640)
+    }
+
+    func testRecorderReportsFirstFrameTimestampExactlyOnce() throws {
+        let recorder = FaceARVideoRecorder()
+        let path = NSTemporaryDirectory() + UUID().uuidString + ".mp4"
+        defer { recorder.cancel(); try? FileManager.default.removeItem(atPath: path) }
+        var timestamps: [CMTime] = []
+        let error = recorder.start(outputPath: path, width: 320, height: 240, onStarted: { timestamps.append($0) })
+        XCTAssertNil(error)
+        var rawBuffer: CVPixelBuffer?
+        let attributes: [String: Any] = [kCVPixelBufferIOSurfacePropertiesKey as String: [:]]
+        XCTAssertEqual(CVPixelBufferCreate(nil, 320, 240, kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary, &rawBuffer), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(rawBuffer)
+        let first = CMTime(value: 1234567, timescale: 1000)
+        recorder.appendVideo(pixelBuffer: buffer, presentationTime: first)
+        recorder.appendVideo(pixelBuffer: buffer, presentationTime: CMTimeAdd(first, CMTime(value: 1, timescale: 30)))
+        XCTAssertEqual(timestamps.count, 1)
+        XCTAssertEqual(timestamps.first, first)
     }
 
     func testRecordingEncodingContract() {

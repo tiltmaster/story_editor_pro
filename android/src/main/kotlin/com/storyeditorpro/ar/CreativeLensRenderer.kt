@@ -36,7 +36,9 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
             canvas.translate(sensorCrop.exactCenterX(), sensorCrop.exactCenterY())
             canvas.rotate(-frame.rotationDegrees.toFloat())
             canvas.translate(-width / 2, -height / 2)
-            if (lensContext.mirrorOutput) canvas.scale(-1f, 1f, width / 2, height / 2)
+            if (OverlayGeometry.shouldPreMirror(frame.isMirroring, lensContext.mirrorOutput)) {
+                canvas.scale(-1f, 1f, width / 2, height / 2)
+            }
             val u = min(width / 1080f, height / 1920f)
             val locale = Locale(lensContext.languageCode, lensContext.countryCode)
             arabicLocale = locale.language == "ar"

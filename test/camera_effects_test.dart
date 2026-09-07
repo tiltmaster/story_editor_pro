@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,22 +15,74 @@ import 'package:story_editor_pro/src/native_ar_controller.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('independent layers survive edits and bound user input', () {
+  test('independent beauty controls and layers preserve and bound values', () {
     final effects = const CameraEffects().copyWith(
       beauty: .5,
+      beautyEyes: .25,
+      beautySlim: .4,
       faceLens: NativeArLensIds.heartHalo,
       placeStyle: 'postcard',
       placeName: '  مدينة الكويت  ',
     );
-    final edited = effects.copyWith(beauty: 2);
+    final edited = effects.copyWith(beauty: 2, beautyEyes: -1);
     expect(edited.beauty, 1);
+    expect(edited.beautyEyes, 0);
+    expect(edited.beautySlim, .4);
     expect(edited.faceLens, NativeArLensIds.heartHalo);
     expect(edited.placeName, 'مدينة الكويت');
     expect(edited.layerCount, 3);
     expect(edited.copyWith(beauty: double.nan).beauty, 0);
+    expect(edited.copyWith(beautyEyes: double.infinity).beautyEyes, 0);
+    expect(edited.copyWith(beautySlim: double.nan).beautySlim, 0);
     expect(edited.copyWith(placeName: '🌍' * 100).placeName.runes.length, 64);
     expect(edited.copyWith(placeName: '').layerCount, 2);
+    expect(const CameraEffects(beautyEyes: .5).layerCount, 1);
+    expect(const CameraEffects(beautySlim: .5).layerCount, 1);
   });
+
+  test(
+    'location session is lazy, deduplicates and caches by language',
+    () async {
+      final result = Completer<String>();
+      final calls = <String>[];
+      final session = CameraPlaceSession(
+        resolver: (locale) {
+          calls.add(locale);
+          return result.future;
+        },
+      );
+      expect(calls, isEmpty);
+      final first = session.resolve(localeIdentifier: 'ar_KW');
+      final second = session.resolve(localeIdentifier: 'ar_KW');
+      expect(calls, ['ar_KW']);
+      result.complete('مدينة الكويت');
+      expect(await first, 'مدينة الكويت');
+      expect(await second, 'مدينة الكويت');
+      expect(await session.resolve(localeIdentifier: 'ar_KW'), 'مدينة الكويت');
+      expect(calls, ['ar_KW']);
+      await session.resolve(localeIdentifier: 'en_US');
+      expect(calls, ['ar_KW', 'en_US']);
+    },
+  );
+
+  test(
+    'failed city lookups can be retried without caching a fake place',
+    () async {
+      var calls = 0;
+      final session = CameraPlaceSession(
+        resolver: (_) async {
+          if (++calls == 1) throw StateError('permission denied');
+          return 'Kuwait City';
+        },
+      );
+      await expectLater(
+        session.resolve(localeIdentifier: 'en'),
+        throwsStateError,
+      );
+      expect(await session.resolve(localeIdentifier: 'en'), 'Kuwait City');
+      expect(calls, 2);
+    },
+  );
 
   test(
     'location lookup requests the app language before resolving the city',
@@ -56,7 +110,7 @@ void main() {
     },
   );
 
-  testWidgets('small RTL layout remains usable with larger text', (
+  testWidgets('small RTL camera tray stays compact with larger text', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(320, 640);
@@ -64,29 +118,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
-      MaterialApp(
+      _app(
         locale: const Locale('ar', 'KW'),
-        supportedLocales: const [Locale('en'), Locale('ar')],
-        localizationsDelegates: GlobalMaterialLocalizations.delegates,
-        builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(
-            context,
-          ).copyWith(textScaler: const TextScaler.linear(1.3)),
-          child: child!,
-        ),
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.bottomCenter,
-            child: CameraEffectsPanel(
-              effects: const CameraEffects(),
-              lookId: 'none',
-              lookStrength: .85,
-              supportedFaceLenses: NativeArLensIds.face,
-              supportsPlaces: true,
-              supportsBeauty: true,
-              onChanged: (_, __, ___) {},
-            ),
+        textScale: 1.3,
+        child: _panel(
+          locationSession: CameraPlaceSession(
+            resolver: (_) async => 'مدينة الكويت',
           ),
+          onClose: () {},
         ),
       ),
     );
@@ -94,21 +133,24 @@ void main() {
       Directionality.of(tester.element(find.byType(CameraEffectsPanel))),
       TextDirection.rtl,
     );
+    expect(tester.getSize(find.byType(CameraEffectsPanel)).height, 192);
     expect(
       tester.getCenter(find.text('ألوان')).dx,
       greaterThan(tester.getCenter(find.text('جمال')).dx),
     );
-    for (final tab in ['جمال', 'عدسات', 'أماكن', 'ألوان']) {
-      await tester.tap(find.text(tab));
-      await tester.pumpAndSettle();
+    for (final tab in [1, 2, 3, 0]) {
+      await _tap(tester, 'effects-tab-$tab');
       expect(
         tester.takeException(),
         isNull,
-        reason: '$tab must fit a small screen',
+        reason: 'Tab $tab must fit a small RTL camera',
       );
     }
+    await _tap(tester, 'effects-card-daytime');
     expect(find.text('توهّج ذهبي'), findsOneWidget);
     expect(find.text('Golden Bloom'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
   });
 
   test(
@@ -156,171 +198,233 @@ void main() {
     },
   );
 
-  testWidgets('beauty, lens, place and look can be combined then cleared', (
+  testWidgets('beauty, face shape, lens, real city and look stack and reset', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(430, 1000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
     CameraEffects latest = const CameraEffects();
     String look = 'none';
+    var cityRequests = 0;
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.bottomCenter,
-            child: CameraEffectsPanel(
-              effects: latest,
-              lookId: look,
-              lookStrength: .85,
-              supportedFaceLenses: NativeArLensIds.face,
-              supportsPlaces: true,
-              supportsBeauty: true,
-              onChanged: (effects, id, _) {
-                latest = effects;
-                look = id;
-              },
-            ),
+      _app(
+        child: _panel(
+          supportsFaceBeauty: true,
+          locationSession: CameraPlaceSession(
+            resolver: (_) async {
+              cityRequests++;
+              return 'Kyoto';
+            },
           ),
+          onChanged: (effects, id, _) {
+            latest = effects;
+            look = id;
+          },
         ),
       ),
     );
-    await tester.tap(find.text('Beauty'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Soft'));
-    await tester.tap(find.text('Lenses'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Heart halo'));
-    await tester.tap(find.text('Places'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Kyoto');
-    await tester.tap(find.text('Editorial'));
-    await tester.tap(find.text('Looks'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Golden Bloom'));
-    expect(latest.beauty, .5);
+    expect(
+      cityRequests,
+      0,
+      reason: 'Opening camera effects must not request GPS',
+    );
+    await _tap(tester, 'effects-tab-1');
+    await tester.tap(find.text('Smooth'));
+    await _tap(tester, 'beauty-control-1');
+    tester.widget<Slider>(find.byType(Slider)).onChanged!(.3);
+    await _tap(tester, 'beauty-control-2');
+    tester.widget<Slider>(find.byType(Slider)).onChanged!(.4);
+    await _tap(tester, 'effects-tab-2');
+    expect(find.text('Classic'), findsNothing);
+    await _tap(tester, 'effects-card-${NativeArLensIds.heartHalo}');
+    await _tap(tester, 'effects-tab-3');
+    expect(cityRequests, 1);
+    expect(latest.placeName, 'Kyoto');
+    expect(latest.placeStyle, 'postcard');
+    expect(find.byType(TextField), findsNothing);
+    await _tap(tester, 'effects-card-place-editorial');
+    await _tap(tester, 'effects-tab-0');
+    await _tap(tester, 'effects-card-daytime');
+    expect(latest.beauty, .65);
+    expect(latest.beautyEyes, .3);
+    expect(latest.beautySlim, .4);
     expect(latest.faceLens, NativeArLensIds.heartHalo);
     expect(latest.placeStyle, 'editorial');
-    expect(latest.placeName, 'Kyoto');
     expect(look, 'daytime');
-    await tester.tap(find.text('Reset'));
+    await tester.tap(find.byTooltip('Reset effects'));
     expect(latest.layerCount, 0);
     expect(look, 'none');
     expect(tester.takeException(), isNull);
   });
 
   testWidgets(
-    'unsupported capabilities do not offer working-looking beauty controls',
+    'selecting Off while GPS is pending never reapplies a city frame',
     (tester) async {
+      final result = Completer<String>();
+      CameraEffects latest = const CameraEffects();
       await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: CameraEffectsPanel(
-              effects: const CameraEffects(),
-              lookId: 'none',
-              lookStrength: .85,
-              supportedFaceLenses: const {},
-              supportsPlaces: false,
-              supportsBeauty: false,
-              onChanged: (_, __, ___) =>
-                  fail('Unavailable control must not apply an effect'),
-            ),
+        _app(
+          child: _panel(
+            locationSession: CameraPlaceSession(resolver: (_) => result.future),
+            onChanged: (effects, _, __) => latest = effects,
           ),
         ),
       );
-      await tester.tap(find.text('Beauty'));
+      await tester.tap(find.byKey(const ValueKey('effects-tab-3')));
+      await tester.pump();
+      expect(find.text('Finding your city…'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('effects-card-place-editorial')),
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('effects-card-place-none')));
+      result.complete('Kuwait City');
       await tester.pumpAndSettle();
-      expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
-      await tester.tap(find.text('Places'));
-      await tester.pumpAndSettle();
-      expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+      expect(latest.placeStyle, 'none');
+      expect(latest.placeName, isEmpty);
     },
   );
 
-  testWidgets(
-    'Arabic mixed place entry and stacked layers survive a language change',
-    (tester) async {
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      CameraEffects latest = const CameraEffects();
-      Widget app(Locale locale) => MaterialApp(
-        locale: locale,
-        supportedLocales: const [Locale('en'), Locale('ar')],
-        localizationsDelegates: GlobalMaterialLocalizations.delegates,
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.bottomCenter,
-            child: CameraEffectsPanel(
-              effects: const CameraEffects(),
-              lookId: 'none',
-              lookStrength: .85,
-              supportedFaceLenses: NativeArLensIds.face,
-              supportsPlaces: true,
-              supportsBeauty: true,
-              onChanged: (effects, _, __) => latest = effects,
-            ),
+  testWidgets('city failure offers retry and never allows fabricated names', (
+    tester,
+  ) async {
+    var attempts = 0;
+    CameraEffects latest = const CameraEffects();
+    await tester.pumpWidget(
+      _app(
+        child: _panel(
+          locationSession: CameraPlaceSession(
+            resolver: (_) async {
+              if (++attempts == 1) throw StateError('permission denied');
+              return 'Kuwait City';
+            },
           ),
+          onChanged: (effects, _, __) => latest = effects,
+        ),
+      ),
+    );
+    await _tap(tester, 'effects-tab-3');
+    expect(latest.placeName, isEmpty);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(latest.placeName, 'Kuwait City');
+    expect(attempts, 2);
+  });
+
+  testWidgets(
+    'closing inline controls preserves the camera route and city cache',
+    (tester) async {
+      var requests = 0;
+      var closes = 0;
+      final session = CameraPlaceSession(
+        resolver: (_) async {
+          requests++;
+          return 'Kuwait City';
+        },
+      );
+      Widget panel(String key) => _app(
+        child: _panel(
+          key: ValueKey(key),
+          locationSession: session,
+          onClose: () => closes++,
         ),
       );
-      await tester.pumpWidget(app(const Locale('ar')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('جمال'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('ناعم'));
-      await tester.pumpAndSettle();
-      final slider = tester.widget<Slider>(find.byType(Slider));
-      // CLDR's generic Arabic locale uses Latin digits with bidi marks.
-      expect(slider.semanticFormatterCallback!(.5), '50\u200e%\u200e');
-      expect(
-        Directionality.of(tester.element(find.byType(Slider))),
-        TextDirection.rtl,
-      );
-      await tester.tap(find.text('عدسات'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('هالة قلوب'));
-      await tester.tap(find.text('أماكن'));
-      await tester.pumpAndSettle();
-      const name = 'الكُوَيْت — Kuwait 2026';
-      await tester.enterText(find.byType(TextField), name);
-      tester.view.viewInsets = const FakeViewPadding(bottom: 280);
-      addTearDown(tester.view.resetViewInsets);
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('مجلة'));
-      await tester.tap(find.text('مجلة'));
-      await tester.pumpAndSettle();
-      final editable = tester.widget<EditableText>(find.byType(EditableText));
-      expect(
-        tester
-            .state<EditableTextState>(find.byType(EditableText))
-            .renderEditable
-            .textDirection,
-        TextDirection.rtl,
-      );
-      expect(editable.controller.text, name);
-      expect(latest.beauty, .5);
-      expect(latest.faceLens, NativeArLensIds.heartHalo);
-      expect(latest.placeStyle, 'editorial');
-      expect(latest.placeName, name);
-      expect(
-        tester.takeException(),
-        isNull,
-        reason: 'Arabic place input must fit with the keyboard open',
-      );
-      tester.view.resetViewInsets();
-      await tester.pumpWidget(app(const Locale('en')));
-      await tester.pumpAndSettle();
-      expect(find.text('Place name'), findsOneWidget);
-      expect(
-        tester.widget<EditableText>(find.byType(EditableText)).controller.text,
-        name,
-      );
-      expect(latest.layerCount, 3);
-      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(panel('first'));
+      await _tap(tester, 'effects-tab-3');
+      await tester.tap(find.byTooltip('Close effects'));
+      expect(closes, 1);
+      expect(find.byType(Scaffold), findsOneWidget);
+      await tester.pumpWidget(panel('second'));
+      await _tap(tester, 'effects-tab-3');
+      expect(requests, 1);
     },
   );
+
+  testWidgets('unsupported beauty and location controls cannot apply effects', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        child: _panel(
+          supportsBeauty: false,
+          supportsPlaces: false,
+          onChanged: (_, __, ___) =>
+              fail('Unavailable control applied an effect'),
+        ),
+      ),
+    );
+    await _tap(tester, 'effects-tab-1');
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
+    await _tap(tester, 'beauty-control-1');
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
+    await _tap(tester, 'effects-tab-3');
+    expect(find.text('Location frames unavailable'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+  });
+
+  testWidgets('Arabic GPS place and stacked layers survive a language change', (
+    tester,
+  ) async {
+    CameraEffects latest = const CameraEffects();
+    const name = 'الكُوَيْت — Kuwait 2026';
+    final session = CameraPlaceSession(resolver: (_) async => name);
+    Widget app(Locale locale) => _app(
+      locale: locale,
+      child: _panel(
+        locationSession: session,
+        onChanged: (effects, _, __) => latest = effects,
+      ),
+    );
+    await tester.pumpWidget(app(const Locale('ar')));
+    await _tap(tester, 'effects-tab-1');
+    await tester.tap(find.text('ناعم'));
+    await tester.pumpAndSettle();
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    expect(slider.semanticFormatterCallback!(.5), '50\u200e%\u200e');
+    expect(
+      Directionality.of(tester.element(find.byType(Slider))),
+      TextDirection.rtl,
+    );
+    await _tap(tester, 'effects-tab-2');
+    await _tap(tester, 'effects-card-${NativeArLensIds.heartHalo}');
+    await _tap(tester, 'effects-tab-3');
+    await _tap(tester, 'effects-card-place-editorial');
+    expect(find.text(name), findsOneWidget);
+    expect(latest.beauty, .65);
+    expect(latest.placeName, name);
+    expect(latest.layerCount, 3);
+    await tester.pumpWidget(app(const Locale('en')));
+    await tester.pumpAndSettle();
+    expect(find.text('Places'), findsOneWidget);
+    expect(find.text(name), findsOneWidget);
+    expect(latest.layerCount, 3);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('beauty Off clears smoothing, eye size and contour together', (
+    tester,
+  ) async {
+    CameraEffects latest = const CameraEffects(
+      beauty: .65,
+      beautyEyes: .4,
+      beautySlim: .5,
+    );
+    await tester.pumpWidget(
+      _app(
+        child: _panel(
+          effects: latest,
+          supportsFaceBeauty: true,
+          onChanged: (effects, _, __) => latest = effects,
+        ),
+      ),
+    );
+    await _tap(tester, 'effects-tab-1');
+    await tester.tap(find.text('Natural'));
+    expect(latest.beautyEyes, .4);
+    expect(latest.beautySlim, .5);
+    await tester.tap(find.text('Off'));
+    expect(latest.layerCount, 0);
+  });
 
   testWidgets('Arabic defaults preserve explicit host translations', (
     tester,
@@ -352,6 +456,55 @@ void main() {
     expect(arabic.formatCaptureText(1, 4), 'التقاط: 1/4');
     expect(arabic.formatPeopleCount(12), 'عدد الأشخاص: 12');
   });
+}
+
+CameraEffectsPanel _panel({
+  Key? key,
+  CameraEffects effects = const CameraEffects(),
+  bool supportsBeauty = true,
+  bool supportsFaceBeauty = false,
+  bool supportsPlaces = true,
+  CameraPlaceSession? locationSession,
+  VoidCallback? onClose,
+  void Function(CameraEffects, String, double)? onChanged,
+}) => CameraEffectsPanel(
+  key: key,
+  effects: effects,
+  lookId: 'none',
+  lookStrength: .85,
+  supportedFaceLenses: NativeArLensIds.face,
+  supportsPlaces: supportsPlaces,
+  supportsBeauty: supportsBeauty,
+  supportsFaceBeauty: supportsFaceBeauty,
+  locationSession: locationSession,
+  onClose: onClose,
+  onChanged: onChanged ?? (_, __, ___) {},
+);
+
+Widget _app({
+  required Widget child,
+  Locale locale = const Locale('en'),
+  double textScale = 1,
+}) => MaterialApp(
+  locale: locale,
+  supportedLocales: const [Locale('en'), Locale('ar')],
+  localizationsDelegates: GlobalMaterialLocalizations.delegates,
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(
+      context,
+    ).copyWith(textScaler: TextScaler.linear(textScale)),
+    child: child!,
+  ),
+  home: Scaffold(
+    body: Align(alignment: Alignment.bottomCenter, child: child),
+  ),
+);
+
+Future<void> _tap(WidgetTester tester, String key) async {
+  final finder = find.byKey(ValueKey(key));
+  await tester.ensureVisible(finder);
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
 }
 
 class _LanguageGeocoder extends geo.GeocodingPlatform {

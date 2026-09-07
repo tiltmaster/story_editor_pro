@@ -85,18 +85,15 @@ class StoryEditorFilters {
     StoryFilterPreset(id: 'cleanglow', name: 'Clean Glow'),
   ];
 
-  /// The original color presets plus the authored native glasses lenses.
-  ///
-  /// The native lens is appended so every existing preset keeps its index and
-  /// the camera's slider geometry and snapping behavior remain unchanged.
+  /// Retained for source compatibility. The glasses lens is no longer offered.
   static const StoryFilterPreset classicGlassesLens = StoryFilterPreset(
     id: glassesLensId,
     name: 'Classic Glasses',
   );
 
-  static const List<StoryFilterPreset> nativeLensPresets = <StoryFilterPreset>[
-    classicGlassesLens,
-  ];
+  /// Face lenses are selected independently in the Lenses tab.
+  static const List<StoryFilterPreset> nativeLensPresets =
+      <StoryFilterPreset>[];
 
   static const List<StoryFilterPreset> cameraPresets = <StoryFilterPreset>[
     ...presets,

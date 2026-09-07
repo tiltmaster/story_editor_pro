@@ -29,13 +29,14 @@ final class FaceARVideoRecorder {
     private var audioInput: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var outputPath: String?
+    private var onStarted: ((CMTime) -> Void)?
 
     var isRecording: Bool {
         lock.lock(); defer { lock.unlock() }
         return state != .idle
     }
 
-    func start(outputPath: String, width: Int, height: Int) -> Error? {
+    func start(outputPath: String, width: Int, height: Int, onStarted: ((CMTime) -> Void)? = nil) -> Error? {
         lock.lock(); defer { lock.unlock() }
         guard state == .idle else {
             return NSError(domain: "FaceARVideoRecorder", code: 1,
@@ -97,6 +98,7 @@ final class FaceARVideoRecorder {
                 sourcePixelBufferAttributes: attributes
             )
             self.outputPath = outputPath
+            self.onStarted = onStarted
             state = .armed
             return nil
         } catch {
@@ -106,7 +108,10 @@ final class FaceARVideoRecorder {
     }
 
     func appendVideo(pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
-        lock.lock(); defer { lock.unlock() }
+        var started: ((CMTime) -> Void)?
+        lock.lock()
+        // Call outside the recorder lock: consumers may update camera state.
+        defer { lock.unlock(); started?(presentationTime) }
         guard state == .armed || state == .writing,
               let writer = writer,
               let videoInput = videoInput,
@@ -115,6 +120,8 @@ final class FaceARVideoRecorder {
             guard writer.startWriting() else { resetLocked(); return }
             writer.startSession(atSourceTime: presentationTime)
             state = .writing
+            started = onStarted
+            onStarted = nil
         }
         guard videoInput.isReadyForMoreMediaData else { return }
         _ = adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
@@ -177,5 +184,6 @@ final class FaceARVideoRecorder {
         audioInput = nil
         adaptor = nil
         outputPath = nil
+        onStarted = nil
     }
 }

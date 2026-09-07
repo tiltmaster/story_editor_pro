@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'face_beauty.dart';
 
 /// Stable identifiers understood by the native AR implementations.
 abstract final class NativeArLensIds {
@@ -15,13 +16,16 @@ abstract final class NativeArLensIds {
   static const String celestial = 'face_celestial';
   static const String heartHalo = 'face_hearts';
   static const String freckles = 'face_freckles';
+  static const String neonContour = 'face_neon';
+  static const String butterflies = 'face_butterflies';
 
-  static const Set<String> glasses = <String>{classicGlasses};
+  static const Set<String> glasses = <String>{};
   static const Set<String> face = <String>{
-    classicGlasses,
     celestial,
     heartHalo,
     freckles,
+    neonContour,
+    butterflies,
   };
   static const Set<String> composed = <String>{
     analogTape,
@@ -35,7 +39,14 @@ abstract final class NativeArLensIds {
 
 enum NativeArRuntimeState { disabled, preparing, ready, active, unavailable }
 
-enum NativeArEventType { state, tracking, error, unknown }
+enum NativeArEventType {
+  state,
+  tracking,
+  pose,
+  recordingStarted,
+  error,
+  unknown,
+}
 
 @immutable
 class NativeArCapabilities {
@@ -98,6 +109,9 @@ class NativeArEvent {
     this.faceTracked,
     this.faceTrackingReady,
     this.failure,
+    this.facePose,
+    this.timestampMs,
+    this.isPhoto = false,
   });
 
   final NativeArEventType type;
@@ -105,6 +119,9 @@ class NativeArEvent {
   final bool? faceTracked;
   final bool? faceTrackingReady;
   final NativeArFailure? failure;
+  final FaceBeautyPose? facePose;
+  final double? timestampMs;
+  final bool isPhoto;
 
   factory NativeArEvent.fromMap(Map<Object?, Object?> map) {
     final typeName = map['type']?.toString();
@@ -115,12 +132,17 @@ class NativeArEvent {
       type: switch (typeName) {
         'state' => NativeArEventType.state,
         'tracking' => NativeArEventType.tracking,
+        'pose' => NativeArEventType.pose,
+        'recordingStarted' => NativeArEventType.recordingStarted,
         'error' => NativeArEventType.error,
         _ => NativeArEventType.unknown,
       },
       state: NativeArController.parseState(stateName),
       faceTracked: map['faceTracked'] as bool?,
       faceTrackingReady: map['faceReady'] as bool?,
+      facePose: FaceBeautyPose.fromMap(map['facePose']),
+      timestampMs: (map['timestampMs'] as num?)?.toDouble(),
+      isPhoto: map['isPhoto'] == true,
       failure: code == null && message == null
           ? null
           : NativeArFailure(
@@ -133,7 +155,8 @@ class NativeArEvent {
 
 /// Typed, low-frequency control plane for the native AR renderer.
 ///
-/// Camera frames and landmarks never cross this channel. Call [prepare] only
+/// Camera frames never cross this channel. Four eye coordinates are emitted
+/// at most 15 times per second when face shaping is active. Call [prepare] only
 /// after the native camera preview has produced its first frame so AR cannot
 /// delay camera startup.
 class NativeArController {
@@ -262,6 +285,8 @@ class NativeArController {
     String compositionId = 'none',
     String placeStyle = 'none',
     String placeName = '',
+    double beautyEyes = 0,
+    double beautySlim = 0,
   }) async {
     _checkNotDisposed();
     if (!intensity.isFinite) throw ArgumentError.value(intensity, 'intensity');
@@ -281,6 +306,8 @@ class NativeArController {
         'compositionId': compositionId,
         'placeStyle': placeStyle,
         'placeName': String.fromCharCodes(placeName.trim().runes.take(64)),
+        'beautyEyes': beautyEyes.isFinite ? beautyEyes.clamp(0, 1) : 0,
+        'beautySlim': beautySlim.isFinite ? beautySlim.clamp(0, 1) : 0,
       });
       return true;
     } on MissingPluginException catch (error) {
@@ -304,7 +331,9 @@ class NativeArController {
         if (event.faceTrackingReady != null) {
           _faceTrackingReady = event.faceTrackingReady!;
         }
-        _state = event.state;
+        // Pose/recording metadata may omit state. It must not disable an
+        // active tracker simply because parsing defaults to disabled.
+        if (raw['state'] is String) _state = event.state;
         if (event.failure != null) _lastFailure = event.failure;
         _events.add(event);
       },

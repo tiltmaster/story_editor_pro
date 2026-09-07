@@ -20,6 +20,3 @@ APIs send performance and utilization metrics. Any shipping host app must
 disclose that metrics processing and obtain informed consent where applicable:
 
 https://github.com/google-ai-edge/mediapipe#privacy
-
-The glasses geometry in `glasses_classic/` was generated for this project and
-does not include external model or texture assets.

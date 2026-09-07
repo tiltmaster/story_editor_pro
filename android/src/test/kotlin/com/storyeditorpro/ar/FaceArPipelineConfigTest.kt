@@ -12,4 +12,8 @@ class FaceArPipelineConfigTest {
             FaceArController.EFFECT_TARGETS,
         )
     }
+
+    @Test fun cameraFramesNeverWaitForInferenceQueue() {
+        assertEquals(0, FaceArController.OVERLAY_QUEUE_DEPTH)
+    }
 }

@@ -1,3 +1,16 @@
+## 1.6.0
+
+### Camera changes after Galaxy S23 Ultra feedback
+- Replaced the modal effects sheet with a compact camera tray and side control; the shutter stays accessible. Arabic/RTL and small-screen layouts are covered by widget tests.
+- Location styles fetch the current city with permission-aware lookup and session caching; removed manual location entry.
+- Corrected Android viewport cropping and duplicate selfie mirroring, and iOS portrait/photo orientation and face-art scaling.
+- Removed the Classic Glasses lens and added tracked neon contours and animated butterfly crowns.
+- Added independent eye enlargement and face contour controls, strengthened skin smoothing, and baked tracked shaping into photos/video before editing or boomerang reversal.
+- Removed the Android frame queue, unnecessary overlay synchronization, repeated live thumbnail textures, and startup gallery cache clearing. Face tracking loads on demand.
+- Added native recording-start timestamps and bounded pose timelines; stale/lost faces stop reshaping.
+
+Android builds and local checks are covered in the camera review. Real-device FPS and iOS execution still require hardware/Mac validation.
+
 ## 1.4.0
 
 ### Added

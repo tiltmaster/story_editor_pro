@@ -53,17 +53,47 @@ class TextureRenderer {
             uniform float uSCurve;
             uniform vec2 uOutputSize;
             uniform float uBeauty;
+            uniform vec4 uFaceEyes;
+            uniform float uFaceValid;
+            uniform float uBeautyEyes;
+            uniform float uBeautySlim;
             uniform float uVhs;
             uniform float uBloom;
             uniform float uGrain;
             uniform float uHalation;
             uniform float uSplitTone;
             uniform float uChroma;
+            vec2 shapeFace(vec2 uv) {
+                if (uFaceValid < 0.5) return uv;
+                vec2 metric = vec2(uOutputSize.x / max(uOutputSize.y, 1.0), 1.0);
+                vec2 p = uv * metric;
+                vec2 l = uFaceEyes.xy * metric;
+                vec2 r = uFaceEyes.zw * metric;
+                float d = distance(l, r);
+                if (d < 0.015) return uv;
+                vec2 axis = (r - l) / d;
+                vec2 down = vec2(-axis.y, axis.x);
+                vec2 delta = p - l;
+                float weight = max(0.0, 1.0 - length(delta) / (d * 0.48));
+                p -= delta * (0.24 * uBeautyEyes * weight * weight);
+                delta = p - r;
+                weight = max(0.0, 1.0 - length(delta) / (d * 0.48));
+                p -= delta * (0.24 * uBeautyEyes * weight * weight);
+                vec2 center = (l + r) * 0.5 + down * d * 0.65;
+                delta = p - center;
+                float x = dot(delta, axis);
+                float y = dot(delta, down);
+                vec2 q = vec2(x / (d * 1.15), y / (d * 1.5));
+                weight = max(0.0, 1.0 - dot(q, q));
+                p += axis * x * (0.18 * uBeautySlim * weight * weight * smoothstep(-0.15, 0.35, y / d));
+                return clamp(p / metric, vec2(0.0), vec2(1.0));
+            }
             void main() {
-                vec2 uv = vTexCoord;
+                vec2 screenUv = gl_FragCoord.xy / max(uOutputSize, vec2(1.0));
+                vec2 shapedUv = shapeFace(vec2(screenUv.x, 1.0 - screenUv.y));
+                vec2 uv = (uTexMatrix * vec4(shapedUv.x, 1.0 - shapedUv.y, 0.0, 1.0)).xy;
                 vec4 tex = texture2D(uTexture, uv);
                 vec3 source = tex.rgb;
-                vec2 screenUv = gl_FragCoord.xy / max(uOutputSize, vec2(1.0));
                 // FlutterFragCoord is top-left/y-down; OpenGL is bottom-left.
                 // Use this parity coordinate only for procedural phase. Keep
                 // screenUv for outward radial sampling in native GL space.
@@ -88,37 +118,37 @@ class TextureRenderer {
                     vec3 original = tex.rgb;
                     vec3 total = original;
                     float totalWeight = 1.0;
-                    vec3 n0 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n0 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(1.0000, 0.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff0 = n0 - original;
-                    float w0 = exp(-dot(diff0, diff0) * 180.0);
+                    float w0 = exp(-dot(diff0, diff0) * 48.0);
                     total += n0 * w0; totalWeight += w0;
-                    vec3 n1 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n1 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-1.0000, 0.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff1 = n1 - original;
-                    float w1 = exp(-dot(diff1, diff1) * 180.0);
+                    float w1 = exp(-dot(diff1, diff1) * 48.0);
                     total += n1 * w1; totalWeight += w1;
-                    vec3 n2 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, 1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n2 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, 1.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff2 = n2 - original;
-                    float w2 = exp(-dot(diff2, diff2) * 180.0);
+                    float w2 = exp(-dot(diff2, diff2) * 48.0);
                     total += n2 * w2; totalWeight += w2;
-                    vec3 n3 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, -1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n3 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.0000, -1.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff3 = n3 - original;
-                    float w3 = exp(-dot(diff3, diff3) * 180.0);
+                    float w3 = exp(-dot(diff3, diff3) * 48.0);
                     total += n3 * w3; totalWeight += w3;
-                    vec3 n4 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n4 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, 0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff4 = n4 - original;
-                    float w4 = exp(-dot(diff4, diff4) * 180.0);
+                    float w4 = exp(-dot(diff4, diff4) * 48.0);
                     total += n4 * w4; totalWeight += w4;
-                    vec3 n5 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n5 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, 0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff5 = n5 - original;
-                    float w5 = exp(-dot(diff5, diff5) * 180.0);
+                    float w5 = exp(-dot(diff5, diff5) * 48.0);
                     total += n5 * w5; totalWeight += w5;
-                    vec3 n6 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n6 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(0.7070, -0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff6 = n6 - original;
-                    float w6 = exp(-dot(diff6, diff6) * 180.0);
+                    float w6 = exp(-dot(diff6, diff6) * 48.0);
                     total += n6 * w6; totalWeight += w6;
-                    vec3 n7 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
+                    vec3 n7 = texture2D(uTexture, clamp(uv + (uTexMatrix * vec4(vec2(-0.7070, -0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0), 0.0, 0.0)).xy, vec2(0.0), vec2(1.0))).rgb;
                     vec3 diff7 = n7 - original;
-                    float w7 = exp(-dot(diff7, diff7) * 180.0);
+                    float w7 = exp(-dot(diff7, diff7) * 48.0);
                     total += n7 * w7; totalWeight += w7;
                     float luma = dot(original, vec3(0.2126, 0.7152, 0.0722));
                     float cb = 0.5 + dot(original, vec3(-0.168736, -0.331264, 0.5));
@@ -126,7 +156,7 @@ class TextureRenderer {
                     float skin = smoothstep(0.49, 0.55, cr) * (1.0 - smoothstep(0.67, 0.77, cr))
                         * smoothstep(0.20, 0.30, cb) * (1.0 - smoothstep(0.51, 0.58, cb))
                         * smoothstep(0.015, 0.10, luma);
-                    source += (total / totalWeight - original) * skin * uBeauty * 0.82;
+                    source += (total / totalWeight - original) * skin * uBeauty * 0.95;
                 }
                 if (uBloom > 0.001 || uHalation > 0.001) {
                     float highlight = smoothstep(0.62, 0.94,
@@ -238,6 +268,15 @@ class TextureRenderer {
     private var filterVignette = 0f
     private var filterSCurve = 0f
     private var filterBeauty = 0f
+    private var faceBeautyEyes = 0f
+    private var faceBeautySlim = 0f
+    private var facePose: BeautyFacePose? = null
+
+    internal fun setFaceBeauty(eyes: Double, slim: Double, pose: BeautyFacePose?) {
+        faceBeautyEyes = if (eyes.isFinite()) eyes.coerceIn(0.0, 1.0).toFloat() else 0f
+        faceBeautySlim = if (slim.isFinite()) slim.coerceIn(0.0, 1.0).toFloat() else 0f
+        facePose = pose
+    }
     private var filterVhs = 0f
     private var filterBloom = 0f
     private var filterGrain = 0f
@@ -545,6 +584,22 @@ class TextureRenderer {
         }
         val beautyLoc = GLES20.glGetUniformLocation(program, "uBeauty")
         if (beautyLoc >= 0) GLES20.glUniform1f(beautyLoc, filterBeauty)
+        val faceValidLoc = GLES20.glGetUniformLocation(program, "uFaceValid")
+        if (faceValidLoc >= 0) GLES20.glUniform1f(faceValidLoc, if (facePose != null) 1f else 0f)
+        val faceEyesLoc = GLES20.glGetUniformLocation(program, "uFaceEyes")
+        facePose?.let { face ->
+            if (faceEyesLoc >= 0) {
+                // The fragment's coordinates describe mirrored output, while
+                // recorded anchors describe the unmirrored camera image.
+                if (mirrorVideoHorizontally) GLES20.glUniform4f(faceEyesLoc,
+                    1f - face.rightX, face.rightY, 1f - face.leftX, face.leftY)
+                else GLES20.glUniform4f(faceEyesLoc, face.leftX, face.leftY, face.rightX, face.rightY)
+            }
+        }
+        val eyesLoc = GLES20.glGetUniformLocation(program, "uBeautyEyes")
+        if (eyesLoc >= 0) GLES20.glUniform1f(eyesLoc, faceBeautyEyes)
+        val slimLoc = GLES20.glGetUniformLocation(program, "uBeautySlim")
+        if (slimLoc >= 0) GLES20.glUniform1f(slimLoc, faceBeautySlim)
         val vhsLoc = GLES20.glGetUniformLocation(program, "uVhs")
         if (vhsLoc >= 0) GLES20.glUniform1f(vhsLoc, filterVhs)
         val bloomLoc = GLES20.glGetUniformLocation(program, "uBloom")

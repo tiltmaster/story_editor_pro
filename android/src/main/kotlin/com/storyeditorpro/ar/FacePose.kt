@@ -11,6 +11,16 @@ internal data class FacePose(
     val rightEye: Point3f,
     val yawRadians: Float,
     val receivedAtElapsedMs: Long = SystemClock.elapsedRealtime(),
+    val frameGeometry: FaceFrameGeometry? = null,
+    val contour: List<Point3f> = emptyList(),
+)
+
+/** The analysis buffer can differ in crop, scale and rotation from the effect buffer. */
+internal data class FaceFrameGeometry(
+    val width: Int,
+    val height: Int,
+    val rotationDegrees: Int,
+    val sensorToBuffer: FloatArray,
 )
 
 /**
@@ -45,25 +55,6 @@ internal object FacePoseEstimator {
             .toFloat()
             .coerceIn(-0.85f, 0.85f)
         return FacePose(left, right, yaw, receivedAtElapsedMs)
-    }
-}
-
-internal data class YawProjectedVertex(val x: Float, val z: Float)
-
-/** Bounded 2.5D projection calibrated for the authored glasses mesh. */
-internal object GlassesYawProjection {
-    // The mesh's temple depth is ~1.6x its half-width. Feeding that depth into
-    // yaw at 1:1 scale creates the long diagonal spike visible during turns.
-    const val DEPTH_SCALE = 0.38f
-
-    fun rotate(vertex: MeshVertex, yawRadians: Float): YawProjectedVertex {
-        val cosYaw = kotlin.math.cos(yawRadians)
-        val sinYaw = kotlin.math.sin(yawRadians)
-        val depth = vertex.z * DEPTH_SCALE
-        return YawProjectedVertex(
-            x = vertex.x * cosYaw + depth * sinYaw,
-            z = -vertex.x * sinYaw + depth * cosYaw,
-        )
     }
 }
 
@@ -107,6 +98,8 @@ internal class FacePoseSmoother(private val alpha: Float = 0.58f) {
             point(old.rightEye, next.rightEye),
             value(old.yawRadians, next.yawRadians),
             next.receivedAtElapsedMs,
+            next.frameGeometry,
+            if (old.contour.size == next.contour.size) old.contour.zip(next.contour, ::point) else next.contour,
         ).also { previous = it }
     }
 

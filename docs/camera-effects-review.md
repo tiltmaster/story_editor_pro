@@ -22,91 +22,95 @@ controls. The implementation here extends the existing CameraX/AVFoundation
 and MediaPipe/Vision pipeline. It does not depend on the reference SDK's license,
 frameworks, or remote material service.
 
-## Findings corrected
+## Galaxy S23 Ultra follow-up — 7 September 2026
 
-| Finding in the existing working tree | Change |
+The user reported 2–5 seconds of low FPS at startup, subtle smoothing,
+half-width/mirrored place artwork, mirrored carousel text, poor glasses quality,
+and an obstructive effects sheet. This update addresses those code paths.
+
+| Report | Implementation |
 | --- | --- |
-| One carousel choice couples the color look and native lens | Added an Effects panel with independent Looks, Beauty, Lenses and Places controls |
-| The beauty uniform is present, but smoothing is disabled | Added adjustable eight-neighbor bilateral smoothing, preserving high-contrast edges and limiting processing through a skin-color mask |
-| Native location decoration uses the locale's country | Place frames use explicitly entered names or a user-triggered position/reverse-geocoding request; locale is only for language/date formatting |
-| Face tracking prepares after camera startup even when unused | Capability discovery follows the first frame; the model loads when a face lens is chosen |
-| Asynchronous lens selection can race the shutter | Serialized effect commands; capture awaits applied settings and explicit face-model readiness |
-| Android authored graphics ignore frame rotation | Artwork is composed in upright coordinates, then CameraX applies its sensor transform |
-| Beauty needs to survive all output routes | Added the independent beauty value to photo callbacks, collage tiles, editor rendering, video export, boomerang and no-editor output |
+| Startup stutter | Android uses a zero-depth overlay queue, skips canvas synchronization with no artwork, and attaches analysis only for tracked effects. Flutter loads its shader on first effect interaction, uses static material swatches instead of multiple live camera textures, defers gallery work and avoids clearing the gallery cache at startup. |
+| Half-screen/mirrored graphics | Fixed the Android display viewport independently of mutable sensor dimensions; disabled CameraX's implicit preview mirror and compensated artwork using the actual frame transform. iOS normalizes portrait dimensions and photo EXIF orientation. |
+| Unnoticeable beauty | Increased bilateral smoothing radius and strength. Added independent tracked Eyes and Contour controls with bounded inverse warps. |
+| Obstructive controls | Effects are opened from the side rail in a 192-pixel inline tray above the shutter. Back closes the tray first; unrelated rail tools collapse while it is open. |
+| Manual location | Choosing Places automatically requests the current city with permission-aware position/reverse-geocoding. No editable location field. Successful city names are cached in memory for the open camera session. |
+| Poor glasses | Removed the glasses renderer and bundled mesh assets; legacy public identifiers remain for source compatibility but are unavailable. |
 
 ## Available effects
 
-- Existing color presets remain available with adjustable intensity.
-- Beauty: Off, Natural (28%), Soft (50%), Polished (75%), and continuous smoothing.
-  This is pixel-based skin smoothing, not facial reshaping or makeup segmentation.
-  It does not lighten skin. The mask can also affect similarly colored surfaces.
-- Tracked face artwork: Classic Glasses, Stardust (animated stars and cheek
-  highlights), Heart Halo (animated hearts), and Sun Freckles.
-- Place designs: Postcard, Editorial and Passport. Names are bounded to 64
-  Unicode code points. Long names are fitted into the native design.
-- Native time/date designs continue to work alongside tracked face artwork and
-  place frames. Graphics are captured into the source media, not added only in
-  the preview. Animation uses camera-frame timestamps.
+- Independent color looks with intensity, skin smoothing, eye enlargement and
+  face contour adjustment. Smoothing uses a skin-color mask and can also affect
+  similarly colored surfaces; it does not whiten the skin.
+- Five single-face artworks: Stardust, Heart Halo, Sun Freckles, Neon Contour,
+  and animated Butterflies. Neon follows detected face-oval landmarks on both
+  platforms; the iOS Vision path uses its detected open jaw contour. These are
+  landmark effects, not a shared dense 3D face mesh.
+- Postcard, Editorial and Passport city frames; bounded Unicode city names,
+  native Arabic shaping, localized dates and natural text direction.
+- Looks, beauty, one face lens and one place design can be stacked.
 
-Color grading and beauty share one Flutter GPU pass in the preview. The color
-and smoothing calculations are carried into Android OpenGL and iOS Core Image
-video export. Native artwork is composed before this pass. Each frame therefore
-receives the same ordering: captured scene and native artwork, then pixel effects.
-Photos remain full-resolution captures. iOS pools output buffers and caches
-small face sprites and static location artwork; Android draws vectors onto its
-existing CameraX overlay surface. Faces disappear when tracking is lost or stale.
+Color and beauty preview processing stays on the GPU. Only four normalized eye
+coordinates cross the native channel at up to 15Hz when tracking is active.
+Face-shape samples expire after 250ms or explicit tracking loss. Photos freeze
+their capture pose (iOS re-detects the full-resolution photo); video samples are
+relative to native recording start. iOS supplies its exact first writer sample;
+Android supplies CameraX's Start callback, which may differ by a few frames from
+the first encoded sample. Moving-face output alignment needs a device check.
 
-## Integration
+Shape is baked once before the editor or boomerang reversal so it survives every
+output route. This adds an export pass after shaped video recording; it is not
+native live-recording pixel deformation. Later editing applies color/smoothing
+and stickers. Native artwork is already baked into the camera frames.
 
-Open the existing `StoryCameraScreen`, then tap **Effects** above the shutter.
-Select a look, a Beauty amount, a Lens and optionally a Place; each layer is
-retained while editing the others. Reset clears all layers. No external service
-key or runtime asset download is needed for the bundled face artwork.
+## Integration and Arabic
 
-Android location permissions are in the plugin manifest. An iOS host must include:
+Open `StoryCameraScreen` and tap the sparkle icon on the side rail. The four
+tabs are Looks, Beauty, Lenses and Places. Reset clears every layer. No service
+key or remote lens download is needed for the bundled artwork.
+
+Android requires API24+, iOS15+, and Flutter GPU filters require Impeller.
+Unsupported renderers do not offer working-looking beauty controls. Hosts must
+enable Flutter localizations (including Arabic), Android RTL support and native
+permission descriptions. The plugin provides `StoryEditorStrings.arabic()`;
+explicit host translations remain under host control.
+
+Android location permissions are in the plugin manifest. iOS hosts need:
 
 ```xml
 <key>NSLocationWhenInUseUsageDescription</key>
-<string>Show your city in a camera place frame when you choose Use my location.</string>
+<string>Show your current city when you select a camera place frame.</string>
 ```
 
-The local development host has this entry; consuming apps must add it themselves. Location is never requested during camera
-startup. Permission, disabled-service, timeout and geocoder failures leave manual
-place entry available. Names and coordinates are not stored by these new controls.
+Location is requested only when Places is selected. Denial, disabled services,
+timeout and geocoder failure display a localized retry message; they never
+substitute a made-up location. Coordinates are discarded after geocoding.
+Tabs, controls, percentages, place labels and navigation follow Arabic/RTL.
 
-The current native dependencies require Android API 24+ and iOS 15+.
-Flutter GPU image filters require Impeller; unsupported renderers do not expose
-the Beauty control. Camera initialization retains the existing native prewarm,
-first-frame reporting, session reuse and Flutter-camera fallback.
+## Validation and remaining limits
 
-## Verification and limits
+Local validation: 83 Flutter tests and 41 Android JVM tests pass; Dart analysis
+reports no issues. Checks include actual shader
+pixel rendering, small Arabic camera-layout tests, Android JVM tests and a
+release APK build. Results are recorded in `build/s23-flutter-tests.log`,
+`build/s23-native-tests.log` and `build/s23-release.log`.
+The expanded 24-test iOS suite covers orientation, pixel warp, artwork, recording and
+pose timelines; it cannot be run in this Windows workspace. Use the repository's
+macOS/Xcode quality gate before shipping iOS changes.
 
-Local validation completed: Flutter analyzer reports no issues; all 72 Flutter
-tests and 34 Android JVM tests pass. Android debug and release APK builds succeed. The
-actual effects panel was rendered for visual QA, including its selected states. Full build/test results are recorded in `build/effects-tests.log`
-and `build/effects-android-build.log`; release build output is in
-`build/effects-android-release.log`. The iOS test suite includes stacked lens
-validation and location-only operation without face preparation. iOS compilation
-and tests require the existing macOS/Xcode CI job or a Mac; this Windows workspace
-cannot execute them. Device testing is deferred to the user; no physical camera was tested during development.
+The user will test the rebuilt APK. No new device FPS, startup, thermal or
+tracking-quality measurements are claimed by desktop tests. Check:
 
-Before release, verify on physical Android and iPhone hardware:
+1. Cold and warm startup; front/back switches with effects off and stacked.
+2. Readable place/date text in preview, photo and video, with either mirror mode.
+3. Smooth/Eyes/Contour at 0%, 50% and 100%, moving faces, face loss and reacquisition.
+4. Shaped video and boomerang output, audio, Arabic long city names, denied
+   location, background/resume and repeated camera entry.
 
-1. Cold/warm camera first-frame time, lens preparation time, sustained frame rate,
-   thermal behavior and memory with all layers enabled.
-2. Front/back camera switching and mirrored/unmirrored text in preview, full-size
-   photos and recorded video; test portrait capture and device rotation.
-3. Face loss/reacquisition, different skin tones and lighting, and long Arabic
-   and Latin place names. Check the captured face-art position as well as preview.
-4. Video, collage, boomerang, editor and direct callback exports; location denial;
-   navigation, background/resume and repeated opening of the camera.
-
-This does **not** establish 90% Snapchat capability parity or a measured 10x
-visual/performance improvement. Current artwork tracks one face. Dense face-mesh
-makeup, facial reshaping, expression triggers, segmentation/background replacement,
-multi-face AR, world tracking and Snapchat's lens catalog are not implemented.
-Those are substantive remaining capabilities, not supplied by a carousel or by
-copying the reference project's Dart configuration.
+This does not establish 90% Snapchat capability parity or a measured 10x visual
+improvement. Dense mesh makeup, expression triggers, segmentation/background
+replacement, multi-face AR, world tracking and a comparable lens catalog remain
+substantive capabilities outside this implementation.
 
 ## API references checked
 
@@ -115,49 +119,11 @@ copying the reference project's Dart configuration.
 - [Snap Camera Kit scope](https://developers.snap.com/camera-kit/getting-started/what-is-camera-kit)
 - [Camera Kit integration requirements](https://developers.snap.com/camera-kit/integrate-sdk/ios/ios-configuration)
 
-## Arabic and RTL follow-up
-
-- The host now enables Flutter's Arabic Material/Widgets/Cupertino localizations,
-  so Arabic device language selects Arabic text and RTL layout. Android declares
-  RTL support. The local iOS project registers Arabic and bundles Arabic camera,
-  microphone, library and location permission descriptions.
-- Added `StoryEditorStrings.arabic()` for camera, settings, editor and filter
-  labels. The default configuration follows Arabic automatically; explicit host
-  translations remain under host control. Effect status/error labels are localized.
-- Tabs, chips, slider direction, input caret and leading alignment follow RTL.
-  Percentages use `intl` locale data, including bidi marks. No Latin letter
-  spacing is forced on the Arabic heading. Tests use a real Arabic locale rather
-  than English text inside a manually reversed layout.
-- Location lookup requests the current app locale. Manual names preserve Arabic
-  diacritics and mixed Arabic/Latin text. Editorial place frames align to the
-  right for Arabic. Native labels and dates use the selected language; switching
-  locale with the camera open reapplies native composition settings.
-- Android uses cached `StaticLayout` instances with first-strong bidirectional
-  resolution and font padding for Arabic marks. iOS uses system Arabic glyphs
-  and natural paragraph direction. Text direction remains independent of the
-  selfie camera's mirroring transform.
-
-Follow-up verification: 72 Flutter tests and 34 Android JVM tests pass. Arabic
-panel screenshots were rendered and visually reviewed in `build/qa/effects-ar-*.png`.
-Coverage includes 320-pixel-wide RTL layout with 1.3x text, mixed Arabic/English
-place input with an open keyboard, locale switching without losing layers,
-localized geocoding, and preserving custom host copy. Logs are in
-`build/effects-rtl-tests.log`, `build/effects-rtl-native-tests.log` and
-`build/effects-rtl-release.log`. Native font shaping in actual captured media
-still needs the user's Android/iPhone check; iOS cannot be compiled on this host.
-
-References: [Flutter internationalization](https://docs.flutter.dev/ui/internationalization)
-and [Android StaticLayout text direction and font padding](https://developer.android.com/reference/android/text/StaticLayout.Builder).
-
-On this Windows host, Java's local socket initialization initially failed.
-Using `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=H:\story_editor_pro\build\java-tmp`
-for the build process resolved it. This is a local build-environment setting,
-not a change required in shipped apps.
-
 ## Repository hygiene
 
-The local `example/` app and APK/AAB/IPA packages are excluded from Git. CI now
-generates a disposable integration host with `tool/ci/create_host.py`; the local
-app is preserved, and the generator refuses to overwrite it. Host-specific
-Arabic and permission configuration described above must be supplied by each
-consumer. The reusable library implementation remains versioned.
+The local `example/` app and APK/AAB/IPA outputs are excluded from Git. CI creates
+a disposable integration host using `tool/ci/create_host.py`; it refuses to
+overwrite the existing local app. Only reusable source, assets, docs and tests
+are versioned. Java's local socket workaround for this Windows build uses
+`JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=H:\story_editor_pro\build\java-tmp`;
+consuming applications do not need that setting.

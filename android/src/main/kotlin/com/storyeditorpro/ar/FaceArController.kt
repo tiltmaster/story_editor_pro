@@ -8,25 +8,23 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.util.Size
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.effects.OverlayEffect
+import androidx.camera.effects.Frame
 import androidx.core.util.Consumer
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
-import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 internal class FaceArController(
     private val context: Context,
     private val modelAssetPath: String,
-    private val meshAssetPaths: Map<String, String>,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler, AutoCloseable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val trackerExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -35,30 +33,32 @@ internal class FaceArController(
     private val supported =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
     private val faceTrackingSupported =
-        supported && assetExists(modelAssetPath) &&
-            FaceArContract.glassesLensIds.all { lensId ->
-                meshAssetPaths[lensId]?.let(::assetExists) == true
-            }
+        supported && assetExists(modelAssetPath)
     private val machine = FaceArStateMachine(supported)
     private val pose = AtomicReference<FacePose?>(null)
     private val smoother = FacePoseSmoother()
-    private val renderer = ClassicGlassesRenderer()
     private val creativeRenderer = CreativeLensRenderer(context)
     private val adornmentRenderer = FaceAdornmentRenderer()
     private val effectLock = Any()
     private val generation = AtomicInteger()
-    private val creativeDrawInFlight = AtomicBoolean(false)
-    private val pendingCreativeTimestampNs = AtomicLong(NO_TIMESTAMP)
+    @Volatile private var analysis: ImageAnalysis? = null
+    private var overlayHadArtwork = false
 
     @Volatile private var settings = FaceArSettings(FaceArContract.LENS_NONE, 1f)
+    @Volatile private var beautyEyes = 0f
+    @Volatile private var beautySlim = 0f
     @Volatile private var creativeContext = CreativeLensContext()
     @Volatile private var tracker: MediaPipeFaceTracker? = null
-    @Volatile private var meshes: Map<String, RuntimeMesh> = emptyMap()
     @Volatile private var eventSink: EventChannel.EventSink? = null
     @Volatile private var overlayEffect: OverlayEffect? = null
     @Volatile private var glThread: HandlerThread? = null
     @Volatile private var lastTracked: Boolean? = null
     @Volatile private var closed = false
+    private var lastPoseEventMs = 0L
+    private var lastPoseEventTracked = false
+
+    private fun needsFaceTracking(): Boolean = settings.lensId in FaceArContract.faceLensIds ||
+        beautyEyes > 0f || beautySlim > 0f
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -67,7 +67,7 @@ internal class FaceArController(
                     "supported" to supported,
                     "backend" to FaceArContract.BACKEND,
                     "maxFaces" to 1,
-                    "supports3D" to faceTrackingSupported,
+                    "supports3D" to false,
                     "supportsRecording" to supported,
                     "faceTracking" to faceTrackingSupported,
                     "preview" to supported,
@@ -92,7 +92,11 @@ internal class FaceArController(
                     val decision = machine.setEnabled(enabled)
                     if (!enabled) clearTracking()
                     emitState(decision.state)
-                    if (decision.startWork) initializeAsync()
+                    if (decision.startWork) {
+                        if (needsFaceTracking()) initializeAsync()
+                        else emitState(machine.markReady())
+                    }
+                    refreshAnalysis()
                     result.success(mapOf("state" to machine.state.wire, "faceReady" to (tracker != null)))
                 }
             }
@@ -104,6 +108,12 @@ internal class FaceArController(
                 } else {
                     try {
                         val nextSettings = FaceArSettings.validated(lensId, intensity)
+                        fun beautyArgument(name: String): Float =
+                            (call.argument<Number>(name)?.toFloat() ?: 0f).also {
+                                require(it.isFinite())
+                            }.coerceIn(0f, 1f)
+                        val nextBeautyEyes = beautyArgument("beautyEyes")
+                        val nextBeautySlim = beautyArgument("beautySlim")
                         val nextContext = CreativeLensContext(
                             languageCode = call.argument<String>("languageCode")
                                 ?.take(8)
@@ -124,10 +134,11 @@ internal class FaceArController(
 
                         )
                         settings = nextSettings
+                        beautyEyes = nextBeautyEyes
+                        beautySlim = nextBeautySlim
                         creativeContext = nextContext
-                        renderer.mesh = meshes[settings.lensId]
-                        if (settings.lensId !in FaceArContract.faceLensIds) clearTracking()
-                        if (settings.lensId in FaceArContract.faceLensIds && tracker == null) initializeAsync()
+                        if (!needsFaceTracking()) clearTracking()
+                        if (needsFaceTracking() && tracker == null) initializeAsync()
                         if (settings.lensId in FaceArContract.composedLensIds || creativeContext.hasOverlay) {
                             // Static authored lenses never wait for MediaPipe.
                             // They become available as soon as CameraX has an
@@ -135,6 +146,7 @@ internal class FaceArController(
                             // continue independently in the background.
                             emitState(machine.markReady())
                         }
+                        refreshAnalysis()
                         result.success(null)
                     } catch (_: IllegalArgumentException) {
                         result.error("INVALID_ARGS", "Unsupported lens or invalid intensity", null)
@@ -159,48 +171,32 @@ internal class FaceArController(
     }
 
     fun createImageAnalysis(targetRotation: Int): ImageAnalysis? {
-        // The analysis timestamp drives OverlayEffect.drawFrameAsync for both
-        // face-tracked and composed lenses. Returning null when MediaPipe is
-        // unavailable left the static time/date/VHS lenses attached but never
-        // actually drawn.
         if (!supported || closed) return null
+        analysis?.clearAnalyzer()
         return ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            // Keep CameraX's native YUV stream for the always-bound timestamp
-            // source. Static lenses read only timestamps; the face tracker
-            // converts the latest retained frame to Bitmap only when a tracked
-            // lens is active. This avoids RGBA conversion cost in Normal mode.
             .setTargetResolution(Size(480, 854))
             .setTargetRotation(targetRotation)
             .build()
-            .also { analysis ->
-                analysis.setAnalyzer(trackerExecutor) { image ->
-                    val localTracker = tracker
-                    val localSettings = settings
-                    if (
-                        machine.isActive() &&
-                        (localSettings.lensId in FaceArContract.composedLensIds || creativeContext.hasOverlay) &&
-                        (localSettings.lensId !in FaceArContract.faceLensIds || localTracker == null)
-                    ) {
-                        requestCreativeDraw(image.imageInfo.timestamp)
-                        image.close()
-                        return@setAnalyzer
-                    }
-                    if (
-                        !machine.isActive() ||
-                        localSettings.lensId !in FaceArContract.faceLensIds ||
-                        localTracker == null
-                    ) {
-                        // Even Normal must drain the overlay surface. Otherwise
-                        // disabling a lens can retain the previous canvas and
-                        // leave its artwork on subsequent preview/capture frames.
-                        requestCreativeDraw(image.imageInfo.timestamp)
-                        image.close()
-                    } else {
-                        localTracker.detect(image)
-                    }
-                }
+            .also { analysis = it; refreshAnalysis() }
+    }
+
+    private fun refreshAnalysis() {
+        val localAnalysis = analysis ?: return
+        if (!machine.isActive() || !needsFaceTracking() || tracker == null) {
+            // Normal and text/place effects do not need a YUV stream or ML
+            // callback. OverlayEffect now renders directly from camera frames.
+            localAnalysis.clearAnalyzer()
+            return
+        }
+        localAnalysis.setAnalyzer(trackerExecutor) { image ->
+            val localTracker = tracker
+            if (!machine.isActive() || !needsFaceTracking() || localTracker == null) {
+                image.close()
+            } else {
+                localTracker.detect(image)
             }
+        }
     }
 
     fun cameraEffectOrNull(): CameraEffect? {
@@ -215,7 +211,7 @@ internal class FaceArController(
             val effect = try {
                 OverlayEffect(
                     EFFECT_TARGETS,
-                    3,
+                    OVERLAY_QUEUE_DEPTH,
                     Handler(thread.looper),
                     Consumer { error: Throwable -> handleOverlayError(error) },
                 )
@@ -225,31 +221,26 @@ internal class FaceArController(
             }
             try {
                 effect.setOnDrawListener { frame ->
-                    val canvas = frame.overlayCanvas
-                    canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                     val localPose = pose.get()
                     val localSettings = settings
-                    if (
-                        machine.isActive() &&
-                        (localSettings.lensId in FaceArContract.composedLensIds || creativeContext.hasOverlay)
-                    ) {
-                        creativeRenderer.draw(
-                            frame,
-                            localSettings.lensId,
-                            localSettings.intensity,
-                            creativeContext,
+                    val localContext = creativeContext
+                    if (machine.isActive() && needsFaceTracking()) emitPoseForFrame(frame, localPose)
+                    val drawCreative = machine.isActive() &&
+                        (localSettings.lensId in FaceArContract.composedLensIds || localContext.hasOverlay)
+                    val drawFace = machine.isActive() && localPose != null &&
+                        localSettings.lensId in FaceArContract.adornmentLensIds
+                    // getOverlayCanvas synchronizes a SurfaceTexture. Calling
+                    // it on every unfiltered frame stalled startup unnecessarily.
+                    // Clear once after removing artwork; then pass through.
+                    if (drawCreative || drawFace || overlayHadArtwork) {
+                        frame.overlayCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                        if (drawCreative) creativeRenderer.draw(
+                            frame, localSettings.lensId, localSettings.intensity, localContext,
                         )
-                    }
-                    if (
-                        machine.isActive() &&
-                        localSettings.lensId in FaceArContract.glassesLensIds &&
-                        localPose != null
-                    ) {
-                        renderer.draw(frame, localPose, localSettings.intensity)
-                    }
-                    if (machine.isActive() && localPose != null &&
-                        localSettings.lensId in FaceArContract.adornmentLensIds) {
-                        adornmentRenderer.draw(frame, localPose, localSettings.lensId, localSettings.intensity)
+                        if (drawFace) adornmentRenderer.draw(
+                            frame, requireNotNull(localPose), localSettings.lensId, localSettings.intensity,
+                        )
+                        overlayHadArtwork = drawCreative || drawFace
                     }
                     true
                 }
@@ -275,14 +266,13 @@ internal class FaceArController(
                 return@execute
             }
             try {
-                val localMeshes = meshAssetPaths.mapValues { (_, path) ->
-                    RuntimeMesh.load(context, path)
-                }
                 val localTracker = MediaPipeFaceTracker.create(
                     context,
                     modelAssetPath,
                     onResult = { timestampNs, nextPose ->
-                        onTrackingResult(timestampNs, nextPose)
+                        if (!closed && generation.get() == expectedGeneration) {
+                            onTrackingResult(timestampNs, nextPose)
+                        }
                     },
                     onError = { error -> emitError("TRACKER_RUNTIME", error) },
                 )
@@ -290,10 +280,9 @@ internal class FaceArController(
                     localTracker.close()
                     return@execute
                 }
-                meshes = localMeshes
-                renderer.mesh = localMeshes[settings.lensId]
                 tracker = localTracker
                 emitState(machine.markReady())
+                refreshAnalysis()
             } catch (error: Throwable) {
                 val next = if (settings.lensId in FaceArContract.composedLensIds || creativeContext.hasOverlay) {
                     // Authored static lenses do not depend on face tracking.
@@ -307,49 +296,61 @@ internal class FaceArController(
         }
     }
 
-    private fun onTrackingResult(timestampNs: Long, next: FacePose?) {
+    private fun onTrackingResult(@Suppress("UNUSED_PARAMETER") timestampNs: Long, next: FacePose?) {
         val smoothPose = smoother.update(next)
         pose.set(smoothPose)
         emitTracking(smoothPose != null)
-        try {
-            overlayEffect?.drawFrameAsync(timestampNs)
-        } catch (_: IllegalStateException) {
-            // The camera effect may be closing concurrently with the tracker callback.
-        }
-    }
-
-    private fun requestCreativeDraw(timestampNs: Long) {
-        pendingCreativeTimestampNs.set(timestampNs)
-        drainCreativeDraw()
-    }
-
-    private fun drainCreativeDraw() {
-        if (!creativeDrawInFlight.compareAndSet(false, true)) return
-        val drawTimestamp = pendingCreativeTimestampNs.getAndSet(NO_TIMESTAMP)
-        val effect = overlayEffect
-        if (effect == null || drawTimestamp == NO_TIMESTAMP) {
-            creativeDrawInFlight.set(false)
-            return
-        }
-        try {
-            effect.drawFrameAsync(drawTimestamp).addListener(
-                {
-                    creativeDrawInFlight.set(false)
-                    if (pendingCreativeTimestampNs.get() != NO_TIMESTAMP) {
-                        drainCreativeDraw()
-                    }
-                },
-                DIRECT_EXECUTOR,
-            )
-        } catch (_: IllegalStateException) {
-            creativeDrawInFlight.set(false)
-        }
+        // A zero-depth OverlayEffect consumes the freshest pose at render
+        // time. Camera delivery is never held behind inference or model setup.
     }
 
     private fun clearTracking() {
         smoother.clear()
         pose.set(null)
         emitTracking(false)
+        if (lastPoseEventTracked) {
+            lastPoseEventTracked = false
+            emit(mapOf("type" to "pose", "faceTracked" to false, "timestampMs" to SystemClock.elapsedRealtime()))
+        }
+    }
+
+    fun onCameraRebound() {
+        // A previous camera's sensor transform cannot be reused for the next
+        // camera, even though its face tracker instance can be kept warm.
+        clearTracking()
+        tracker?.discardPendingFrames()
+    }
+
+    fun onRecordingStarted(timestampMs: Long) {
+        emit(mapOf("type" to "recordingStarted", "timestampMs" to timestampMs))
+    }
+
+    private fun emitPoseForFrame(frame: Frame, currentPose: FacePose?) {
+        val now = SystemClock.elapsedRealtime()
+        val fresh = currentPose?.takeIf { now - it.receivedAtElapsedMs <= 180L }
+        if (fresh == null) {
+            if (lastPoseEventTracked) {
+                lastPoseEventTracked = false
+                emit(mapOf("type" to "pose", "faceTracked" to false, "timestampMs" to now))
+            }
+            return
+        }
+        if (now - lastPoseEventMs < 67L) return
+        val eyes = OverlayFrameCoordinates.uprightEyes(frame, fresh) ?: return
+        val geometry = OverlayFrameCoordinates.geometry(frame)
+        if (geometry.width <= 0f || geometry.height <= 0f) return
+        val (left, right) = if (eyes.first.x <= eyes.second.x) eyes else eyes.second to eyes.first
+        lastPoseEventMs = now
+        lastPoseEventTracked = true
+        emit(mapOf(
+            "type" to "pose",
+            "faceTracked" to true,
+            "timestampMs" to now,
+            "facePose" to mapOf(
+                "leftX" to left.x / geometry.width, "leftY" to left.y / geometry.height,
+                "rightX" to right.x / geometry.width, "rightY" to right.y / geometry.height,
+            ),
+        ))
     }
 
     private fun handleOverlayError(error: Throwable) {
@@ -364,8 +365,7 @@ internal class FaceArController(
         generation.incrementAndGet()
         emitState(machine.reset())
         clearTracking()
-        renderer.mesh = null
-        meshes = emptyMap()
+        analysis?.clearAnalyzer()
         val staleTracker = tracker
         tracker = null
         if (staleTracker != null) {
@@ -425,13 +425,10 @@ internal class FaceArController(
         eventSink = null
         machine.dispose()
         pose.set(null)
-        renderer.mesh = null
-        meshes = emptyMap()
+        analysis?.clearAnalyzer()
         overlayEffect?.clearOnDrawListener()
         overlayEffect?.close()
         overlayEffect = null
-        pendingCreativeTimestampNs.set(NO_TIMESTAMP)
-        creativeDrawInFlight.set(false)
         glThread?.quitSafely()
         glThread = null
         val staleTracker = tracker
@@ -441,8 +438,7 @@ internal class FaceArController(
     }
 
     companion object {
-        private const val NO_TIMESTAMP = Long.MIN_VALUE
-        private val DIRECT_EXECUTOR = Executor { command -> command.run() }
+        internal const val OVERLAY_QUEUE_DEPTH = 0
         internal const val EFFECT_TARGETS =
             CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE or CameraEffect.IMAGE_CAPTURE
     }

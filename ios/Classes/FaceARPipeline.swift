@@ -17,12 +17,31 @@ struct FaceARPose: Equatable {
     let eyeDistance: CGFloat
     let rollRadians: CGFloat
     let yawNormalized: CGFloat
+    let contour: [CGPoint]
+    let contourClosed: Bool
 
-    init(center: CGPoint, eyeDistance: CGFloat, rollRadians: CGFloat, yawNormalized: CGFloat = 0) {
+    init(center: CGPoint, eyeDistance: CGFloat, rollRadians: CGFloat, yawNormalized: CGFloat = 0,
+         contour: [CGPoint] = [], contourClosed: Bool = true) {
         self.center = center
         self.eyeDistance = eyeDistance
         self.rollRadians = rollRadians
         self.yawNormalized = yawNormalized
+        self.contour = contour
+        self.contourClosed = contourClosed
+    }
+
+    /// Normalized upright unmirrored camera coordinates, with a top-left origin,
+    /// consumed by the Flutter preview shader and recorded pose timeline.
+    var normalizedTopLeftEyes: [String: Double] {
+        let dx = cos(rollRadians) * eyeDistance * 0.5
+        let dy = sin(rollRadians) * eyeDistance * 0.5
+        return ["leftX": Double(center.x - dx), "leftY": Double(1 - center.y + dy),
+                "rightX": Double(center.x + dx), "rightY": Double(1 - center.y - dy)]
+    }
+
+    func pixelEyeAxis(in size: CGSize) -> CGPoint {
+        CGPoint(x: cos(rollRadians) * eyeDistance * size.width,
+                y: sin(rollRadians) * eyeDistance * size.height)
     }
 
     func smoothed(toward next: FaceARPose, alpha: CGFloat) -> FaceARPose {
@@ -37,16 +56,27 @@ struct FaceARPose: Equatable {
             ),
             eyeDistance: eyeDistance + (next.eyeDistance - eyeDistance) * t,
             rollRadians: rollRadians + angleDelta * t,
-            yawNormalized: yawNormalized + (next.yawNormalized - yawNormalized) * t
+            yawNormalized: yawNormalized + (next.yawNormalized - yawNormalized) * t,
+            contour: contour.count == next.contour.count && contourClosed == next.contourClosed
+                ? zip(contour, next.contour).map { previous, following in
+                    CGPoint(x: previous.x + (following.x - previous.x) * t,
+                            y: previous.y + (following.y - previous.y) * t)
+                } : next.contour,
+            contourClosed: next.contourClosed
         )
     }
 }
 
 enum FaceARPoseGeometry {
+    static func eyeCenter(outer: CGPoint, inner: CGPoint) -> CGPoint {
+        CGPoint(x: (outer.x + inner.x) * 0.5, y: (outer.y + inner.y) * 0.5)
+    }
+
     /// Converts detector-semantic eye points into a stable screen-space axis.
     /// Anatomical left/right labels can reverse their X ordering under mirror
     /// transforms; roll must always follow visual left-to-right ordering.
-    static func make(firstEye: CGPoint, secondEye: CGPoint, nose: CGPoint?) -> FaceARPose? {
+    static func make(firstEye: CGPoint, secondEye: CGPoint, nose: CGPoint?,
+                     contour: [CGPoint] = [], contourClosed: Bool = true) -> FaceARPose? {
         let left: CGPoint
         let right: CGPoint
         if firstEye.x <= secondEye.x {
@@ -72,7 +102,7 @@ enum FaceARPoseGeometry {
             center: center,
             eyeDistance: distance,
             rollRadians: atan2(dy, dx),
-            yawNormalized: yaw
+            yawNormalized: yaw, contour: contour, contourClosed: contourClosed
         )
     }
 }
@@ -137,21 +167,26 @@ final class MediaPipeFaceLandmarkTracker: NSObject, FaceLandmarkTracking, FaceLa
         lock.unlock()
         guard error == nil,
               let landmarks = result?.faceLandmarks.first,
-              landmarks.count > 263 else {
+              landmarks.count > 362 else {
             callback?(nil)
             return
         }
-        // MediaPipe Face Mesh outer eye-corner landmarks.
-        let left = landmarks[33]
-        let right = landmarks[263]
-        // MediaPipe image coordinates use a top-left origin. Core Image uses a
-        // bottom-left origin, so invert Y once at the provider boundary.
-        let leftY = 1 - CGFloat(left.y)
-        let rightY = 1 - CGFloat(right.y)
+        // Match Android: average each eye's inner and outer corners. Outer
+        // corners alone incorrectly place the reshape center at the temples.
+        // Convert the top-left detector origin once at the provider boundary.
+        func point(_ index: Int) -> CGPoint {
+            CGPoint(x: CGFloat(landmarks[index].x), y: 1 - CGFloat(landmarks[index].y))
+        }
+        let faceOval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+                        397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+                        172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+        // A partial result may contain eyes without the complete oval.
+        let contour = landmarks.count > 454 ? faceOval.map(point) : []
         callback?(FaceARPoseGeometry.make(
-            firstEye: CGPoint(x: CGFloat(left.x), y: leftY),
-            secondEye: CGPoint(x: CGFloat(right.x), y: rightY),
-            nose: CGPoint(x: CGFloat(landmarks[1].x), y: 1 - CGFloat(landmarks[1].y))
+            firstEye: FaceARPoseGeometry.eyeCenter(outer: point(33), inner: point(133)),
+            secondEye: FaceARPoseGeometry.eyeCenter(outer: point(263), inner: point(362)),
+            nose: CGPoint(x: CGFloat(landmarks[1].x), y: 1 - CGFloat(landmarks[1].y)),
+            contour: contour
         ))
     }
 
@@ -189,12 +224,23 @@ final class VisionFaceLandmarkTracker: FaceLandmarkTracking {
         lock.lock(); generation &+= 1; lock.unlock()
     }
 
-    private static func pose(from observation: VNFaceObservation?) -> FaceARPose? {
+    static func pose(from observation: VNFaceObservation?) -> FaceARPose? {
         guard let observation = observation,
               let left = center(of: observation.landmarks?.leftEye, in: observation.boundingBox),
               let right = center(of: observation.landmarks?.rightEye, in: observation.boundingBox) else { return nil }
         let nose = center(of: observation.landmarks?.nose, in: observation.boundingBox)
-        return FaceARPoseGeometry.make(firstEye: left, secondEye: right, nose: nose)
+        let contour = points(of: observation.landmarks?.faceContour, in: observation.boundingBox)
+        // Vision provides a real open jaw contour, not forehead landmarks.
+        return FaceARPoseGeometry.make(firstEye: left, secondEye: right, nose: nose,
+                                       contour: contour, contourClosed: false)
+    }
+
+    private static func points(of region: VNFaceLandmarkRegion2D?, in box: CGRect) -> [CGPoint] {
+        guard let region = region else { return [] }
+        return (0..<region.pointCount).map { index in
+            CGPoint(x: box.minX + CGFloat(region.normalizedPoints[index].x) * box.width,
+                    y: box.minY + CGFloat(region.normalizedPoints[index].y) * box.height)
+        }
     }
 
     private static func center(of region: VNFaceLandmarkRegion2D?, in box: CGRect) -> CGPoint? {
@@ -212,166 +258,6 @@ final class VisionFaceLandmarkTracker: FaceLandmarkTracking {
     }
 }
 
-final class FaceARFrameRenderer {
-    private let context: CIContext
-    private let glassesImage: CIImage
-    let usesRuntimeMesh: Bool
-    private var pool: CVPixelBufferPool?
-    private var poolSize = CGSize.zero
-
-    init(meshPath: String?) {
-        if let device = MTLCreateSystemDefaultDevice() {
-            context = CIContext(mtlDevice: device, options: [.cacheIntermediates: false])
-        } else {
-            context = CIContext(options: [.cacheIntermediates: false, .useSoftwareRenderer: false])
-        }
-        let asset = Self.makeClassicGlasses(meshPath: meshPath)
-        glassesImage = asset.image
-        usesRuntimeMesh = asset.usesRuntimeMesh
-    }
-
-    func render(input: CVPixelBuffer, pose: FaceARPose, intensity: CGFloat) -> CVPixelBuffer? {
-        let width = CVPixelBufferGetWidth(input)
-        let height = CVPixelBufferGetHeight(input)
-        guard let output = outputBuffer(width: width, height: height) else { return nil }
-        let source = CIImage(cvPixelBuffer: input)
-        let extent = source.extent
-        let center = CGPoint(x: pose.center.x * extent.width, y: pose.center.y * extent.height)
-        let targetWidth = max(pose.eyeDistance * extent.width * 2.55, 48)
-        let scale = targetWidth / glassesImage.extent.width
-        var overlay = glassesImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        // Nose displacement relative to the eye axis is a stable yaw proxy.
-        // Compress the far side and offset toward the near side. Because the
-        // authored XYZ mesh is rasterized during preparation, this is an
-        // honest 2.5D perspective approximation rather than claimed full 3D.
-        let yaw = max(-1, min(1, pose.yawNormalized))
-        overlay = overlay.transformed(by: CGAffineTransform(scaleX: 1 - abs(yaw) * 0.34, y: 1))
-        overlay = overlay.transformed(by: CGAffineTransform(translationX: -overlay.extent.midX, y: -overlay.extent.midY))
-        overlay = overlay.transformed(by: CGAffineTransform(rotationAngle: pose.rollRadians))
-        overlay = overlay.transformed(by: CGAffineTransform(
-            translationX: center.x + yaw * targetWidth * 0.13,
-            y: center.y + targetWidth * 0.015
-        ))
-
-        if intensity < 0.999, let alpha = CIFilter(name: "CIColorMatrix") {
-            alpha.setValue(overlay, forKey: kCIInputImageKey)
-            alpha.setValue(CIVector(x: 0, y: 0, z: 0, w: max(0, min(1, intensity))), forKey: "inputAVector")
-            overlay = alpha.outputImage ?? overlay
-        }
-        context.render(
-            overlay.composited(over: source).cropped(to: extent),
-            to: output,
-            bounds: extent,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        )
-        return output
-    }
-
-    func jpegData(from pixelBuffer: CVPixelBuffer) -> Data? {
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = context.createCGImage(image, from: image.extent) else { return nil }
-        return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.92)
-    }
-
-    private func outputBuffer(width: Int, height: Int) -> CVPixelBuffer? {
-        let size = CGSize(width: width, height: height)
-        if pool == nil || poolSize != size {
-            let attributes: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
-                kCVPixelBufferMetalCompatibilityKey as String: true,
-                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
-            ]
-            var newPool: CVPixelBufferPool?
-            guard CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &newPool) == kCVReturnSuccess else { return nil }
-            pool = newPool
-            poolSize = size
-        }
-        var buffer: CVPixelBuffer?
-        guard let pool = pool,
-              CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess else { return nil }
-        return buffer
-    }
-
-    /// Rasterizes the Blender-authored runtime mesh once, off the frame path.
-    /// Core Image then transforms that immutable overlay on the GPU per frame.
-    /// This preserves the authored silhouette/material split without a GLB
-    /// dependency or repeated JSON parsing.
-    private static func makeClassicGlasses(meshPath: String?) -> (image: CIImage, usesRuntimeMesh: Bool) {
-        if let meshPath = meshPath,
-           let data = try? Data(contentsOf: URL(fileURLWithPath: meshPath)),
-           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let rawVertices = root["vertices"] as? [[NSNumber]],
-           let rawTriangles = root["triangles"] as? [[NSNumber]],
-           let materialIds = root["triangle_material_ids"] as? [NSNumber],
-           !rawVertices.isEmpty, !rawTriangles.isEmpty {
-            let vertices = rawVertices.compactMap { values -> (x: CGFloat, y: CGFloat, z: CGFloat)? in
-                guard values.count >= 3 else { return nil }
-                return (CGFloat(truncating: values[0]), CGFloat(truncating: values[1]), CGFloat(truncating: values[2]))
-            }
-            if vertices.count == rawVertices.count {
-                let size = CGSize(width: 640, height: 240)
-                let rasterizer = UIGraphicsImageRenderer(size: size)
-                let image = rasterizer.image { output in
-                    output.cgContext.setShouldAntialias(true)
-                    let scale: CGFloat = 275
-                    let projected = vertices.map { vertex -> CGPoint in
-                        // Shallow perspective preserves the authored temple
-                        // depth in the frontal tracking view.
-                        let perspective = 1 / (1 + max(-0.25, vertex.z) * 0.07)
-                        return CGPoint(x: size.width * 0.5 + vertex.x * scale * perspective,
-                                       y: size.height * 0.5 - vertex.y * scale * perspective)
-                    }
-                    let ordered = rawTriangles.enumerated().sorted { lhs, rhs in
-                        func depth(_ item: (offset: Int, element: [NSNumber])) -> CGFloat {
-                            let indexes = item.element.prefix(3).map { $0.intValue }
-                            guard indexes.count == 3, indexes.allSatisfy({ vertices.indices.contains($0) }) else { return 0 }
-                            return indexes.reduce(0) { $0 + vertices[$1].z } / 3
-                        }
-                        return depth(lhs) > depth(rhs)
-                    }
-                    for (triangleIndex, rawTriangle) in ordered {
-                        let indexes = rawTriangle.prefix(3).map { $0.intValue }
-                        guard indexes.count == 3, indexes.allSatisfy({ projected.indices.contains($0) }) else { continue }
-                        let path = UIBezierPath()
-                        path.move(to: projected[indexes[0]])
-                        path.addLine(to: projected[indexes[1]])
-                        path.addLine(to: projected[indexes[2]])
-                        path.close()
-                        let material = triangleIndex < materialIds.count ? materialIds[triangleIndex].intValue : 0
-                        (material == 1
-                            ? UIColor(red: 0.012, green: 0.045, blue: 0.060, alpha: 0.48)
-                            : UIColor(red: 0.006, green: 0.008, blue: 0.012, alpha: 1)).setFill()
-                        path.fill()
-                    }
-                }
-                if let ciImage = CIImage(image: image) { return (ciImage, true) }
-            }
-        }
-
-        // Deterministic fallback if an application omits the optional mesh.
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 512, height: 190))
-        let image = renderer.image { context in
-            context.cgContext.setShouldAntialias(true)
-            UIColor(white: 0.05, alpha: 0.20).setFill()
-            UIBezierPath(roundedRect: CGRect(x: 34, y: 34, width: 180, height: 118), cornerRadius: 48).fill()
-            UIBezierPath(roundedRect: CGRect(x: 298, y: 34, width: 180, height: 118), cornerRadius: 48).fill()
-            UIColor(white: 0.04, alpha: 0.97).setStroke()
-            let frames = UIBezierPath()
-            frames.lineWidth = 18
-            frames.append(UIBezierPath(roundedRect: CGRect(x: 28, y: 28, width: 192, height: 130), cornerRadius: 54))
-            frames.append(UIBezierPath(roundedRect: CGRect(x: 292, y: 28, width: 192, height: 130), cornerRadius: 54))
-            frames.move(to: CGPoint(x: 220, y: 79))
-            frames.addCurve(to: CGPoint(x: 292, y: 79), controlPoint1: CGPoint(x: 242, y: 57), controlPoint2: CGPoint(x: 270, y: 57))
-            frames.move(to: CGPoint(x: 28, y: 72)); frames.addLine(to: CGPoint(x: 0, y: 52))
-            frames.move(to: CGPoint(x: 484, y: 72)); frames.addLine(to: CGPoint(x: 512, y: 52))
-            frames.stroke()
-        }
-        return (CIImage(image: image) ?? CIImage.empty(), false)
-    }
-}
-
 final class FaceARCoordinator {
     enum State: String { case disabled, preparing, ready, active, unavailable }
 
@@ -382,45 +268,46 @@ final class FaceARCoordinator {
     }
 
     private let modelPath: String?
-    private let meshPaths: [String: String]
     private let lock = NSLock()
     // Video frames and AVCapturePhoto callbacks arrive on different queues.
     // Renderer pools/caches are dimension-specific mutable state, so serialize
     // only the actual render/encode work while keeping coordinator state reads
     // under the shorter lock above.
     private let renderLock = NSLock()
-    private var renderers: [String: FaceARFrameRenderer] = [:]
     private var tracker: FaceLandmarkTracking?
     private var backend = "unprepared"
     private var state: State = .disabled
     private var enabled = false
     private var lensId = "none"
     private var intensity: CGFloat = 1
+    private var beautyEyes: CGFloat = 0
+    private var beautySlim: CGFloat = 0
     private var pose: FaceARPose?
-    private var frameIndex = 0
     private var trackingInFlight = false
     private var lastTrackingEvent: Bool?
     private var eventSink: FlutterEventSink?
     private var preparationStarted = false
     private var preparationGeneration: UInt = 0
+    private var trackingGeneration: UInt = 0
     private var lastTimestampMilliseconds = -1
+    private var lastTrackingRequestMilliseconds = -1
     private var poseReceivedAt = Date.distantPast
     private var creativeRenderer: CreativeLensFrameRenderer?
     private var creativeContext = CreativeLensContext()
 
-    init(modelPath: String?, meshPaths: [String: String]) {
+    init(modelPath: String?) {
         self.modelPath = modelPath
-        self.meshPaths = meshPaths
     }
 
     var capabilities: [String: Any] {
         lock.lock(); let currentBackend = backend; lock.unlock()
-        let faceTrackingSupported = !meshPaths.isEmpty
+        // Vision is always available on the iOS 15 deployment target.
+        let faceTrackingSupported = true
         let supported = faceTrackingSupported || !CreativeLensFrameRenderer.lensIds.isEmpty
         return ["supported": supported, "backend": currentBackend, "maxFaces": 1,
                 "supports3D": false, "supportsRecording": supported,
                 "faceTracking": faceTrackingSupported, "preview": supported, "recording": supported,
-                "lensIds": Array(Set(meshPaths.keys).union(CreativeLensFrameRenderer.lensIds).union(CreativeLensFrameRenderer.adornmentIds)).sorted()]
+                "lensIds": Array(CreativeLensFrameRenderer.lensIds.union(CreativeLensFrameRenderer.adornmentIds)).sorted()]
     }
 
     var faceReady: Bool {
@@ -431,11 +318,16 @@ final class FaceARCoordinator {
         lock.lock(); defer { lock.unlock() }; return state.rawValue
     }
 
+    // Called only while holding `lock`.
+    private var hasSelection: Bool {
+        creativeContext.hasOverlay || beautyEyes > 0 || beautySlim > 0 || lensId != "none"
+    }
+
     var hasActiveEffect: Bool {
         lock.lock(); defer { lock.unlock() }
         return enabled && state == .active &&
-            (renderers[lensId] != nil || CreativeLensFrameRenderer.lensIds.contains(lensId) ||
-             CreativeLensFrameRenderer.adornmentIds.contains(lensId) || creativeContext.hasOverlay)
+            (CreativeLensFrameRenderer.lensIds.contains(lensId) ||
+             CreativeLensFrameRenderer.adornmentIds.contains(lensId) || creativeContext.hasOverlay || beautyEyes > 0 || beautySlim > 0)
     }
 
     func setEventSink(_ sink: FlutterEventSink?) {
@@ -462,11 +354,6 @@ final class FaceARCoordinator {
             }
 #endif
             if selected == nil { selected = VisionFaceLandmarkTracker() }
-            // Mesh parsing/rasterization is part of asynchronous preparation,
-            // never camera startup or the first preview frame.
-            let preparedRenderers = self.meshPaths.mapValues {
-                FaceARFrameRenderer(meshPath: $0)
-            }
             self.lock.lock()
             guard generation == self.preparationGeneration else {
                 self.lock.unlock()
@@ -474,12 +361,11 @@ final class FaceARCoordinator {
                 return
             }
             self.tracker = selected
-            self.renderers = preparedRenderers
             self.backend = selectedBackend
             self.preparationStarted = false
             let next: State
             if self.enabled {
-                next = Self.operationalState(enabled: true, lensId: self.creativeContext.hasOverlay && self.lensId == "none" ? "overlay" : self.lensId, trackerAvailable: true)
+                next = Self.operationalState(enabled: true, lensId: self.hasSelection && self.lensId == "none" ? "overlay" : self.lensId, trackerAvailable: true)
             } else {
                 // `prepare` on its own reports ready; an explicit disable that
                 // arrives while preparation is running remains disabled.
@@ -491,16 +377,38 @@ final class FaceARCoordinator {
         }
     }
 
+    /// Report the writer's actual media-session origin in the detector clock.
+    func recordingStarted(at timestamp: CMTime) {
+        let seconds = CMTimeGetSeconds(timestamp)
+        guard seconds.isFinite else { return }
+        emit(["type": "recordingStarted", "timestampMs": Int((seconds * 1000).rounded())])
+    }
+
+    /// Camera switches and output rotation invalidate every in-flight pose.
+    /// The model stays warm, while stale coordinates can never cross sessions.
+    func resetTracking() {
+        lock.lock()
+        trackingGeneration &+= 1
+        pose = nil; trackingInFlight = false; lastTrackingEvent = nil
+        lastTrackingRequestMilliseconds = -1
+        let current = state
+        let timestamp = max(0, lastTimestampMilliseconds)
+        lock.unlock()
+        emit(["type": "pose", "state": current.rawValue, "faceTracked": false,
+              "timestampMs": timestamp, "facePose": NSNull()])
+    }
+
     func setEnabled(_ value: Bool) {
         lock.lock()
         enabled = value
         if !value { pose = nil; lastTrackingEvent = nil }
-        let needsTracker = meshPaths[lensId] != nil || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
+        let needsTracker = beautyEyes > 0 || beautySlim > 0 || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
         let trackerReady = tracker != nil || !needsTracker
-        let next = Self.operationalState(enabled: value, lensId: creativeContext.hasOverlay && lensId == "none" ? "overlay" : lensId, trackerAvailable: trackerReady)
+        let next = Self.operationalState(enabled: value, lensId: hasSelection && lensId == "none" ? "overlay" : lensId, trackerAvailable: trackerReady)
         state = next
         lock.unlock()
         emitState(next)
+        if !value { resetTracking() }
         if value && needsTracker { prepare() }
     }
 
@@ -512,27 +420,31 @@ final class FaceARCoordinator {
         mirrorOutput: Bool = false,
         compositionId: String = "none",
         placeStyle: String = "none",
-        placeName: String = ""
+        placeName: String = "",
+        beautyEyes: Double = 0,
+        beautySlim: Double = 0
     ) throws {
-        guard value.isFinite,
+        guard value.isFinite, beautyEyes.isFinite, beautySlim.isFinite,
               ["none", "postcard", "editorial", "stamp"].contains(placeStyle),
               compositionId == "none" || CreativeLensFrameRenderer.lensIds.contains(compositionId),
-              id == "none" || meshPaths[id] != nil || CreativeLensFrameRenderer.lensIds.contains(id) || CreativeLensFrameRenderer.adornmentIds.contains(id) else {
+              id == "none" || CreativeLensFrameRenderer.lensIds.contains(id) || CreativeLensFrameRenderer.adornmentIds.contains(id) else {
             throw NSError(domain: "FaceAR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown lens id: \(id)"])
         }
         lock.lock()
         lensId = id
         intensity = CGFloat(max(0, min(1, value)))
+        self.beautyEyes = CGFloat(max(0, min(1, beautyEyes)))
+        self.beautySlim = CGFloat(max(0, min(1, beautySlim)))
         creativeContext = CreativeLensContext(
             languageCode: languageCode,
             countryCode: countryCode,
             mirrorOutput: mirrorOutput,
             compositionId: compositionId, placeStyle: placeStyle, placeName: placeName
         )
-        let requiresTracker = meshPaths[id] != nil || CreativeLensFrameRenderer.adornmentIds.contains(id)
+        let requiresTracker = self.beautyEyes > 0 || self.beautySlim > 0 || CreativeLensFrameRenderer.adornmentIds.contains(id)
         let next = Self.operationalState(
             enabled: enabled,
-            lensId: creativeContext.hasOverlay && id == "none" ? "overlay" : id,
+            lensId: hasSelection && id == "none" ? "overlay" : id,
             trackerAvailable: tracker != nil || !requiresTracker
         )
         state = next
@@ -544,35 +456,33 @@ final class FaceARCoordinator {
 
     func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime) -> CVPixelBuffer {
         lock.lock()
-        let currentRenderer = renderers[lensId]
         let currentLensId = lensId
         let active = enabled && state == .active
-        let tracksFace = meshPaths[lensId] != nil || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
+        let tracksFace = beautyEyes > 0 || beautySlim > 0 || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
         let currentPose = Date().timeIntervalSince(poseReceivedAt) <= 0.18 ? pose : nil
         let currentIntensity = intensity
         let currentCreativeContext = creativeContext
         let creativeActive = active && (creativeContext.hasOverlay ||
             CreativeLensFrameRenderer.lensIds.contains(lensId) || CreativeLensFrameRenderer.adornmentIds.contains(lensId))
-        frameIndex &+= 1
-        let shouldTrack = active && tracksFace && tracker != nil && !trackingInFlight && frameIndex % 2 == 0
-        if shouldTrack { trackingInFlight = true }
+        let seconds = CMTimeGetSeconds(timestamp)
+        let candidate = seconds.isFinite ? Int((seconds * 1000).rounded()) : 0
+        let millis = max(candidate, lastTimestampMilliseconds + 1)
+        lastTimestampMilliseconds = millis
+        // Cap tracking work independently of 30/60/120 Hz camera configuration.
+        let due = lastTrackingRequestMilliseconds < 0 || millis - lastTrackingRequestMilliseconds >= 67
+        let shouldTrack = active && tracksFace && tracker != nil && !trackingInFlight && due
+        if shouldTrack { trackingInFlight = true; lastTrackingRequestMilliseconds = millis }
         let currentTracker = tracker
-        let generation = preparationGeneration
+        let generation = trackingGeneration
         if creativeActive && creativeRenderer == nil { creativeRenderer = CreativeLensFrameRenderer() }
         let activeCreativeRenderer = creativeRenderer
         lock.unlock()
 
         if shouldTrack {
-            let seconds = CMTimeGetSeconds(timestamp)
-            let candidate = seconds.isFinite ? Int((seconds * 1000).rounded()) : 0
-            lock.lock()
-            let millis = max(candidate, lastTimestampMilliseconds + 1)
-            lastTimestampMilliseconds = millis
-            lock.unlock()
             currentTracker?.track(pixelBuffer: pixelBuffer, timestampMilliseconds: millis) { [weak self] detected in
                 guard let self = self else { return }
                 self.lock.lock()
-                guard generation == self.preparationGeneration else { self.lock.unlock(); return }
+                guard generation == self.trackingGeneration else { self.lock.unlock(); return }
                 guard self.enabled && self.lensId == currentLensId && self.state == .active else {
                     self.pose = nil; self.trackingInFlight = false; self.lock.unlock(); return
                 }
@@ -580,18 +490,17 @@ final class FaceARCoordinator {
                 self.poseReceivedAt = Date()
                 self.trackingInFlight = false
                 let tracked = detected != nil
-                let notify = self.lastTrackingEvent != tracked
                 self.lastTrackingEvent = tracked
+                let eventPose = self.pose
                 self.lock.unlock()
-                if notify { self.emit(["type": "tracking", "state": State.active.rawValue, "faceTracked": tracked]) }
+                self.emit(["type": "pose", "state": State.active.rawValue,
+                           "faceTracked": tracked, "timestampMs": millis,
+                           "facePose": eventPose.map { $0.normalizedTopLeftEyes as Any } ?? NSNull()])
             }
         }
         guard active else { return pixelBuffer }
         renderLock.lock(); defer { renderLock.unlock() }
         var output = pixelBuffer
-        if let currentPose = currentPose, let renderer = currentRenderer {
-            output = renderer.render(input: output, pose: currentPose, intensity: currentIntensity) ?? output
-        }
         if creativeActive {
             let seconds = CMTimeGetSeconds(timestamp)
             output = activeCreativeRenderer?.render(input: output, lensId: currentLensId,
@@ -601,23 +510,56 @@ final class FaceARCoordinator {
         return output
     }
 
+    /// Photo buffers carry EXIF orientation independently of the live video
+    /// connection. Normalize pixels before detecting or authoring upright text.
+    /// A fresh photo pose avoids reusing the preview crop's coordinates in 4:3.
+    func processPhoto(pixelBuffer: CVPixelBuffer, metadata: [String: Any]) -> CVPixelBuffer? {
+        lock.lock()
+        let currentLensId = lensId
+        let active = enabled && state == .active
+        let currentIntensity = intensity
+        let currentContext = creativeContext
+        let needsPose = beautyEyes > 0 || beautySlim > 0 || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
+        if creativeRenderer == nil { creativeRenderer = CreativeLensFrameRenderer() }
+        let renderer = creativeRenderer
+        lock.unlock()
+        guard active else { return pixelBuffer }
+        let orientation = (metadata[kCGImagePropertyOrientation as String] as? NSNumber)?.uint32Value ?? 1
+        let source = CIImage(cvPixelBuffer: pixelBuffer).oriented(forExifOrientation: Int32(orientation))
+        let upright = source.transformed(by: CGAffineTransform(translationX: -source.extent.minX, y: -source.extent.minY))
+        var photoPose: FaceARPose?
+        if needsPose {
+            let request = VNDetectFaceLandmarksRequest()
+            let handler = VNImageRequestHandler(ciImage: upright, orientation: .up, options: [:])
+            try? handler.perform([request])
+            photoPose = VisionFaceLandmarkTracker.pose(from: request.results?.first)
+            emit(["type": "pose", "state": State.active.rawValue,
+                  "faceTracked": photoPose != nil, "isPhoto": true,
+                  "timestampMs": Int(ProcessInfo.processInfo.systemUptime * 1000),
+                  "facePose": photoPose.map { $0.normalizedTopLeftEyes as Any } ?? NSNull()])
+        }
+        renderLock.lock(); defer { renderLock.unlock() }
+        return renderer?.render(source: upright, lensId: currentLensId,
+                                intensity: currentIntensity, lensContext: currentContext,
+                                pose: photoPose, time: ProcessInfo.processInfo.systemUptime)
+    }
+
     func jpegData(from buffer: CVPixelBuffer) -> Data? {
         lock.lock()
-        let renderer = renderers[lensId]
-        let isCreative = creativeContext.hasOverlay || CreativeLensFrameRenderer.lensIds.contains(lensId) || CreativeLensFrameRenderer.adornmentIds.contains(lensId)
         let activeCreativeRenderer = creativeRenderer
         lock.unlock()
         renderLock.lock()
         defer { renderLock.unlock() }
-        return isCreative ? activeCreativeRenderer?.jpegData(from: buffer) : renderer?.jpegData(from: buffer)
+        return activeCreativeRenderer?.jpegData(from: buffer)
     }
 
     func dispose() {
         lock.lock()
         let trackerToCancel = tracker
-        tracker = nil; renderers.removeAll(); creativeRenderer = nil; pose = nil; enabled = false; lensId = "none"
+        tracker = nil; creativeRenderer = nil; pose = nil; enabled = false; lensId = "none"
+        beautyEyes = 0; beautySlim = 0; lastTrackingRequestMilliseconds = -1
         trackingInFlight = false; lastTrackingEvent = nil; backend = "unprepared"; state = .disabled
-        preparationStarted = false; preparationGeneration &+= 1; lastTimestampMilliseconds = -1
+        preparationStarted = false; preparationGeneration &+= 1; trackingGeneration &+= 1; lastTimestampMilliseconds = -1
         lock.unlock()
         trackerToCancel?.cancel()
         emitState(.disabled)
@@ -654,7 +596,9 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
                     mirrorOutput: args?["mirrorOutput"] as? Bool ?? false,
                     compositionId: args?["compositionId"] as? String ?? "none",
                     placeStyle: args?["placeStyle"] as? String ?? "none",
-                    placeName: args?["placeName"] as? String ?? ""
+                    placeName: args?["placeName"] as? String ?? "",
+                    beautyEyes: (args?["beautyEyes"] as? NSNumber)?.doubleValue ?? 0,
+                    beautySlim: (args?["beautySlim"] as? NSNumber)?.doubleValue ?? 0
                 )
                 result(nil)
             } catch {

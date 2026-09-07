@@ -1,6 +1,10 @@
 package com.storyeditorpro.ar
 
-internal data class TrackedFrame(val timestampNs: Long, val rotation: Int)
+internal data class TrackedFrame(
+    val timestampNs: Long,
+    val rotation: Int,
+    val geometry: FaceFrameGeometry? = null,
+)
 
 /** Bridges CameraX nanoseconds to MediaPipe's strictly increasing milliseconds. */
 internal class TimestampLedger(private val capacity: Int = 12) {
@@ -12,11 +16,11 @@ internal class TimestampLedger(private val capacity: Int = 12) {
     }
 
     @Synchronized
-    fun record(timestampNs: Long, rotation: Int): Long {
+    fun record(timestampNs: Long, rotation: Int, geometry: FaceFrameGeometry? = null): Long {
         var timestampMs = timestampNs / 1_000_000L
         if (timestampMs <= lastTimestampMs) timestampMs = lastTimestampMs + 1L
         lastTimestampMs = timestampMs
-        pending[timestampMs] = TrackedFrame(timestampNs, rotation)
+        pending[timestampMs] = TrackedFrame(timestampNs, rotation, geometry)
         while (pending.size > capacity) pending.remove(pending.entries.first().key)
         return timestampMs
     }

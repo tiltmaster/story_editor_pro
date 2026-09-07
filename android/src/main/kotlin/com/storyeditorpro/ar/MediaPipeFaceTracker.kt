@@ -70,7 +70,11 @@ internal class MediaPipeFaceTracker private constructor(
     fun detect(image: ImageProxy) {
         val timestampNs = image.imageInfo.timestamp
         val rotation = ((image.imageInfo.rotationDegrees % 360) + 360) % 360
-        val timestampMs = timestamps.record(timestampNs, rotation)
+        val sensorTransform = FloatArray(9).also {
+            image.imageInfo.sensorToBufferTransformMatrix.getValues(it)
+        }
+        val geometry = FaceFrameGeometry(image.width, image.height, rotation, sensorTransform)
+        val timestampMs = timestamps.record(timestampNs, rotation, geometry)
         val source = try {
             image.toBitmap()
         } finally {
@@ -106,7 +110,7 @@ internal class MediaPipeFaceTracker private constructor(
             val landmarks = result.faceLandmarks().firstOrNull()
             onResult(
                 frame.timestampNs,
-                landmarks?.let { poseFrom(it, frame.rotation) },
+                landmarks?.let { poseFrom(it, frame.rotation).copy(frameGeometry = frame.geometry) },
             )
         } catch (error: Throwable) {
             onError(error)
@@ -147,7 +151,7 @@ internal class MediaPipeFaceTracker private constructor(
             right,
             nose,
             SystemClock.elapsedRealtime(),
-        )
+        ).copy(contour = FACE_OVAL.map(::raw))
     }
 
     override fun close() {
@@ -155,7 +159,14 @@ internal class MediaPipeFaceTracker private constructor(
         landmarker.close()
     }
 
+    fun discardPendingFrames() = timestamps.clear()
+
     companion object {
+        private val FACE_OVAL = intArrayOf(
+            10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+            397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+            172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
+        )
         fun create(
             context: Context,
             modelAssetPath: String,

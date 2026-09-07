@@ -23,20 +23,15 @@ void main() {
       );
     });
 
-    test(
-      'color presets leave the independent beauty amount unchanged',
-      () {
-        final ids = StoryEditorFilters.presets
-            .map((preset) => preset.id)
-            .toSet();
-        expect(ids, isNot(contains('naturalskin')));
-        expect(ids, isNot(contains('freshglow')));
-        expect(ids, isNot(contains('softportrait')));
-        for (final id in ids) {
-          expect(StoryEditorFilters.beautyStrength(id, 1), 0);
-        }
-      },
-    );
+    test('color presets leave the independent beauty amount unchanged', () {
+      final ids = StoryEditorFilters.presets.map((preset) => preset.id).toSet();
+      expect(ids, isNot(contains('naturalskin')));
+      expect(ids, isNot(contains('freshglow')));
+      expect(ids, isNot(contains('softportrait')));
+      for (final id in ids) {
+        expect(StoryEditorFilters.beautyStrength(id, 1), 0);
+      }
+    });
 
     test('creative effects are scoped to their material presets', () {
       expect(StoryEditorFilters.beautyStrength('softbeauty', 1), 0);
@@ -149,10 +144,13 @@ void main() {
         expect(androidController, contains('CameraEffect.IMAGE_CAPTURE'));
         expect(
           androidController,
-          contains('requestCreativeDraw(image.imageInfo.timestamp)'),
+          contains('internal const val OVERLAY_QUEUE_DEPTH = 0'),
         );
-        expect(androidController, contains('drawFrameAsync(drawTimestamp)'));
-        expect(androidController, contains('private fun drainCreativeDraw()'));
+        expect(
+          androidController,
+          contains('drawCreative || drawFace || overlayHadArtwork'),
+        );
+        expect(androidController, isNot(contains('drawFrameAsync(')));
         expect(
           androidController,
           isNot(contains('requestCreativeDraw(pending)')),
@@ -334,7 +332,7 @@ void main() {
       expect(captureIndex, greaterThan(snapshotIndex));
       expect(camera, contains('initialFilterPreset: capturedPixelFilterId'));
       expect(camera, contains('initialFilterStrength: capturedFilterStrength'));
-      expect(camera, contains('await _cameraFilterLoadFuture'));
+      expect(camera, contains('await _ensureCameraFilterShader()'));
       expect(camera, contains('bool _canSelectFilterIndex(int index)'));
       expect(camera, contains('preset.id == StoryEditorFilters.none'));
       expect(camera, contains('filterId: capturedFilterId'));

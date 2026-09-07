@@ -13,9 +13,18 @@ void main() {
 
     expect(source, contains('Transform.flip(flipX: true, child: preview)'));
     expect(source, contains('wantsMirroredPreview != backendAlreadyMirrored'));
+    final fullPreview = source.substring(
+      source.indexOf('Widget _buildFullscreenCameraPreview()'),
+      source.indexOf('Widget _buildPermissionDenied()'),
+    );
+    final collagePreview = source.substring(
+      source.indexOf('Widget _buildTileCameraPreview(int index)'),
+      source.indexOf('Widget _buildFullscreenCameraPreview()'),
+    );
+    expect(fullPreview, contains('_presentCameraPreview(preview)'));
     expect(
-      RegExp(r'_presentCameraPreview\(').allMatches(source).length,
-      greaterThanOrEqualTo(4),
+      collagePreview,
+      contains('_presentCameraPreview(_buildActiveCameraPreview())'),
     );
     expect(
       RegExp(

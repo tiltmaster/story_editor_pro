@@ -40,12 +40,16 @@ class VideoOverlayProcessor {
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
         beautyStrength: Double = 0.0,
+        beautyEyes: Double = 0.0,
+        beautySlim: Double = 0.0,
+        faceTimeline: List<Map<String, Any?>> = emptyList(),
         shouldMuteAudio: Boolean = false,
         trimStartMs: Long = 0L,
         trimEndMs: Long = 0L,
         onProgress: ((Double) -> Unit)? = null
     ): String? {
         lastError = null
+        val beautyTimeline = BeautyFaceTimeline(faceTimeline)
         Log.d(TAG, "========================================")
         Log.d(TAG, "Starting GPU-accelerated video overlay export")
         Log.d(TAG, "Inputs validated; preparing private app-cache export")
@@ -337,6 +341,10 @@ class VideoOverlayProcessor {
 
                             // GPU render: video texture + overlay texture → encoder surface
                             val presentationTimeNs = (frameTimeUs - trimStartUs).coerceAtLeast(0L) * 1000L
+                            renderer.setFaceBeauty(
+                                beautyEyes, beautySlim,
+                                beautyTimeline.at(frameTimeUs / 1000L),
+                            )
                             renderer.drawFrame(decoderSurfaceTexture, presentationTimeNs)
 
                             frameCount++

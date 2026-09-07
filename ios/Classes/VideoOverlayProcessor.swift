@@ -4,8 +4,81 @@ import UIKit
 import CoreImage
 import ImageIO
 
+/// Pose timestamps are relative to the original recording, before editor trim.
+/// Loss markers deliberately invalidate the previous face instead of holding a
+/// stale face in place. Selection is immutable and safe across export callbacks.
+struct FacePoseTimeline {
+    struct Sample {
+        let timeMs: Double
+        let eyes: CIVector?
+    }
+    private let samples: [Sample]
+
+    init(_ entries: [[String: Any]]) {
+        samples = entries.enumerated().compactMap { index, entry -> (Int, Sample)? in
+            guard let time = entry["timeMs"] as? NSNumber,
+                  time.doubleValue.isFinite, time.doubleValue >= 0 else { return nil }
+            let coordinates = ["leftX", "leftY", "rightX", "rightY"].compactMap { key -> Double? in
+                guard let value = entry[key] as? NSNumber,
+                      value.doubleValue.isFinite, (0...1).contains(value.doubleValue) else { return nil }
+                return value.doubleValue
+            }
+            let eyes: CIVector? = coordinates.count == 4
+                ? CIVector(x: CGFloat(coordinates[0]), y: CGFloat(coordinates[1]),
+                           z: CGFloat(coordinates[2]), w: CGFloat(coordinates[3])) : nil
+            return (index, Sample(timeMs: time.doubleValue, eyes: eyes))
+        }.sorted { lhs, rhs in
+            lhs.1.timeMs == rhs.1.timeMs ? lhs.0 < rhs.0 : lhs.1.timeMs < rhs.1.timeMs
+        }.map { $0.1 }
+    }
+
+    func eyes(at timeMs: Double) -> CIVector? {
+        guard timeMs.isFinite, timeMs >= 0, !samples.isEmpty else { return nil }
+        var low = 0, high = samples.count
+        while low < high {
+            let mid = (low + high) / 2
+            if samples[mid].timeMs <= timeMs { low = mid + 1 } else { high = mid }
+        }
+        guard low > 0 else { return nil }
+        let sample = samples[low - 1]
+        guard timeMs - sample.timeMs <= 250 else { return nil }
+        return sample.eyes
+    }
+}
+
 class VideoOverlayProcessor {
-    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_03_31_K"
+    private let buildMarker = "STORY_EDITOR_PRO_IOS_EXPORTER_2026_09_07_L"
+    private let faceWarpKernel = CIWarpKernel(source: """
+        kernel vec2 storyFaceWarp(vec2 origin, vec2 size, vec4 eyes,
+                                 float eyesAmount, float slimAmount) {
+            vec2 coord = (destCoord() - origin) / size;
+            vec2 uv = vec2(coord.x, 1.0 - coord.y);
+            vec2 metric = vec2(size.x / size.y, 1.0);
+            vec2 p = uv * metric;
+            vec2 l = eyes.xy * metric;
+            vec2 r = eyes.zw * metric;
+            float distance = length(r - l);
+            if (distance > 0.015) {
+                vec2 axis = (r - l) / distance;
+                vec2 down = vec2(-axis.y, axis.x);
+                vec2 delta = p - l;
+                float weight = max(0.0, 1.0 - length(delta) / (distance * 0.48));
+                p -= delta * (0.24 * eyesAmount * weight * weight);
+                delta = p - r;
+                weight = max(0.0, 1.0 - length(delta) / (distance * 0.48));
+                p -= delta * (0.24 * eyesAmount * weight * weight);
+                vec2 center = (l + r) * 0.5 + down * distance * 0.65;
+                delta = p - center;
+                float x = dot(delta, axis);
+                float y = dot(delta, down);
+                vec2 q = vec2(x / (distance * 1.15), y / (distance * 1.5));
+                weight = max(0.0, 1.0 - dot(q, q));
+                p += axis * x * (0.18 * slimAmount * weight * weight * smoothstep(-0.15, 0.35, y / distance));
+            }
+            vec2 result = clamp(p / metric, vec2(0.0), vec2(1.0));
+            return origin + vec2(result.x, 1.0 - result.y) * size;
+        }
+        """)
     // One deterministic lightweight pass matching the Flutter and Android
     // color-grade/procedural renderer.
     private let parityFilterKernel: CIKernel? = CIKernel(source: """
@@ -49,37 +122,37 @@ class VideoOverlayProcessor {
                 vec3 original = pixel.rgb;
                 vec3 total = original;
                 float totalWeight = 1.0;
-                vec3 n0 = sample(image, samplerTransform(image, d + size * vec2(1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n0 = sample(image, samplerTransform(image, d + size * vec2(1.0000, 0.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff0 = n0 - original;
-                float w0 = exp(-dot(diff0, diff0) * 180.0);
+                float w0 = exp(-dot(diff0, diff0) * 48.0);
                 total += n0 * w0; totalWeight += w0;
-                vec3 n1 = sample(image, samplerTransform(image, d + size * vec2(-1.0000, 0.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n1 = sample(image, samplerTransform(image, d + size * vec2(-1.0000, 0.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff1 = n1 - original;
-                float w1 = exp(-dot(diff1, diff1) * 180.0);
+                float w1 = exp(-dot(diff1, diff1) * 48.0);
                 total += n1 * w1; totalWeight += w1;
-                vec3 n2 = sample(image, samplerTransform(image, d + size * vec2(0.0000, 1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n2 = sample(image, samplerTransform(image, d + size * vec2(0.0000, 1.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff2 = n2 - original;
-                float w2 = exp(-dot(diff2, diff2) * 180.0);
+                float w2 = exp(-dot(diff2, diff2) * 48.0);
                 total += n2 * w2; totalWeight += w2;
-                vec3 n3 = sample(image, samplerTransform(image, d + size * vec2(0.0000, -1.0000) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n3 = sample(image, samplerTransform(image, d + size * vec2(0.0000, -1.0000) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff3 = n3 - original;
-                float w3 = exp(-dot(diff3, diff3) * 180.0);
+                float w3 = exp(-dot(diff3, diff3) * 48.0);
                 total += n3 * w3; totalWeight += w3;
-                vec3 n4 = sample(image, samplerTransform(image, d + size * vec2(0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n4 = sample(image, samplerTransform(image, d + size * vec2(0.7070, 0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff4 = n4 - original;
-                float w4 = exp(-dot(diff4, diff4) * 180.0);
+                float w4 = exp(-dot(diff4, diff4) * 48.0);
                 total += n4 * w4; totalWeight += w4;
-                vec3 n5 = sample(image, samplerTransform(image, d + size * vec2(-0.7070, 0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n5 = sample(image, samplerTransform(image, d + size * vec2(-0.7070, 0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff5 = n5 - original;
-                float w5 = exp(-dot(diff5, diff5) * 180.0);
+                float w5 = exp(-dot(diff5, diff5) * 48.0);
                 total += n5 * w5; totalWeight += w5;
-                vec3 n6 = sample(image, samplerTransform(image, d + size * vec2(0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n6 = sample(image, samplerTransform(image, d + size * vec2(0.7070, -0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff6 = n6 - original;
-                float w6 = exp(-dot(diff6, diff6) * 180.0);
+                float w6 = exp(-dot(diff6, diff6) * 48.0);
                 total += n6 * w6; totalWeight += w6;
-                vec3 n7 = sample(image, samplerTransform(image, d + size * vec2(-0.7070, -0.7070) * vec2(2.2 / 720.0, 2.2 / 1280.0))).rgb;
+                vec3 n7 = sample(image, samplerTransform(image, d + size * vec2(-0.7070, -0.7070) * vec2(5.5 / 720.0, 5.5 / 1280.0))).rgb;
                 vec3 diff7 = n7 - original;
-                float w7 = exp(-dot(diff7, diff7) * 180.0);
+                float w7 = exp(-dot(diff7, diff7) * 48.0);
                 total += n7 * w7; totalWeight += w7;
                 float luma = dot(original, vec3(0.2126, 0.7152, 0.0722));
                 float cb = 0.5 + dot(original, vec3(-0.168736, -0.331264, 0.5));
@@ -87,7 +160,7 @@ class VideoOverlayProcessor {
                 float skin = smoothstep(0.49, 0.55, cr) * (1.0 - smoothstep(0.67, 0.77, cr))
                     * smoothstep(0.20, 0.30, cb) * (1.0 - smoothstep(0.51, 0.58, cb))
                     * smoothstep(0.015, 0.10, luma);
-                source += (total / totalWeight - original) * skin * beauty * 0.82;
+                source += (total / totalWeight - original) * skin * beauty * 0.95;
             }
 
             if (bloom > 0.001 || halation > 0.001) {
@@ -147,6 +220,9 @@ class VideoOverlayProcessor {
         filterPreset: String = "none",
         filterStrength: Double = 1.0,
         beautyStrength: Double = 0.0,
+        beautyEyes: Double = 0.0,
+        beautySlim: Double = 0.0,
+        faceTimeline: [[String: Any]] = [],
         shouldMuteAudio: Bool = false,
         trimStartMs: Int64 = 0,
         trimEndMs: Int64 = 0,
@@ -172,6 +248,9 @@ class VideoOverlayProcessor {
                 filterPreset: filterPreset,
                 filterStrength: filterStrength,
                 beautyStrength: beautyStrength,
+                beautyEyes: beautyEyes,
+                beautySlim: beautySlim,
+                faceTimeline: faceTimeline,
                 shouldMuteAudio: shouldMuteAudio,
                 trimStartMs: trimStartMs,
                 trimEndMs: trimEndMs,
@@ -281,6 +360,9 @@ class VideoOverlayProcessor {
         filterPreset: String,
         filterStrength: Double,
         beautyStrength: Double,
+        beautyEyes: Double,
+        beautySlim: Double,
+        faceTimeline: [[String: Any]],
         shouldMuteAudio: Bool = false,
         trimStartMs: Int64 = 0,
         trimEndMs: Int64 = 0,
@@ -342,12 +424,28 @@ class VideoOverlayProcessor {
             targetExtent: targetExtent
         )
 
+        let timeline = FacePoseTimeline(faceTimeline)
+        let eyesAmount = beautyEyes.isFinite ? max(0, min(1, beautyEyes)) : 0
+        let slimAmount = beautySlim.isFinite ? max(0, min(1, beautySlim)) : 0
         let ciComposition = AVVideoComposition(asset: asset) { [weak self] request in
             guard let self = self else { return }
 
             // AVVideoComposition's sourceImage is already orientation-correct, so all that is
             // left to do is aspect-fill it into the requested story canvas.
             var source: CIImage = request.sourceImage
+            // AVVideoComposition is attached to the original asset; its
+            // compositionTime already includes AVAssetExportSession.timeRange's
+            // trim start. Do not subtract or add the trim offset to this lookup.
+            if (eyesAmount > 0 || slimAmount > 0),
+               let eyes = timeline.eyes(at: request.compositionTime.seconds * 1000) {
+                guard let warped = self.applyFaceWarp(to: source, eyes: eyes,
+                                                       eyeAmount: eyesAmount, slimAmount: slimAmount) else {
+                    request.finish(with: NSError(domain: "StoryEditorPro.Filter", code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "The iOS face reshape kernel is unavailable."]))
+                    return
+                }
+                source = warped
+            }
             source = self.aspectFill(image: source, into: targetExtent)
 
             if mirrorHorizontally {
@@ -528,6 +626,19 @@ class VideoOverlayProcessor {
     ///
     /// CIColorMatrix works in 0–1 normalised space, so the bias becomes:
     ///   bias = brightness + (1 − contrast) × 0.5
+    func applyFaceWarp(to image: CIImage, eyes: CIVector, eyeAmount: Double, slimAmount: Double) -> CIImage? {
+        if eyeAmount <= 0 && slimAmount <= 0 { return image }
+        guard let kernel = faceWarpKernel else { return nil }
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else { return image }
+        return kernel.apply(extent: extent, roiCallback: { _, _ in extent },
+                            image: image.clampedToExtent(), arguments: [
+                                CIVector(x: extent.minX, y: extent.minY),
+                                CIVector(x: extent.width, y: extent.height), eyes,
+                                eyeAmount, slimAmount
+                            ])?.cropped(to: extent)
+    }
+
     private func applyFilter(
         to image: CIImage,
         extent renderExtent: CGRect,
@@ -559,8 +670,8 @@ class VideoOverlayProcessor {
             if let result = parityFilterKernel.apply(
                 extent: renderExtent,
                 roiCallback: { _, rect in
-                    rect.insetBy(dx: -renderExtent.width * 2.2 / 720.0,
-                                 dy: -renderExtent.height * 2.2 / 1280.0)
+                    rect.insetBy(dx: -renderExtent.width * 5.5 / 720.0,
+                                 dy: -renderExtent.height * 5.5 / 1280.0)
                 },
                 arguments: [
                     image.clampedToExtent(),
@@ -687,7 +798,7 @@ class VideoOverlayProcessor {
 
         // Determine rotation angle from the transform matrix
         let angle = atan2(transform.b, transform.a)
-        let degrees = abs(angle * 180.0 / .pi)
+        let degrees = abs(angle * 48.0 / .pi)
 
         // If video is rotated 90 or 270 degrees, swap width/height
         if abs(degrees - 90) < 1 || abs(degrees - 270) < 1 {
