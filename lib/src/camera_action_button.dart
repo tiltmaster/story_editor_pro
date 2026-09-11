@@ -24,28 +24,45 @@ class CameraActionButton extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
-        child: SizedBox(
-          width: size < 48 ? 48 : size,
-          height: size < 48 ? 48 : size,
-          child: Center(
-            child: Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: active
-                    ? Colors.white.withValues(alpha: .30)
-                    : Colors.black.withValues(alpha: .42),
-                border: Border.all(color: Colors.white.withValues(alpha: .22)),
-              ),
-              child: Center(
-                child: Opacity(opacity: onTap == null ? .35 : 1, child: child),
-              ),
-            ),
-          ),
+        child: CameraActionSurface(
+          size: size,
+          active: active,
+          child: Opacity(opacity: onTap == null ? .35 : 1, child: child),
         ),
       ),
     );
     return label == null ? button : Tooltip(message: label!, child: button);
   }
+}
+
+/// Shared visual surface for taps and anchored popup-menu triggers.
+class CameraActionSurface extends StatelessWidget {
+  const CameraActionSurface({
+    super.key,
+    required this.child,
+    this.active = false,
+    this.size = 44,
+  });
+  final Widget child;
+  final bool active;
+  final double size;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: size < 48 ? 48 : size,
+    height: size < 48 ? 48 : size,
+    child: Center(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: active
+              ? Colors.white.withValues(alpha: .30)
+              : Colors.black.withValues(alpha: .42),
+          border: Border.all(color: Colors.white.withValues(alpha: .22)),
+        ),
+        child: Center(child: child),
+      ),
+    ),
+  );
 }

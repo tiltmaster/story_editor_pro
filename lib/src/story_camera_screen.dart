@@ -1583,6 +1583,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         type: RequestType.common,
         hasAll: true,
         onlyAll: true,
+        filterOption: FilterOptionGroup(
+          orders: [
+            const OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
       );
 
       debugPrint('Found ${albums.length} albums');
@@ -1702,6 +1707,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         type: RequestType.common,
         hasAll: true,
         onlyAll: true,
+        filterOption: FilterOptionGroup(
+          orders: [
+            const OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
       );
 
       if (albums.isEmpty) {
@@ -1984,6 +1994,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         type: RequestType.image,
         hasAll: true,
         onlyAll: true,
+        filterOption: FilterOptionGroup(
+          orders: [
+            const OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
       );
 
       if (albums.isEmpty) {
@@ -3097,6 +3112,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final albums = await PhotoManager.getAssetPathList(
         type: RequestType.common,
         onlyAll: true,
+        filterOption: FilterOptionGroup(
+          orders: [
+            const OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
       );
       if (albums.isEmpty) throw StateError('No photos or videos found');
       final album = albums.first;
@@ -5350,8 +5370,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   selected: _effectsOpen,
                   label: config.strings.cameraEffectsLabel(_effects.layerCount),
                   child: _buildIconButton(
-                    icon: Icons.auto_awesome_rounded,
-                    label: _cameraText('Effects', 'التأثيرات'),
+                    icon: _effectsOpen
+                        ? Icons.close_rounded
+                        : Icons.auto_awesome_rounded,
+                    label: _effectsOpen
+                        ? _cameraText('Close effects', 'إغلاق التأثيرات')
+                        : _cameraText('Effects', 'التأثيرات'),
                     onTap: _showEffectsPanel,
                   ),
                 ),
@@ -5510,10 +5534,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Timer and layout choices are anchored to their icons.
   Widget _buildHandsFreeButton() => PopupMenuButton<int>(
     tooltip: _cameraText('Timer', 'مؤقّت'),
-    icon: Icon(
-      Icons.timer_outlined,
-      color: _isHandsFreeMode ? Colors.amber.shade100 : Colors.white,
-    ),
     color: const Color(0xFF202024),
     itemBuilder: (_) => [
       PopupMenuItem(value: 0, child: Text(_cameraText('Off', 'إيقاف'))),
@@ -5530,14 +5550,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _isLayoutMode = false;
       _effectsOpen = false;
     }),
+    child: CameraActionSurface(
+      active: _isHandsFreeMode,
+      child: const Icon(Icons.timer_outlined, color: Colors.white),
+    ),
   );
 
   Widget _buildCollageButton() => PopupMenuButton<LayoutType>(
     tooltip: _cameraText('Layout', 'تخطيط'),
-    icon: Icon(
-      Icons.grid_view_rounded,
-      color: _isLayoutMode ? Colors.amber.shade100 : Colors.white,
-    ),
     color: const Color(0xFF202024),
     itemBuilder: (_) => [
       for (final layout in LayoutType.values)
@@ -5566,6 +5586,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _capturedLayoutPhotos = List.filled(layout.photoCount, null);
       _activeLayoutIndex = 0;
     }),
+    child: CameraActionSurface(
+      active: _isLayoutMode,
+      child: const Icon(Icons.grid_view_rounded, color: Colors.white),
+    ),
   );
 }
 
@@ -5806,7 +5830,7 @@ class _GalleryThumbnailState extends State<_GalleryThumbnail> {
 
   Future<void> _loadThumbnail() async {
     try {
-      final config = context.storyEditorConfig;
+      final config = StoryEditorConfigProvider.read(context);
       final data = await widget.asset.thumbnailDataWithSize(
         ThumbnailSize(config.thumbnailSize, config.thumbnailSize),
         quality: config.thumbnailQuality,

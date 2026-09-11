@@ -470,19 +470,19 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
     ),
     child: Material(
       color: const Color(0xD91A1A1D),
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(16),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        height: 174,
+        height: 148,
         child: Column(
           children: [
             SizedBox(
-              height: 48,
+              height: 40,
               child: Row(
                 children: [
                   for (final (index, label) in [
                     (2, t('Lenses', 'عدسات')),
-                    (0, t('Looks', 'ألوان')),
+                    (0, t('Filters', 'ألوان')),
                     (1, t('Beauty', 'جمال')),
                     (3, t('Places', 'أماكن')),
                     (4, t('Scenes', 'خلفيات')),
@@ -496,7 +496,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
                           key: ValueKey('effects-tab-$index'),
                           onTap: () => _selectTab(index),
                           child: Container(
-                            height: 48,
+                            height: 40,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
                               border: Border(
@@ -528,7 +528,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
             ),
             const SizedBox(height: 4),
             SizedBox(
-              height: 78,
+              height: 68,
               child: switch (_tab) {
                 0 => _looks(),
                 1 => _beauty(),
@@ -596,13 +596,6 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.restart_alt_rounded, size: 19),
                   ),
-                  if (widget.onClose != null)
-                    IconButton(
-                      tooltip: t('Close effects', 'إغلاق التأثيرات'),
-                      onPressed: widget.onClose,
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.close_rounded, size: 19),
-                    ),
                 ],
               ),
             ),
@@ -640,7 +633,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
   Widget _beauty() => Column(
     children: [
       SizedBox(
-        height: 38,
+        height: 32,
         child: Row(
           children: [
             const SizedBox(width: 12),
@@ -680,7 +673,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           ],
         ),
       ),
-      const SizedBox(height: 6),
+      const SizedBox(height: 2),
       Expanded(
         child: _beautyControl == 0
             ? ListView(
@@ -1187,11 +1180,11 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           child: Column(
             children: [
               Container(
-                width: 46,
-                height: 46,
-                padding: const EdgeInsets.all(3),
+                width: 40,
+                height: 40,
+                padding: const EdgeInsets.all(1),
                 decoration: BoxDecoration(
-                  shape: BoxShape.circle,
+                  borderRadius: BorderRadius.circular(11),
                   border: Border.all(
                     color: selected ? Colors.white : Colors.transparent,
                     width: 2,
@@ -1199,29 +1192,42 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
                 ),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: colors,
-                    ),
+                    borderRadius: BorderRadius.circular(9),
+                    color: _tab == 0
+                        ? null
+                        : selected
+                        ? Colors.white
+                        : Colors.white12,
+                    gradient: _tab != 0
+                        ? null
+                        : LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: colors,
+                          ),
                   ),
-                  child: Icon(icon, size: 23, color: Colors.white),
+                  child: Icon(
+                    icon,
+                    size: 22,
+                    color: _tab != 0 && selected ? Colors.black : Colors.white,
+                  ),
                 ),
               ),
               const SizedBox(height: 3),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 3),
-                child: Text(
-                  label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 10,
-                    height: 1.1,
-                    color: selected ? Colors.white : Colors.white70,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 10,
+                      height: 1.1,
+                      color: selected ? Colors.white : Colors.white70,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
                   ),
                 ),
               ),

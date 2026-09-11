@@ -436,7 +436,7 @@ void main() {
       Directionality.of(tester.element(find.byType(CameraEffectsPanel))),
       TextDirection.rtl,
     );
-    expect(tester.getSize(find.byType(CameraEffectsPanel)).height, 174);
+    expect(tester.getSize(find.byType(CameraEffectsPanel)).height, 148);
     expect(
       tester.getCenter(find.text('ألوان')).dx,
       greaterThan(tester.getCenter(find.text('جمال')).dx),
@@ -615,10 +615,9 @@ void main() {
   });
 
   testWidgets(
-    'closing inline controls preserves the camera route and city cache',
+    'reopening inline controls reuses the city cache',
     (tester) async {
       var requests = 0;
-      var closes = 0;
       final session = CameraPlaceSession(
         resolver: (_) async {
           requests++;
@@ -629,13 +628,10 @@ void main() {
         child: _panel(
           key: ValueKey(key),
           locationSession: session,
-          onClose: () => closes++,
         ),
       );
       await tester.pumpWidget(panel('first'));
       await _tap(tester, 'effects-tab-3');
-      await tester.tap(find.byTooltip('Close effects'));
-      expect(closes, 1);
       expect(find.byType(Scaffold), findsOneWidget);
       await tester.pumpWidget(panel('second'));
       await _tap(tester, 'effects-tab-3');
