@@ -8,16 +8,20 @@ struct CreativeLensContext {
     let mirrorOutput: Bool
     let compositionId: String
     let placeStyle: String
+    let placeX, placeY, placeScale: CGFloat
+    let placeArtwork: UIImage?
     let placeName: String
 
     var hasOverlay: Bool { CreativeLensFrameRenderer.lensIds.contains(compositionId) || (placeStyle != "none" && !placeName.isEmpty) }
 
     init(languageCode: String = "en", countryCode: String = "", mirrorOutput: Bool = false,
-         compositionId: String = "none", placeStyle: String = "none", placeName: String = "") {
+         compositionId: String = "none", placeStyle: String = "none", placeName: String = "",
+         placeX: CGFloat = 0.5, placeY: CGFloat = 0.68, placeScale: CGFloat = 1, placeArtwork: UIImage? = nil) {
         self.languageCode = String(languageCode.prefix(8)).lowercased()
         self.countryCode = String(countryCode.prefix(3)).uppercased()
         self.mirrorOutput = mirrorOutput
         self.compositionId = compositionId
+        self.placeX = placeX; self.placeY = placeY; self.placeScale = placeScale; self.placeArtwork = placeArtwork
         self.placeStyle = placeStyle
         self.placeName = String(placeName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
     }
@@ -73,10 +77,22 @@ final class CreativeLensFrameRenderer {
         if pose == nil && !isPhoto { adornments.resetExpressions() }
         // Face-only lenses never rasterize a full-frame transparent UIKit image.
         // Static text is composed once and covers the actual upright buffer size.
-        if Self.lensIds.contains(lensId) || lensContext.hasOverlay {
+        if Self.lensIds.contains(lensId) || Self.lensIds.contains(lensContext.compositionId) {
             source = overlayImage(size: CGSize(width: width, height: height),
                                   lensId: lensId, intensity: min(max(intensity, 0), 1),
                                   lensContext: lensContext).composited(over: source)
+        }
+        if lensContext.placeStyle != "none", !lensContext.placeName.isEmpty,
+           let artwork = lensContext.placeArtwork, let sticker = CIImage(image: artwork) {
+            let unit = min(CGFloat(width)/1080, CGFloat(height)/1920) * lensContext.placeScale
+            let stickerWidth = sticker.extent.width * unit, stickerHeight = sticker.extent.height * unit
+            var positioned = sticker.transformed(by: CGAffineTransform(scaleX: unit, y: unit))
+                .transformed(by: CGAffineTransform(translationX: CGFloat(width)*lensContext.placeX-stickerWidth/2,
+                    y: CGFloat(height)*(1-lensContext.placeY)-stickerHeight/2))
+            if lensContext.mirrorOutput {
+                positioned = positioned.transformed(by: CGAffineTransform(a:-1,b:0,c:0,d:1,tx:CGFloat(width),ty:0))
+            }
+            source = positioned.composited(over: source)
         }
         let composed = source.cropped(to: input.extent)
         context.render(
@@ -128,9 +144,6 @@ final class CreativeLensFrameRenderer {
             case "retrodate": drawFilm(in: cg, size: size, unit: unit, intensity: intensity, now: now, value: lensContext)
             default: break
             }
-            if lensContext.placeStyle != "none" && !lensContext.placeName.isEmpty {
-                drawPlace(in: cg, size: size, unit: unit, now: now, value: lensContext)
-            }
         }
         let overlay = CIImage(image: image) ?? CIImage.empty()
         cachedKey = key
@@ -164,16 +177,23 @@ final class CreativeLensFrameRenderer {
     }
 
     private func drawGolden(in cg: CGContext, size: CGSize, unit: CGFloat, intensity: CGFloat, now: Date, value: CreativeLensContext) {
-        let locale = locale(value)
-        let baseline = size.height * 0.65
-        label(format("EEEE", now, locale), at: CGPoint(x: size.width / 2, y: baseline),
-              size: 76 * unit, color: UIColor(red: 1, green: 0.98, blue: 0.91, alpha: 0.95 * intensity),
-              serif: true, bold: true, italic: true, align: .center, shadow: 8 * unit)
-        label(format("h:mm a", now, locale), at: CGPoint(x: size.width / 2, y: baseline + 58 * unit),
-              size: 32 * unit, color: UIColor(red: 1, green: 0.91, blue: 0.70, alpha: 0.90 * intensity),
-              bold: true, align: .center)
-        cg.setFillColor(UIColor(red: 1, green: 0.70, blue: 0.30, alpha: 0.75 * intensity).cgColor)
-        cg.fill(CGRect(x: size.width / 2 - 150 * unit, y: baseline + 82 * unit, width: 300 * unit, height: 4 * unit))
+        cg.setStrokeColor(UIColor(red: 1, green: 220/255, blue: 165/255, alpha: 0.47*intensity).cgColor)
+        cg.setFillColor(UIColor(red: 1, green: 220/255, blue: 165/255, alpha: 0.47*intensity).cgColor)
+        cg.setLineWidth(2*unit)
+        for side in 0...1 {
+            cg.saveGState()
+            cg.translateBy(x: side == 0 ? 0 : size.width, y: size.height*0.85)
+            if side == 1 { cg.scaleBy(x: -1, y: 1) }
+            cg.move(to: CGPoint(x:18*unit,y:0))
+            cg.addCurve(to:CGPoint(x:145*unit,y:-380*unit),control1:CGPoint(x:95*unit,y:-100*unit),control2:CGPoint(x:55*unit,y:-265*unit));cg.strokePath()
+            for i in 0...5 {
+                let x=(30+CGFloat(i)*15)*unit, y=(-45-CGFloat(i)*51)*unit
+                cg.move(to:CGPoint(x:x,y:y))
+                cg.addQuadCurve(to:CGPoint(x:x+63*unit,y:y-49*unit),control:CGPoint(x:x+70*unit,y:y-8*unit))
+                cg.addQuadCurve(to:CGPoint(x:x,y:y),control:CGPoint(x:x+13*unit,y:y-40*unit));cg.fillPath()
+            }
+            cg.restoreGState()
+        }
     }
 
     private func drawStudio(in cg: CGContext, size: CGSize, unit: CGFloat, intensity: CGFloat, now: Date, value: CreativeLensContext) {
@@ -200,17 +220,13 @@ final class CreativeLensFrameRenderer {
     }
 
     private func drawDesert(in cg: CGContext, size: CGSize, unit: CGFloat, intensity: CGFloat, now: Date, value: CreativeLensContext) {
-        let locale = locale(value)
-        let width = min(size.width * 0.72, 720 * unit)
-        rounded(CGRect(x: (size.width - width) / 2, y: 42 * unit, width: width, height: 82 * unit),
-                radius: 34 * unit, color: UIColor(red: 0.16, green: 0.11, blue: 0.07, alpha: 0.70 * intensity), in: cg)
-        label(countryName(value, locale: locale).uppercased(with: locale),
-              at: CGPoint(x: size.width / 2, y: 69 * unit), size: 30 * unit,
-              color: UIColor(red: 1, green: 0.88, blue: 0.66, alpha: 0.96 * intensity), bold: true, align: .center)
-        label(format("EEEE  •  d MMMM", now, locale),
-              at: CGPoint(x: size.width / 2, y: size.height - 105 * unit), size: 27 * unit,
-              color: UIColor(red: 1, green: 0.89, blue: 0.69, alpha: 0.92 * intensity),
-              serif: true, bold: true, align: .center, shadow: 7 * unit)
+        cg.setLineWidth(1.7*unit)
+        for i in 0...7 {
+            cg.setStrokeColor(UIColor(red:235/255,green:197/255,blue:143/255,alpha:CGFloat(95-i*8)/255*intensity).cgColor)
+            let y=size.height-CGFloat(24+i*15)*unit
+            cg.move(to:CGPoint(x:0,y:y))
+            cg.addCurve(to:CGPoint(x:size.width,y:y-100*unit),control1:CGPoint(x:size.width*0.3,y:y-115*unit),control2:CGPoint(x:size.width*0.55,y:y+55*unit));cg.strokePath()
+        }
     }
 
     private func drawFilm(in cg: CGContext, size: CGSize, unit: CGFloat, intensity: CGFloat, now: Date, value: CreativeLensContext) {
@@ -226,90 +242,9 @@ final class CreativeLensFrameRenderer {
         cg.fillEllipse(in: CGRect(x: size.width - 43 * unit, y: 24 * unit, width: 10 * unit, height: 10 * unit))
     }
 
-    private func drawPlace(in cg: CGContext, size: CGSize, unit u: CGFloat, now: Date, value: CreativeLensContext) {
-        let w = size.width, baseline = size.height * 0.73
-        let cream = UIColor(red: 1, green: 245/255, blue: 225/255, alpha: 1)
-        let gold = UIColor(red: 230/255, green: 193/255, blue: 134/255, alpha: 1)
-        let arabic = value.languageCode == "ar"
-        func title(_ text: String, x: CGFloat, baseline: CGFloat, size: CGFloat, color: UIColor,
-                   maxWidth: CGFloat, centered: Bool = true, rightAligned: Bool = false, serif: Bool = true) {
-            let font = (Self.containsArabic(text) || !serif) ? UIFont.boldSystemFont(ofSize: size)
-                : (UIFont(name: "Georgia-BoldItalic", size: size) ?? .boldSystemFont(ofSize: size))
-            let measured = (text as NSString).size(withAttributes: [.font: font]).width
-            let fitted = font.withSize(size * min(1, maxWidth / max(measured, 1)))
-            let width = (text as NSString).size(withAttributes: [.font: fitted]).width
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.baseWritingDirection = .natural
-            paragraph.alignment = rightAligned ? .right : .left
-            paragraph.lineBreakMode = .byClipping
-            let left = centered ? x - width/2 : (rightAligned ? x - width : x)
-            (text as NSString).draw(in: CGRect(x: left, y: baseline - fitted.ascender,
-                                               width: ceil(width) + 1, height: fitted.lineHeight * 1.6),
-                                   withAttributes: [.font: fitted, .foregroundColor: color, .paragraphStyle: paragraph])
-        }
-        func rule(_ left: CGFloat, _ y: CGFloat, _ right: CGFloat) {
-            cg.setStrokeColor(gold.cgColor); cg.setLineWidth(2*u)
-            cg.move(to: CGPoint(x: left,y: y)); cg.addLine(to: CGPoint(x: right,y: y)); cg.strokePath()
-        }
-        switch value.placeStyle {
-        case "postcard":
-            let left=w*0.07, right=w*0.93, top=baseline-180*u, bottom=baseline+64*u
-            let ink=UIColor(red: 27/255,green: 37/255,blue: 52/255,alpha: 1)
-            let red=UIColor(red: 219/255,green: 45/255,blue: 57/255,alpha: 1)
-            rounded(CGRect(x:left,y:top,width:right-left,height:bottom-top),radius:10*u,
-                color:UIColor(red:250/255,green:249/255,blue:245/255,alpha:1),in:cg)
-            let edge=(right-left)/24
-            for i in 0..<24 {
-                cg.setFillColor((i%2 == 0 ? red : UIColor(red:38/255,green:66/255,blue:103/255,alpha:1)).cgColor)
-                cg.fill(CGRect(x:left+CGFloat(i)*edge,y:top,width:edge,height:7*u))
-            }
-            let leading=arabic ? right-28*u : left+28*u
-            let align: NSTextAlignment=arabic ? .right : .left
-            label(arabic ? "بطاقة بريدية · تحية من" : "POSTCARD / GREETINGS FROM",at:CGPoint(x:leading,y:top+22*u),size:19*u,color:red,mono:true,align:align)
-            title(value.placeName,x:leading,baseline:top+124*u,size:64*u,color:ink,maxWidth:(right-left)*0.72,centered:false,rightAligned:arabic)
-            label(format("dd MMM yyyy",now,locale(value)),at:CGPoint(x:leading,y:bottom-48*u),size:20*u,color:ink,mono:true,align:align)
-            let stampX=arabic ? left+70*u : right-70*u
-            cg.setStrokeColor(red.cgColor);cg.setLineWidth(3*u)
-            cg.strokeEllipse(in:CGRect(x:stampX-43*u,y:top+73*u,width:86*u,height:86*u))
-            cg.strokeEllipse(in:CGRect(x:stampX-35*u,y:top+81*u,width:70*u,height:70*u))
-            label(format("dd",now,locale(value)),at:CGPoint(x:stampX,y:top+99*u),size:25*u,color:red,mono:true,align:.center)
-        case "editorial":
-            let left=w*0.07, right=w*0.93, top=baseline-166*u
-            let leading=arabic ? right-32*u : left+32*u
-            let align: NSTextAlignment=arabic ? .right : .left
-            rounded(CGRect(x:left,y:top,width:right-left,height:226*u),radius:10*u,
-                color:UIColor(red:16/255,green:18/255,blue:22/255,alpha:0.88),in:cg)
-            cg.setFillColor(UIColor(red:237/255,green:52/255,blue:68/255,alpha:1).cgColor)
-            cg.fill(CGRect(x:arabic ? right-7*u : left,y:top,width:7*u,height:226*u))
-            label(arabic ? "من قلب المكان" : "ON LOCATION",at:CGPoint(x:leading,y:top+22*u),size:20*u,color:UIColor(red:245/255,green:78/255,blue:88/255,alpha:1),mono:true,align:align)
-            title(value.placeName,x:leading,baseline:top+126*u,size:68*u,color:.white,maxWidth:w*0.77,centered:false,rightAligned:arabic,serif:false)
-            label(format("EEEE  /  HH:mm",now,locale(value)),at:CGPoint(x:leading,y:top+169*u),size:21*u,color:UIColor(white:0.82,alpha:1),mono:true,align:align)
-        case "stamp":
-            cg.saveGState(); cg.translateBy(x: w/2,y: baseline-20*u); cg.rotate(by: -.pi*7/180)
-            cg.translateBy(x: -w/2,y: -baseline+20*u)
-            rounded(CGRect(x: w*0.18,y: baseline-155*u,width: w*0.64,height: 244*u),radius: 12*u,
-                    color: UIColor(red: 247/255,green: 234/255,blue: 207/255,alpha: 0.88),in: cg)
-            let ink = UIColor(red: 45/255,green: 70/255,blue: 62/255,alpha: 1)
-            cg.setStrokeColor(ink.cgColor);cg.setLineWidth(3*u)
-            cg.addPath(UIBezierPath(roundedRect: CGRect(x: w*0.18+14*u,y: baseline-141*u,width: w*0.64-28*u,height: 216*u),cornerRadius: 7*u).cgPath)
-            cg.strokePath()
-            label(arabic ? "ذكريات السفر" : "A MOMENT IN",at: CGPoint(x: w/2,y: baseline-117*u),size: 20*u,color: ink,mono: true,align: .center)
-            title(value.placeName,x: w/2,baseline: baseline-20*u,size: 61*u,color: ink,maxWidth: w*0.53)
-            label(format("dd . MM . yyyy",now,locale(value)),at: CGPoint(x: w/2,y: baseline+18*u),size: 22*u,color: ink,mono: true,align: .center)
-            cg.restoreGState()
-        default: break
-        }
-    }
-
     private func locale(_ value: CreativeLensContext) -> Locale {
         let identifier = value.countryCode.isEmpty ? value.languageCode : "\(value.languageCode)_\(value.countryCode)"
         return Locale(identifier: identifier)
-    }
-
-    private func countryName(_ value: CreativeLensContext, locale: Locale) -> String {
-        return value.placeName.isEmpty
-            ? (value.languageCode.hasPrefix("ar") ? "الساعة الذهبية" : "GOLDEN HOUR")
-            : value.placeName
     }
 
     private func format(_ pattern: String, _ date: Date, _ locale: Locale) -> String {

@@ -235,18 +235,30 @@ final class FaceARPipelineTests: XCTestCase {
             let result = try XCTUnwrap(context.createCGImage(image, from: extent))
             return try XCTUnwrap(result.dataProvider?.data) as Data
         }
+        let artwork = UIGraphicsImageRenderer(size: CGSize(width: 340, height: 410)).image { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(x: 0,y: 0,width: 340,height: 410))
+            UIColor.red.setFill(); ctx.fill(CGRect(x: 20,y: 20,width: 80,height: 180))
+            ("الكويت" as NSString).draw(at: CGPoint(x: 30,y: 250), withAttributes: [.font: UIFont.systemFont(ofSize: 40), .foregroundColor: UIColor.black])
+        }
         for style in ["postcard", "editorial", "stamp"] {
             let renderer = CreativeLensFrameRenderer()
             let normal = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
-                lensContext: CreativeLensContext(languageCode: "ar", placeStyle: style, placeName: "الكويت")))
+                lensContext: CreativeLensContext(languageCode: "ar", placeStyle: style, placeName: "الكويت", placeX: 0.3, placeY: 0.6, placeArtwork: artwork)))
             let mirrored = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
-                lensContext: CreativeLensContext(languageCode: "ar", mirrorOutput: true, placeStyle: style, placeName: "الكويت")))
+                lensContext: CreativeLensContext(languageCode: "ar", mirrorOutput: true, placeStyle: style, placeName: "الكويت", placeX: 0.3, placeY: 0.6, placeArtwork: artwork)))
             XCTAssertEqual(CVPixelBufferGetWidth(normal), 360)
             XCTAssertEqual(CVPixelBufferGetHeight(normal), 640)
             let restored = CIImage(cvPixelBuffer: mirrored).transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 360, ty: 0))
             // Rasterizing text under a mirrored CGContext can round glyph edges
             // differently. Compare with a tiny tolerance using actual pixels.
             let normalBytes = Array(try pixels(CIImage(cvPixelBuffer: normal)))
+            XCTAssertNotEqual(normalBytes, Array(try pixels(source)), "Native artwork must be present")
+            let moved = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
+                lensContext: CreativeLensContext(placeStyle: style, placeName: "الكويت",
+                    placeX: 0.65, placeY: 0.4, placeScale: 0.8, placeArtwork: artwork)))
+            XCTAssertNotEqual(normalBytes, Array(try pixels(CIImage(cvPixelBuffer: moved))),
+                "Position and scale changes must update pixels without regenerating artwork")
+
             let restoredBytes = Array(try pixels(restored))
             XCTAssertEqual(normalBytes.count, restoredBytes.count)
             let difference = zip(normalBytes, restoredBytes).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }

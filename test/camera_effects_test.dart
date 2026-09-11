@@ -525,6 +525,28 @@ void main() {
       expect(args['languageCode'], 'ar');
       expect(args['countryCode'], 'KW');
       expect(args['mirrorOutput'], isTrue);
+      expect(args['placeArtwork'], isNotEmpty);
+      await controller.setLens(
+        NativeArLensIds.celestial,
+        compositionId: 'daytime',
+        placeStyle: 'editorial',
+        placeName: 'Kyoto',
+        languageCode: 'ar',
+      );
+      expect(
+        (calls.last.arguments as Map).containsKey('placeArtwork'),
+        isFalse,
+        reason:
+            'Moving or reapplying a sticker must not rasterize/upload it again',
+      );
+      await controller.updatePlaceSticker(x: .3, y: .4, scale: 1.2);
+      expect(calls.last.method, 'updatePlaceSticker');
+      expect(calls.last.arguments, {'x': .3, 'y': .4, 'scale': 1.2});
+      await expectLater(
+        controller.updatePlaceSticker(x: double.nan, y: .4, scale: 1),
+        throwsArgumentError,
+      );
+
       await expectLater(
         controller.setLens('none', intensity: double.nan),
         throwsArgumentError,
@@ -717,14 +739,14 @@ void main() {
     await _tap(tester, 'effects-card-${NativeArLensIds.heartHalo}');
     await _tap(tester, 'effects-tab-3');
     await _tap(tester, 'effects-card-place-editorial');
-    expect(find.text(name), findsOneWidget);
+    expect(latest.placeName, name);
     expect(latest.beauty, .65);
     expect(latest.placeName, name);
     expect(latest.layerCount, 3);
     await tester.pumpWidget(app(const Locale('en')));
     await tester.pumpAndSettle();
     expect(find.text('Places'), findsOneWidget);
-    expect(find.text(name), findsOneWidget);
+    expect(latest.placeName, name);
     expect(latest.layerCount, 3);
     expect(tester.takeException(), isNull);
   });

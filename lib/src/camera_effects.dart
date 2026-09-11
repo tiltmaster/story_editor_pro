@@ -1,3 +1,4 @@
+import 'place_sticker_geometry.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
@@ -19,6 +20,10 @@ class CameraEffects {
     this.faceLens = 'none',
     this.placeStyle = 'none',
     this.placeName = '',
+    this.placeVariant = 0,
+    this.placeX = .5,
+    this.placeY = .68,
+    this.placeScale = 1,
   });
 
   final double beauty;
@@ -32,6 +37,8 @@ class CameraEffects {
   final String faceLens;
   final String placeStyle;
   final String placeName;
+  final int placeVariant;
+  final double placeX, placeY, placeScale;
 
   int get layerCount =>
       (beauty > 0 || beautyEyes > 0 || beautySlim > 0 ? 1 : 0) +
@@ -49,19 +56,39 @@ class CameraEffects {
     String? faceLens,
     String? placeStyle,
     String? placeName,
-  }) => CameraEffects(
-    beauty: _amount(beauty, this.beauty),
-    beautyEyes: _amount(beautyEyes, this.beautyEyes),
-    beautySlim: _amount(beautySlim, this.beautySlim),
-    backgroundStyle: backgroundStyle?.clamp(0, 5) ?? this.backgroundStyle,
-    backgroundPath: backgroundPath ?? this.backgroundPath,
-    backgroundIsVideo: backgroundIsVideo ?? this.backgroundIsVideo,
-    faceLens: faceLens ?? this.faceLens,
-    placeStyle: placeStyle ?? this.placeStyle,
-    placeName: placeName == null
-        ? this.placeName
-        : String.fromCharCodes(placeName.trim().runes.take(64)),
-  );
+    int? placeVariant,
+    double? placeX,
+    double? placeY,
+    double? placeScale,
+  }) {
+    final nextStyle = placeStyle ?? this.placeStyle;
+    final nextScale = placeScale == null
+        ? this.placeScale
+        : (placeScale.isFinite
+              ? placeScale.clamp(.6, placeStickerMaxScale(nextStyle))
+              : 1.0);
+    final fittedScale = nextScale.clamp(.6, placeStickerMaxScale(nextStyle));
+    final size = placeStickerSize(nextStyle) * fittedScale;
+    final marginX = nextStyle == 'none' ? 0.0 : size.width / 2160 + .015;
+    final marginY = nextStyle == 'none' ? 0.0 : size.height / 3840 + .015;
+    return CameraEffects(
+      beauty: _amount(beauty, this.beauty),
+      beautyEyes: _amount(beautyEyes, this.beautyEyes),
+      beautySlim: _amount(beautySlim, this.beautySlim),
+      backgroundStyle: backgroundStyle?.clamp(0, 5) ?? this.backgroundStyle,
+      backgroundPath: backgroundPath ?? this.backgroundPath,
+      backgroundIsVideo: backgroundIsVideo ?? this.backgroundIsVideo,
+      faceLens: faceLens ?? this.faceLens,
+      placeStyle: placeStyle ?? this.placeStyle,
+      placeVariant: (placeVariant ?? this.placeVariant) % 3,
+      placeX: _amount(placeX, this.placeX).clamp(marginX, 1 - marginX),
+      placeY: _amount(placeY, this.placeY).clamp(marginY, 1 - marginY),
+      placeScale: fittedScale,
+      placeName: placeName == null
+          ? this.placeName
+          : String.fromCharCodes(placeName.trim().runes.take(64)),
+    );
+  }
 
   static double _amount(double? value, double fallback) => value == null
       ? fallback

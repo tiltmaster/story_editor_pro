@@ -462,6 +462,17 @@ final class FaceARCoordinator {
         if value && needsTracker { prepare() }
     }
 
+    func updatePlaceSticker(x: Double, y: Double, scale: Double) {
+        guard x.isFinite, y.isFinite, scale.isFinite else { return }
+        lock.lock(); defer { lock.unlock() }
+        let old = creativeContext
+        creativeContext = CreativeLensContext(languageCode: old.languageCode, countryCode: old.countryCode,
+            mirrorOutput: old.mirrorOutput, compositionId: old.compositionId,
+            placeStyle: old.placeStyle, placeName: old.placeName,
+            placeX: CGFloat(min(1, max(0, x))), placeY: CGFloat(min(1, max(0, y))),
+            placeScale: CGFloat(min(1.6, max(0.6, scale))), placeArtwork: old.placeArtwork)
+    }
+
     func setLens(
         id: String,
         intensity value: Double,
@@ -471,6 +482,7 @@ final class FaceARCoordinator {
         compositionId: String = "none",
         placeStyle: String = "none",
         placeName: String = "",
+        placeX: Double = 0.5, placeY: Double = 0.68, placeScale: Double = 1, placeArtwork: Data? = nil,
         beautyEyes: Double = 0,
         beautySlim: Double = 0,
         backgroundStyle: Int = 0,
@@ -478,6 +490,7 @@ final class FaceARCoordinator {
         backgroundIsVideo: Bool = false
     ) throws {
         guard value.isFinite, beautyEyes.isFinite, beautySlim.isFinite,
+              placeX.isFinite, placeY.isFinite, placeScale.isFinite,
               PersonBackgroundCompositor.isValidStyle(backgroundStyle),
               ["none", "postcard", "editorial", "stamp"].contains(placeStyle),
               compositionId == "none" || CreativeLensFrameRenderer.lensIds.contains(compositionId),
@@ -517,7 +530,10 @@ final class FaceARCoordinator {
             languageCode: languageCode,
             countryCode: countryCode,
             mirrorOutput: mirrorOutput,
-            compositionId: compositionId, placeStyle: placeStyle, placeName: placeName
+            compositionId: compositionId, placeStyle: placeStyle, placeName: placeName,
+            placeX: CGFloat(min(1, max(0, placeX))), placeY: CGFloat(min(1, max(0, placeY))),
+            placeScale: CGFloat(min(1.6, max(0.6, placeScale))),
+            placeArtwork: placeArtwork.flatMap { UIImage(data: $0) } ?? creativeContext.placeArtwork
         )
         let requiresTracker = self.beautyEyes > 0 || self.beautySlim > 0 || CreativeLensFrameRenderer.adornmentIds.contains(id)
         let next = Self.operationalState(
@@ -726,6 +742,12 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
             result(["state": coordinator.runtimeState, "faceReady": coordinator.faceReady, "backgroundReady": coordinator.backgroundReady])
         case "awaitFrame": coordinator.awaitFrame { result($0) }
         case "restartBackground": coordinator.restartBackground(); result(nil)
+        case "updatePlaceSticker":
+            let args = call.arguments as? [String: Any]
+            coordinator.updatePlaceSticker(x: (args?["x"] as? NSNumber)?.doubleValue ?? 0.5,
+                y: (args?["y"] as? NSNumber)?.doubleValue ?? 0.68,
+                scale: (args?["scale"] as? NSNumber)?.doubleValue ?? 1)
+            result(nil)
         case "setLens":
             let args = call.arguments as? [String: Any]
             do {
@@ -738,6 +760,10 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
                     compositionId: args?["compositionId"] as? String ?? "none",
                     placeStyle: args?["placeStyle"] as? String ?? "none",
                     placeName: args?["placeName"] as? String ?? "",
+                    placeX: (args?["placeX"] as? NSNumber)?.doubleValue ?? 0.5,
+                    placeY: (args?["placeY"] as? NSNumber)?.doubleValue ?? 0.68,
+                    placeScale: (args?["placeScale"] as? NSNumber)?.doubleValue ?? 1,
+                    placeArtwork: (args?["placeArtwork"] as? FlutterStandardTypedData)?.data,
                     beautyEyes: (args?["beautyEyes"] as? NSNumber)?.doubleValue ?? 0,
                     beautySlim: (args?["beautySlim"] as? NSNumber)?.doubleValue ?? 0,
                     backgroundStyle: (args?["backgroundStyle"] as? NSNumber)?.intValue ?? 0,

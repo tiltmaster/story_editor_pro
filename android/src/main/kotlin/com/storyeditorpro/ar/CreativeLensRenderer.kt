@@ -58,9 +58,23 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
                     text(canvas,date("dd  MM  yyyy",now,locale),width-34*u,height-76*u,23*u,cream,mono=true,align=Paint.Align.RIGHT)
                 }
                 "daytime" -> {
-                    text(canvas,date("EEEE",now,locale),width/2,height*0.65f,76*u,cream,serif=true,align=Paint.Align.CENTER,maxWidth=width*0.85f)
-                    text(canvas,date("h:mm a",now,locale),width/2,height*0.65f+52*u,32*u,cream,align=Paint.Align.CENTER)
-                    rule(canvas,width/2-150*u,height*0.65f+72*u,width/2+150*u,Color.rgb(245,201,129),3*u)
+                    // Botanical light at the edges; the face remains unobstructed.
+                    for (side in 0..1) {
+                        val saved = canvas.save()
+                        canvas.translate(if (side == 0) 0f else width, height * .85f)
+                        if (side == 1) canvas.scale(-1f, 1f)
+                        paint.color = Color.argb((120 * strength).toInt(), 255, 220, 165)
+                        paint.strokeWidth = 2*u; paint.style = Paint.Style.STROKE
+                        val stem = Path().apply { moveTo(18*u, 0f); cubicTo(95*u,-100*u,55*u,-265*u,145*u,-380*u) }
+                        canvas.drawPath(stem,paint)
+                        paint.style = Paint.Style.FILL
+                        for (i in 0..5) {
+                            val y = -45*u-i*51*u; val x = 30*u+i*15*u
+                            val leaf = Path().apply { moveTo(x,y); quadTo(x+70*u,y-8*u,x+63*u,y-49*u); quadTo(x+13*u,y-40*u,x,y) }
+                            canvas.drawPath(leaf,paint)
+                        }
+                        canvas.restoreToCount(saved)
+                    }
                 }
                 "timefocus" -> {
                     paint.color=cream; paint.strokeWidth=3*u
@@ -72,11 +86,15 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
                     text(canvas,"${if(arabicLocale) "بورتريه" else "PORTRAIT"}  /  \u2066${date("HH:mm",now,locale)}\u2069",width/2,height-68*u,20*u,cream,mono=true,align=Paint.Align.CENTER)
                 }
                 "kuwaitgold" -> {
-                    // A device locale is never represented as the user's location.
-                    val title = lensContext.placeName.ifBlank { if (lensContext.languageCode == "ar") "الساعة الذهبية" else "GOLDEN HOUR" }
-                    round(canvas,width*0.14f,42*u,width*0.72f,82*u,34*u,Color.argb(178,42,29,20))
-                    text(canvas,title,width/2,95*u,30*u,cream,align=Paint.Align.CENTER,maxWidth=width*0.64f)
-                    text(canvas,date("EEEE  •  d MMMM",now,locale),width/2,height-74*u,27*u,cream,serif=true,align=Paint.Align.CENTER,maxWidth=width*0.9f)
+                    // Fine sand-contour engraving; no invented time or place caption.
+                    paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.7f*u
+                    for (i in 0..7) {
+                        paint.color = Color.argb(((95-i*8)*strength).toInt(), 235, 197, 143)
+                        val y = height - (24+i*15)*u
+                        val contour = Path().apply { moveTo(0f,y); cubicTo(width*.3f,y-115*u,width*.55f,y+55*u,width,y-100*u) }
+                        canvas.drawPath(contour,paint)
+                    }
+                    paint.style = Paint.Style.FILL
                 }
                 "retrodate" -> {
                     paint.color=Color.argb(82,7,8,12)
@@ -86,67 +104,19 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
                 }
             }
             if (lensContext.placeStyle != "none" && lensContext.placeName.isNotBlank()) {
-                drawPlace(canvas,width,height,u,lensContext,now,locale)
+                drawPlace(canvas,width,height,u,lensContext)
             }
         } finally { canvas.restoreToCount(save) }
     }
 
-    private fun drawPlace(c: Canvas,w: Float,h: Float,u: Float,value: CreativeLensContext,now: Date,locale: Locale) {
-        val name=value.placeName
-        val cream=Color.rgb(255,245,225)
-        val gold=Color.rgb(230,193,134)
-        val arabic=value.languageCode=="ar"
-        // Deliberately above camera controls; all typography scales with crop.
-        val baseline=h*0.73f
-        when(value.placeStyle) {
-            "postcard" -> {
-                val left=w*0.07f; val right=w*0.93f
-                val top=baseline-180*u; val bottom=baseline+64*u
-                val ink=Color.rgb(27,37,52); val red=Color.rgb(219,45,57)
-                round(c,left,top,right-left,bottom-top,10*u,Color.rgb(250,249,245))
-                // Airmail edge belongs to the card, never to a cropped gradient.
-                val edge=(right-left)/24
-                for (i in 0..23) {
-                    paint.color=if(i%2==0) red else Color.rgb(38,66,103)
-                    c.drawRect(left+i*edge,top,left+(i+1)*edge,top+7*u,paint)
-                }
-                val leading=if(arabic) right-28*u else left+28*u
-                val align=if(arabic) Paint.Align.RIGHT else Paint.Align.LEFT
-                text(c,if(arabic) "بطاقة بريدية · تحية من" else "POSTCARD / GREETINGS FROM",leading,top+44*u,19*u,red,mono=true,align=align,maxWidth=(right-left)*.72f)
-                text(c,name,leading,top+124*u,64*u,ink,serif=true,align=align,maxWidth=(right-left)*.72f)
-                text(c,date("dd MMM yyyy",now,locale),leading,bottom-28*u,20*u,ink,mono=true,align=align)
-                val stampX=if(arabic) left+70*u else right-70*u
-                paint.color=red;paint.style=Paint.Style.STROKE;paint.strokeWidth=3*u
-                c.drawCircle(stampX,top+116*u,43*u,paint)
-                c.drawCircle(stampX,top+116*u,35*u,paint)
-                c.drawLine(stampX-45*u,top+166*u,stampX+45*u,top+166*u,paint)
-                paint.style=Paint.Style.FILL
-                text(c,date("dd",now,locale),stampX,top+125*u,25*u,red,mono=true,align=Paint.Align.CENTER)
-            }
-            "editorial" -> {
-                val left=w*0.07f; val right=w*0.93f
-                val leading=if(arabic) right-32*u else left+32*u
-                val align=if(arabic) Paint.Align.RIGHT else Paint.Align.LEFT
-                val top=baseline-166*u
-                round(c,left,top,right-left,226*u,10*u,Color.argb(224,16,18,22))
-                paint.color=Color.rgb(237,52,68)
-                c.drawRect(if(arabic) right-7*u else left,top,if(arabic) right else left+7*u,top+226*u,paint)
-                text(c,if(arabic) "من قلب المكان" else "ON LOCATION",leading,top+43*u,20*u,Color.rgb(245,78,88),mono=true,align=align,maxWidth=w*.75f)
-                text(c,name,leading,top+126*u,68*u,Color.WHITE,align=align,maxWidth=w*.77f)
-                text(c,date("EEEE  /  HH:mm",now,locale),leading,top+190*u,21*u,Color.rgb(205,208,215),mono=true,align=align,maxWidth=w*.77f)
-            }
-            "stamp" -> {
-                val save=c.save();c.rotate(-7f,w/2,baseline-20*u)
-                round(c,w*0.18f,baseline-155*u,w*0.64f,244*u,12*u,Color.argb(225,247,234,207))
-                paint.color=Color.rgb(66,88,78);paint.style=Paint.Style.STROKE;paint.strokeWidth=3*u
-                c.drawRoundRect(w*0.18f+14*u,baseline-141*u,w*0.82f-14*u,baseline+75*u,7*u,7*u,paint);paint.style=Paint.Style.FILL
-                val ink=Color.rgb(45,70,62)
-                text(c,if(arabic) "ذكريات السفر" else "A MOMENT IN",w/2,baseline-97*u,20*u,ink,mono=true,align=Paint.Align.CENTER)
-                text(c,name,w/2,baseline-20*u,61*u,ink,serif=true,align=Paint.Align.CENTER,maxWidth=w*0.53f)
-                text(c,date("dd . MM . yyyy",now,locale),w/2,baseline+40*u,22*u,ink,mono=true,align=Paint.Align.CENTER)
-                c.restoreToCount(save)
-            }
-        }
+    private fun drawPlace(c: Canvas,w: Float,h: Float,u: Float,value: CreativeLensContext) {
+        val artwork = value.placeArtwork ?: return
+        val scale = u * value.placeScale
+        val width = artwork.width * scale
+        val height = artwork.height * scale
+        val x = w * value.placeX; val y = h * value.placeY
+        paint.reset(); paint.isAntiAlias = true; paint.isFilterBitmap = true
+        c.drawBitmap(artwork, null, RectF(x-width/2, y-height/2, x+width/2, y+height/2), paint)
     }
 
     private fun date(pattern: String,now: Date,locale: Locale): String {

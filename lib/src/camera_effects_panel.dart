@@ -302,7 +302,14 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       );
     } else if (_effects.placeName.isNotEmpty) {
       _locationSession.stylesByPlace[_effects.placeName] = style;
-      _change(effects: _effects.copyWith(placeStyle: style));
+      _change(
+        effects: _effects.copyWith(
+          placeStyle: style,
+          placeVariant: style == _effects.placeStyle
+              ? _effects.placeVariant + 1
+              : 0,
+        ),
+      );
     } else {
       _locate();
     }
@@ -954,20 +961,20 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       ),
       (
         'postcard',
-        t('Postcard', 'بطاقة بريدية'),
-        Icons.photo_outlined,
+        t('Stamps', 'طوابع'),
+        Icons.local_post_office_outlined,
         [const Color(0xFF293C56), const Color(0xFFB73544)],
       ),
       (
         'editorial',
-        t('Editorial', 'مجلة'),
-        Icons.view_agenda_outlined,
+        t('Location', 'الموقع'),
+        Icons.location_on_outlined,
         [const Color(0xFF202125), const Color(0xFF9E2939)],
       ),
       (
         'stamp',
-        t('Passport', 'جواز سفر'),
-        Icons.public,
+        t('Boarding pass', 'بطاقة صعود'),
+        Icons.flight_takeoff_rounded,
         [const Color(0xFF496853), const Color(0xFFA8BE94)],
       ),
     ])
@@ -1060,7 +1067,10 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           child: _statusText(
             _notice ??
                 (_effects.placeName.isNotEmpty
-                    ? _effects.placeName
+                    ? t(
+                        'Tap sticker: style · Drag: move',
+                        'اضغط للنمط · اسحب للتحريك',
+                      )
                     : t('Your current city · GPS', 'مدينتك الحالية · GPS')),
           ),
         ),

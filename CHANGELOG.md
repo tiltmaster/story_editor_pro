@@ -1,3 +1,10 @@
+## 1.9.1
+
+- Replace large place cards with three perforated postage stamps, three boarding-pass treatments and three compact location pins. Editorial is now labelled Location; Passport is Boarding pass.
+- Tap a sticker (or its selected tile) to change style. Drag to move and pinch to resize; position and artwork are native-composited into photos and video on Android and iOS.
+- Share rasterized, Arabic-shaped artwork between platforms and cache it across movement. Keep wider styles within frame bounds.
+- Replace Golden Bloom's day/time/underline with botanical edge artwork; Desert Luxe uses fine sand contours without a Golden Hour banner or date caption.
+
 ## 1.9.0
 
 - Sort galleries newest first, fix thumbnail initialization, and unify timer/menu icon backdrops.

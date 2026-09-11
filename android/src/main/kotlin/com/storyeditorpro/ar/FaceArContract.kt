@@ -33,6 +33,10 @@ internal data class CreativeLensContext(
     val compositionId: String = "none",
     val placeStyle: String = "none",
     val placeName: String = "",
+    val placeX: Float = .5f,
+    val placeY: Float = .68f,
+    val placeScale: Float = 1f,
+    val placeArtwork: android.graphics.Bitmap? = null,
 ) {
     val hasOverlay: Boolean get() = compositionId in FaceArContract.composedLensIds ||
         (placeStyle != "none" && placeName.isNotBlank())

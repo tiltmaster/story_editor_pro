@@ -1,3 +1,4 @@
+import 'camera_place_gesture.dart';
 import 'camera_action_button.dart';
 import 'dart:async';
 import 'face_beauty.dart';
@@ -1140,6 +1141,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             compositionId: composition,
             placeStyle: effects.placeStyle,
             placeName: effects.placeName,
+            placeVariant: effects.placeVariant,
+            placeX: effects.placeX,
+            placeY: effects.placeY,
+            placeScale: effects.placeScale,
             beautyEyes: effects.beautyEyes,
             beautySlim: effects.beautySlim,
             backgroundStyle: effects.backgroundStyle,
@@ -1221,6 +1226,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             effects.faceLens != _effects.faceLens ||
             effects.backgroundStyle != _effects.backgroundStyle ||
             effects.backgroundPath != _effects.backgroundPath ||
+            effects.placeVariant != _effects.placeVariant ||
             effects.placeStyle != _effects.placeStyle ||
             effects.placeName != _effects.placeName;
         setState(() {
@@ -3876,6 +3882,37 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
+  Widget _buildPlaceStickerControl() => CameraPlaceGesture(
+    effects: _effects,
+    onCycle: () {
+      HapticFeedback.selectionClick();
+      setState(
+        () => _effects = _effects.copyWith(
+          placeVariant: _effects.placeVariant + 1,
+        ),
+      );
+      unawaited(_applyNativeArSelection());
+    },
+    onChanged: (effects) {
+      setState(() => _effects = effects);
+      // Serialize with selection/capture without restarting tracking.
+      _effectsApplyFuture = _effectsApplyFuture
+          .then((_) async {
+            if (!mounted || effects != _effects) {
+              return;
+            }
+            await _nativeArController.updatePlaceSticker(
+              x: effects.placeX,
+              y: effects.placeY,
+              scale: effects.placeScale,
+            );
+          })
+          .catchError((Object error) {
+            _nativeEffectsError = error;
+          });
+    },
+  );
+
   Widget _buildFullscreenCameraPreview() {
     if (!_cameraReady) {
       return const Center(
@@ -3889,62 +3926,83 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           Size(viewport.maxWidth, viewport.maxHeight),
           portraitAspect: 1 / _activePreviewAspectRatio,
         );
-        return GestureDetector(
-          onDoubleTap: _filterSelectionLocked ? null : _switchCamera,
-          onTapUp: (details) => _focusAt(
-            Offset(
-              details.localPosition.dx / viewport.maxWidth,
-              details.localPosition.dy / viewport.maxHeight,
-            ),
-            previewScale,
-          ),
-          onScaleStart: _onScaleStart,
-          onScaleUpdate: _onScaleUpdate,
-          onHorizontalDragEnd: (details) {
-            if (_filterSelectionLocked) {
-              return;
-            }
-            final velocity = details.primaryVelocity ?? 0;
-            if (velocity.abs() < 120) return;
-            var next = _activeFilterIndex;
-            if (velocity < 0 && _activeFilterIndex < _combinedFilterCount - 1) {
-              next++;
-            } else if (velocity > 0 && _activeFilterIndex > 0) {
-              next--;
-            }
-            if (!_canSelectFilterIndex(next)) return;
-            setState(() => _activeFilterIndex = next);
-            unawaited(_applyNativeArSelection());
-            if (_hasSingleFilterPosition) {
-              _filterPageController.animateToPage(
-                next,
-                duration: CameraFilterSliderContract.swipeAnimationDuration,
-                curve: Curves.easeOut,
-              );
-            }
-          },
-          child: ClipRect(
-            child: SizedBox.expand(
-              child: FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  width: viewport.maxWidth,
-                  height: viewport.maxWidth * _activePreviewAspectRatio,
-                  child: Builder(
-                    builder: (context) {
-                      final preview = _buildLiveFilteredPreview(
-                        _buildActiveCameraPreview(),
-                        _activeFilterId,
-                        _activeFilterStrength,
-                        useGpuEffects: true,
-                      );
-                      return _presentCameraPreview(preview);
-                    },
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            GestureDetector(
+              onDoubleTap: _filterSelectionLocked ? null : _switchCamera,
+              onTapUp: (details) => _focusAt(
+                Offset(
+                  details.localPosition.dx / viewport.maxWidth,
+                  details.localPosition.dy / viewport.maxHeight,
+                ),
+                previewScale,
+              ),
+              onScaleStart: _onScaleStart,
+              onScaleUpdate: _onScaleUpdate,
+              onHorizontalDragEnd: (details) {
+                if (_filterSelectionLocked) {
+                  return;
+                }
+                final velocity = details.primaryVelocity ?? 0;
+                if (velocity.abs() < 120) return;
+                var next = _activeFilterIndex;
+                if (velocity < 0 &&
+                    _activeFilterIndex < _combinedFilterCount - 1) {
+                  next++;
+                } else if (velocity > 0 && _activeFilterIndex > 0) {
+                  next--;
+                }
+                if (!_canSelectFilterIndex(next)) return;
+                setState(() => _activeFilterIndex = next);
+                unawaited(_applyNativeArSelection());
+                if (_hasSingleFilterPosition) {
+                  _filterPageController.animateToPage(
+                    next,
+                    duration: CameraFilterSliderContract.swipeAnimationDuration,
+                    curve: Curves.easeOut,
+                  );
+                }
+              },
+              child: ClipRect(
+                child: SizedBox.expand(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: viewport.maxWidth,
+                      height: viewport.maxWidth * _activePreviewAspectRatio,
+                      child: Builder(
+                        builder: (context) {
+                          final preview = _buildLiveFilteredPreview(
+                            _buildActiveCameraPreview(),
+                            _activeFilterId,
+                            _activeFilterStrength,
+                            useGpuEffects: true,
+                          );
+                          return _presentCameraPreview(preview);
+                        },
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
+            if (_effects.placeStyle != 'none' &&
+                _effects.placeName.isNotEmpty &&
+                !_filterSelectionLocked)
+              ClipRect(
+                child: SizedBox.expand(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: viewport.maxWidth,
+                      height: viewport.maxWidth * _activePreviewAspectRatio,
+                      child: _buildPlaceStickerControl(),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );

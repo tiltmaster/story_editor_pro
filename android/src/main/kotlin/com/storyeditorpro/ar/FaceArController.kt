@@ -120,6 +120,17 @@ internal class FaceArController(
                     result.success(mapOf("state" to machine.state.wire, "faceReady" to (tracker != null)))
                 }
             }
+            "updatePlaceSticker" -> {
+                try {
+                fun component(key: String, fallback: Float): Float =
+                    (call.argument<Number>(key)?.toFloat() ?: fallback).also { require(it.isFinite()) }
+                creativeContext = creativeContext.copy(
+                    placeX = component("x", .5f).coerceIn(0f, 1f),
+                    placeY = component("y", .68f).coerceIn(0f, 1f),
+                    placeScale = component("scale", 1f).coerceIn(.6f, 1.6f))
+                result.success(null)
+                } catch (error: IllegalArgumentException) { result.error("INVALID_ARGS", error.message, null) }
+            }
             "setLens" -> {
                 val lensId = call.argument<String>("lensId")
                 val intensity = call.argument<Number>("intensity")
@@ -162,6 +173,13 @@ internal class FaceArController(
                                 require(it in FaceArContract.placeStyles)
                             },
                             placeName = call.argument<String>("placeName")?.trim()?.take(128) ?: "",
+                            placeX = (call.argument<Number>("placeX")?.toFloat() ?: .5f).also { require(it.isFinite()) }.coerceIn(0f, 1f),
+                            placeY = (call.argument<Number>("placeY")?.toFloat() ?: .68f).also { require(it.isFinite()) }.coerceIn(0f, 1f),
+                            placeScale = (call.argument<Number>("placeScale")?.toFloat() ?: 1f).also { require(it.isFinite()) }.coerceIn(.6f, 1.6f),
+                            placeArtwork = call.argument<ByteArray>("placeArtwork")?.let {
+                                require(it.size <= 2_000_000)
+                                android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)
+                            } ?: creativeContext.placeArtwork,
 
                         )
                         settings = nextSettings

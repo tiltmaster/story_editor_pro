@@ -203,3 +203,10 @@ consuming applications do not need that setting.
 S23 Ultra checks: gallery opened with the newest test media first; timer backdrop and compact controls rendered; Postcard/Editorial backdrops were complete; four recorded camera switches showed correctly oriented place text whenever visible. A gallery image and a looping gallery video rendered as backgrounds. Hold/slide/release locked recording successfully. The editor displayed decoded scene changes in its filmstrip and exported a trimmed 4.24-second 1080×1920 video with 65 video frames and an AAC microphone track. Indoor output averaged about 15 fps in this test; this is not a 30/60 fps certification. The phone faced the ceiling during these final reaction-media tests, so moving-person segmentation quality still needs physical acceptance.
 
 Local validation: 116 Flutter tests and static analysis pass; Android JVM mask tests include custom-media matte generation. iOS compilation and simulator tests passed for the initial 1.9 implementation; the final mirror-compensation change must also pass the release CI run. APKs, example hosts and device captures remain excluded from source control.
+
+
+## 1.9.1 location sticker redesign
+
+Places now offers Stamps, Location and Boarding pass. Each has three tap-to-cycle variants. Drag and pinch modify normalized native coordinates independently of selfie mirroring; changing shape clamps its bounds. A shared Flutter painter shapes localized text and renders one small transparent PNG per style/place/language/date. Android draws this bitmap with the frame transform. iOS scales/translates it with Core Image, so dragging does not rerasterize a full-screen UIKit overlay. Photo and video use the same native composition.
+
+Golden Bloom now uses botanical edge artwork, and Desert Luxe uses sand-contour linework. Neither prints a weekday/time banner or an inferred Golden Hour caption. Legacy wire identifiers remain compatible.

@@ -1,3 +1,4 @@
+import 'place_sticker_artwork.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -306,6 +307,24 @@ class NativeArController {
     await _methodChannel.invokeMethod<void>('restartBackground');
   }
 
+  String _placeArtworkKey = '';
+
+  Future<void> updatePlaceSticker({
+    required double x,
+    required double y,
+    required double scale,
+  }) async {
+    _checkNotDisposed();
+    if (!x.isFinite || !y.isFinite || !scale.isFinite) {
+      throw ArgumentError('Sticker transform must be finite');
+    }
+    await _methodChannel.invokeMethod<void>('updatePlaceSticker', {
+      'x': x,
+      'y': y,
+      'scale': scale,
+    });
+  }
+
   Future<bool> setLens(
     String lensId, {
     double intensity = 1.0,
@@ -315,6 +334,10 @@ class NativeArController {
     String compositionId = 'none',
     String placeStyle = 'none',
     String placeName = '',
+    int placeVariant = 0,
+    double placeX = .5,
+    double placeY = .68,
+    double placeScale = 1,
     double beautyEyes = 0,
     double beautySlim = 0,
     int backgroundStyle = 0,
@@ -331,6 +354,19 @@ class NativeArController {
     if (!_capabilities.available) return false;
     try {
       _listenToNativeEvents();
+      final artworkKey =
+          '$placeStyle|$placeName|$placeVariant|$languageCode|${DateTime.now().toIso8601String().substring(0, 10)}';
+      final artwork =
+          placeStyle != 'none' &&
+              placeName.isNotEmpty &&
+              artworkKey != _placeArtworkKey
+          ? await renderPlaceSticker(
+              style: placeStyle,
+              name: placeName,
+              variant: placeVariant,
+              language: languageCode ?? 'en',
+            )
+          : null;
       final style = backgroundStyle.clamp(0, 5);
       if (_backgroundStyle != style || _backgroundPath != backgroundPath) {
         _backgroundReady = false;
@@ -346,12 +382,19 @@ class NativeArController {
         'compositionId': compositionId,
         'placeStyle': placeStyle,
         'placeName': String.fromCharCodes(placeName.trim().runes.take(64)),
+        if (placeStyle != 'none') ...{
+          'placeX': placeX,
+          'placeY': placeY,
+          'placeScale': placeScale,
+          if (artwork != null) 'placeArtwork': artwork,
+        },
         'beautyEyes': beautyEyes.isFinite ? beautyEyes.clamp(0, 1) : 0,
         'beautySlim': beautySlim.isFinite ? beautySlim.clamp(0, 1) : 0,
         'backgroundStyle': style,
         'backgroundPath': backgroundPath,
         'backgroundIsVideo': backgroundIsVideo,
       });
+      if (placeStyle != 'none') _placeArtworkKey = artworkKey;
       return true;
     } on MissingPluginException catch (error) {
       _markUnavailable('missing_plugin', error.message ?? 'AR is unavailable');

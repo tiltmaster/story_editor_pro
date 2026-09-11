@@ -143,6 +143,24 @@ void main() {
         same(carouselPosition),
         reason: 'The carousel keeps its position while controls are open',
       );
+      panel.onChanged(
+        const CameraEffects(placeStyle: 'postcard', placeName: 'Kuwait'),
+        panel.lookId,
+        .5,
+      );
+      await tester.pump();
+      final sticker = find.byKey(const ValueKey('camera-place-sticker'));
+      final beforeDrag = tester.getCenter(sticker);
+      await tester.drag(sticker, const Offset(-25, -60));
+      await tester.pump();
+      expect(
+        tester.getCenter(sticker).dy,
+        lessThan(beforeDrag.dy - 30),
+        reason:
+            'Camera zoom and swipe recognizers must not capture sticker drags',
+      );
+      panel.onChanged(const CameraEffects(beauty: .65), panel.lookId, .5);
+      await tester.pump();
       expect(find.byIcon(Icons.more_horiz), findsNothing);
       expect(find.byTooltip('تكرار'), findsOneWidget);
       // Repeated focus taps and controls transitions must leave exactly one
