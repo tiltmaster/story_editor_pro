@@ -97,25 +97,43 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
         val gold=Color.rgb(230,193,134)
         val arabic=value.languageCode=="ar"
         // Deliberately above camera controls; all typography scales with crop.
-        val baseline=h*0.78f
+        val baseline=h*0.73f
         when(value.placeStyle) {
             "postcard" -> {
-                paint.shader=LinearGradient(0f,baseline-190*u,0f,baseline+100*u,Color.TRANSPARENT,Color.argb(135,20,14,20),Shader.TileMode.CLAMP)
-                c.drawRect(0f,baseline-190*u,w,baseline+100*u,paint);paint.shader=null
-                text(c,if(arabic) "تحية من" else "greetings from",w/2,baseline-82*u,28*u,gold,serif=true,align=Paint.Align.CENTER)
-                text(c,name,w/2,baseline,92*u,cream,serif=true,align=Paint.Align.CENTER,maxWidth=w*0.82f)
-                rule(c,w*0.38f,baseline+25*u,w*0.62f,gold,2*u)
-                text(c,date("dd MMM yyyy",now,locale),w/2,baseline+65*u,20*u,cream,mono=true,align=Paint.Align.CENTER)
+                val left=w*0.07f; val right=w*0.93f
+                val top=baseline-180*u; val bottom=baseline+64*u
+                val ink=Color.rgb(27,37,52); val red=Color.rgb(219,45,57)
+                round(c,left,top,right-left,bottom-top,10*u,Color.rgb(250,249,245))
+                // Airmail edge belongs to the card, never to a cropped gradient.
+                val edge=(right-left)/24
+                for (i in 0..23) {
+                    paint.color=if(i%2==0) red else Color.rgb(38,66,103)
+                    c.drawRect(left+i*edge,top,left+(i+1)*edge,top+7*u,paint)
+                }
+                val leading=if(arabic) right-28*u else left+28*u
+                val align=if(arabic) Paint.Align.RIGHT else Paint.Align.LEFT
+                text(c,if(arabic) "بطاقة بريدية · تحية من" else "POSTCARD / GREETINGS FROM",leading,top+44*u,19*u,red,mono=true,align=align,maxWidth=(right-left)*.72f)
+                text(c,name,leading,top+124*u,64*u,ink,serif=true,align=align,maxWidth=(right-left)*.72f)
+                text(c,date("dd MMM yyyy",now,locale),leading,bottom-28*u,20*u,ink,mono=true,align=align)
+                val stampX=if(arabic) left+70*u else right-70*u
+                paint.color=red;paint.style=Paint.Style.STROKE;paint.strokeWidth=3*u
+                c.drawCircle(stampX,top+116*u,43*u,paint)
+                c.drawCircle(stampX,top+116*u,35*u,paint)
+                c.drawLine(stampX-45*u,top+166*u,stampX+45*u,top+166*u,paint)
+                paint.style=Paint.Style.FILL
+                text(c,date("dd",now,locale),stampX,top+125*u,25*u,red,mono=true,align=Paint.Align.CENTER)
             }
             "editorial" -> {
-                val left=w*0.08f
-                val leading=if(arabic) w*0.92f else left
-                val alignment=if(arabic) Paint.Align.RIGHT else Paint.Align.LEFT
-                round(c,left-20*u,baseline-131*u,w*0.84f+40*u,218*u,24*u,Color.argb(142,16,23,27))
-                text(c,if(arabic) "هنا والآن" else "HERE / NOW",leading,baseline-94*u,20*u,gold,mono=true,align=alignment)
-                text(c,name,leading,baseline-12*u,66*u,cream,serif=true,align=alignment,maxWidth=w*0.82f)
-                rule(c,left,baseline+25*u,w*0.92f,gold,2*u)
-                text(c,date("EEEE · HH:mm",now,locale),leading,baseline+64*u,22*u,cream,align=alignment,maxWidth=w*0.82f)
+                val left=w*0.07f; val right=w*0.93f
+                val leading=if(arabic) right-32*u else left+32*u
+                val align=if(arabic) Paint.Align.RIGHT else Paint.Align.LEFT
+                val top=baseline-166*u
+                round(c,left,top,right-left,226*u,10*u,Color.argb(224,16,18,22))
+                paint.color=Color.rgb(237,52,68)
+                c.drawRect(if(arabic) right-7*u else left,top,if(arabic) right else left+7*u,top+226*u,paint)
+                text(c,if(arabic) "من قلب المكان" else "ON LOCATION",leading,top+43*u,20*u,Color.rgb(245,78,88),mono=true,align=align,maxWidth=w*.75f)
+                text(c,name,leading,top+126*u,68*u,Color.WHITE,align=align,maxWidth=w*.77f)
+                text(c,date("EEEE  /  HH:mm",now,locale),leading,top+190*u,21*u,Color.rgb(205,208,215),mono=true,align=align,maxWidth=w*.77f)
             }
             "stamp" -> {
                 val save=c.save();c.rotate(-7f,w/2,baseline-20*u)

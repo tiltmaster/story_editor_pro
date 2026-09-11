@@ -58,6 +58,8 @@ void main() {
       'beautyEyes': 0,
       'beautySlim': 0,
       'backgroundStyle': 0,
+      'backgroundPath': '',
+      'backgroundIsVideo': false,
     });
     expect(
       calls.map((call) => call.method),
@@ -136,6 +138,8 @@ void main() {
         'beautyEyes': 0,
         'beautySlim': 0,
         'backgroundStyle': 0,
+        'backgroundPath': '',
+        'backgroundIsVideo': false,
       });
       await controller.dispose();
     },

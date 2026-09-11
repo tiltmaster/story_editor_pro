@@ -14,6 +14,8 @@ class CameraEffects {
     this.beautyEyes = 0,
     this.beautySlim = 0,
     this.backgroundStyle = 0,
+    this.backgroundPath = '',
+    this.backgroundIsVideo = false,
     this.faceLens = 'none',
     this.placeStyle = 'none',
     this.placeName = '',
@@ -25,6 +27,8 @@ class CameraEffects {
 
   /// 0: original, 1: studio, 2: sunset, 3: night, 4: background blur.
   final int backgroundStyle;
+  final String backgroundPath;
+  final bool backgroundIsVideo;
   final String faceLens;
   final String placeStyle;
   final String placeName;
@@ -40,6 +44,8 @@ class CameraEffects {
     double? beautyEyes,
     double? beautySlim,
     int? backgroundStyle,
+    String? backgroundPath,
+    bool? backgroundIsVideo,
     String? faceLens,
     String? placeStyle,
     String? placeName,
@@ -47,7 +53,9 @@ class CameraEffects {
     beauty: _amount(beauty, this.beauty),
     beautyEyes: _amount(beautyEyes, this.beautyEyes),
     beautySlim: _amount(beautySlim, this.beautySlim),
-    backgroundStyle: backgroundStyle?.clamp(0, 4) ?? this.backgroundStyle,
+    backgroundStyle: backgroundStyle?.clamp(0, 5) ?? this.backgroundStyle,
+    backgroundPath: backgroundPath ?? this.backgroundPath,
+    backgroundIsVideo: backgroundIsVideo ?? this.backgroundIsVideo,
     faceLens: faceLens ?? this.faceLens,
     placeStyle: placeStyle ?? this.placeStyle,
     placeName: placeName == null

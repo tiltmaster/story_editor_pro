@@ -12,7 +12,7 @@ A powerful, fully customizable Instagram-style story editor for Flutter. Create 
 The camera includes compact **Effects** controls on the side rail for stacking
 color looks, skin smoothing, tracked eye/contour adjustments, animated face lenses
 and automatically located city frames. Person segmentation supplies Studio, Sunset,
-Night and real background blur on Android and iOS. Effects survive photo and video capture,
+Night, real background blur, and your own gallery photos or looping videos on Android and iOS. Effects survive photo and video capture,
 and controls support Arabic/RTL. See the [camera effects review](docs/camera-effects-review.md)
 for setup, implementation details, validation and remaining device checks.
 
@@ -20,6 +20,8 @@ Capture uses tap for photo, hold for video, slide to lock, double-tap to flip,
 and tap to focus. The camera has hardware-aware zoom, exposure and video torch;
 lens favorites persist locally. The editor preserves edits with chronological
 undo/redo and waits for a finished file before invoking `onShare`.
+Trim displays actual video frames with draggable start/end handles. **Effects → Scenes → Your media** opens the gallery for a reaction background; background-video audio is muted while the microphone records normally.
+Configure `StoryEditorConfig.onPickMusic` to expose your app's sound picker in both camera and editor. Selection metadata is retained across capture; the host owns music playback, licensing and final audio mixing.
 The [camera capability comparison](docs/camera-capability-matrix.md) maps the
 independent implementation to Snapchat camera and creation workflows.
 

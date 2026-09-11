@@ -227,13 +227,13 @@ final class CreativeLensFrameRenderer {
     }
 
     private func drawPlace(in cg: CGContext, size: CGSize, unit u: CGFloat, now: Date, value: CreativeLensContext) {
-        let w = size.width, baseline = size.height * 0.78
+        let w = size.width, baseline = size.height * 0.73
         let cream = UIColor(red: 1, green: 245/255, blue: 225/255, alpha: 1)
         let gold = UIColor(red: 230/255, green: 193/255, blue: 134/255, alpha: 1)
         let arabic = value.languageCode == "ar"
         func title(_ text: String, x: CGFloat, baseline: CGFloat, size: CGFloat, color: UIColor,
-                   maxWidth: CGFloat, centered: Bool = true, rightAligned: Bool = false) {
-            let font = Self.containsArabic(text) ? UIFont.boldSystemFont(ofSize: size)
+                   maxWidth: CGFloat, centered: Bool = true, rightAligned: Bool = false, serif: Bool = true) {
+            let font = (Self.containsArabic(text) || !serif) ? UIFont.boldSystemFont(ofSize: size)
                 : (UIFont(name: "Georgia-BoldItalic", size: size) ?? .boldSystemFont(ofSize: size))
             let measured = (text as NSString).size(withAttributes: [.font: font]).width
             let fitted = font.withSize(size * min(1, maxWidth / max(measured, 1)))
@@ -253,27 +253,37 @@ final class CreativeLensFrameRenderer {
         }
         switch value.placeStyle {
         case "postcard":
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                colors: [UIColor.clear.cgColor, UIColor(red: 20/255,green: 14/255,blue: 20/255,alpha: 0.53).cgColor] as CFArray,
-                locations: [0,1]) {
-                cg.saveGState(); cg.clip(to: CGRect(x: 0,y: baseline-190*u,width: w,height: 290*u))
-                cg.drawLinearGradient(gradient, start: CGPoint(x: 0,y: baseline-190*u),end: CGPoint(x: 0,y: baseline+100*u),options: [])
-                cg.restoreGState()
+            let left=w*0.07, right=w*0.93, top=baseline-180*u, bottom=baseline+64*u
+            let ink=UIColor(red: 27/255,green: 37/255,blue: 52/255,alpha: 1)
+            let red=UIColor(red: 219/255,green: 45/255,blue: 57/255,alpha: 1)
+            rounded(CGRect(x:left,y:top,width:right-left,height:bottom-top),radius:10*u,
+                color:UIColor(red:250/255,green:249/255,blue:245/255,alpha:1),in:cg)
+            let edge=(right-left)/24
+            for i in 0..<24 {
+                cg.setFillColor((i%2 == 0 ? red : UIColor(red:38/255,green:66/255,blue:103/255,alpha:1)).cgColor)
+                cg.fill(CGRect(x:left+CGFloat(i)*edge,y:top,width:edge,height:7*u))
             }
-            title(arabic ? "تحية من" : "greetings from",x: w/2,baseline: baseline-82*u,size: 28*u,color: gold,maxWidth: w*0.82)
-            title(value.placeName,x: w/2,baseline: baseline,size: 92*u,color: cream,maxWidth: w*0.82)
-            rule(w*0.38,baseline+25*u,w*0.62)
-            label(format("dd MMM yyyy",now,locale(value)),at: CGPoint(x: w/2,y: baseline+45*u),size: 20*u,color: cream,mono: true,align: .center)
+            let leading=arabic ? right-28*u : left+28*u
+            let align: NSTextAlignment=arabic ? .right : .left
+            label(arabic ? "بطاقة بريدية · تحية من" : "POSTCARD / GREETINGS FROM",at:CGPoint(x:leading,y:top+22*u),size:19*u,color:red,mono:true,align:align)
+            title(value.placeName,x:leading,baseline:top+124*u,size:64*u,color:ink,maxWidth:(right-left)*0.72,centered:false,rightAligned:arabic)
+            label(format("dd MMM yyyy",now,locale(value)),at:CGPoint(x:leading,y:bottom-48*u),size:20*u,color:ink,mono:true,align:align)
+            let stampX=arabic ? left+70*u : right-70*u
+            cg.setStrokeColor(red.cgColor);cg.setLineWidth(3*u)
+            cg.strokeEllipse(in:CGRect(x:stampX-43*u,y:top+73*u,width:86*u,height:86*u))
+            cg.strokeEllipse(in:CGRect(x:stampX-35*u,y:top+81*u,width:70*u,height:70*u))
+            label(format("dd",now,locale(value)),at:CGPoint(x:stampX,y:top+99*u),size:25*u,color:red,mono:true,align:.center)
         case "editorial":
-            let left = w*0.08
-            let leading = arabic ? w*0.92 : left
-            let alignment: NSTextAlignment = arabic ? .right : .left
-            rounded(CGRect(x: left-20*u,y: baseline-131*u,width: w*0.84+40*u,height: 218*u),radius: 24*u,
-                    color: UIColor(red: 16/255,green: 23/255,blue: 27/255,alpha: 0.56),in: cg)
-            label(arabic ? "هنا والآن" : "HERE / NOW",at: CGPoint(x: leading,y: baseline-114*u),size: 20*u,color: gold,mono: true,align: alignment)
-            title(value.placeName,x: leading,baseline: baseline-12*u,size: 66*u,color: cream,maxWidth: w*0.82,centered: false,rightAligned: arabic)
-            rule(left,baseline+25*u,w*0.92)
-            label(format("EEEE · HH:mm",now,locale(value)),at: CGPoint(x: leading,y: baseline+42*u),size: 22*u,color: cream,align: alignment)
+            let left=w*0.07, right=w*0.93, top=baseline-166*u
+            let leading=arabic ? right-32*u : left+32*u
+            let align: NSTextAlignment=arabic ? .right : .left
+            rounded(CGRect(x:left,y:top,width:right-left,height:226*u),radius:10*u,
+                color:UIColor(red:16/255,green:18/255,blue:22/255,alpha:0.88),in:cg)
+            cg.setFillColor(UIColor(red:237/255,green:52/255,blue:68/255,alpha:1).cgColor)
+            cg.fill(CGRect(x:arabic ? right-7*u : left,y:top,width:7*u,height:226*u))
+            label(arabic ? "من قلب المكان" : "ON LOCATION",at:CGPoint(x:leading,y:top+22*u),size:20*u,color:UIColor(red:245/255,green:78/255,blue:88/255,alpha:1),mono:true,align:align)
+            title(value.placeName,x:leading,baseline:top+126*u,size:68*u,color:.white,maxWidth:w*0.77,centered:false,rightAligned:arabic,serif:false)
+            label(format("EEEE  /  HH:mm",now,locale(value)),at:CGPoint(x:leading,y:top+169*u),size:21*u,color:UIColor(white:0.82,alpha:1),mono:true,align:align)
         case "stamp":
             cg.saveGState(); cg.translateBy(x: w/2,y: baseline-20*u); cg.rotate(by: -.pi*7/180)
             cg.translateBy(x: -w/2,y: -baseline+20*u)

@@ -4,6 +4,17 @@ import 'package:story_editor_pro/src/camera_interaction.dart';
 import 'package:story_editor_pro/src/native_story_camera_controller.dart';
 
 void main() {
+  test('nearby lock requires 48 pixels and explicit lock survives release', () {
+    for (final rtl in [false, true]) {
+      final gesture = CameraRecordGesture()..begin(const Offset(150, 400));
+      expect(gesture.move(Offset(rtl ? 197 : 103, 400), rtl: rtl), isFalse);
+      expect(gesture.move(Offset(rtl ? 198 : 102, 400), rtl: rtl), isTrue);
+      expect(gesture.stopOnRelease, isFalse);
+      gesture.reset();
+      gesture.lock();
+      expect(gesture.stopOnRelease, isFalse);
+    }
+  });
   test('recording locks toward the visible lock in each reading direction', () {
     for (final rtl in [false, true]) {
       final gesture = CameraRecordGesture()..begin(const Offset(150, 400));

@@ -83,6 +83,29 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+        case "getVideoThumbnails":
+            guard let args = call.arguments as? [String: Any], let path = args["path"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing video", details: nil)); return
+            }
+            let count = max(2, min(16, args["count"] as? Int ?? 10))
+            DispatchQueue.global(qos: .userInitiated).async {
+                let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 160, height: 280)
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = .zero
+                do {
+                    let duration = CMTimeGetSeconds(asset.duration)
+                    guard duration.isFinite && duration > 0 else { throw NSError(domain: "VideoFrames", code: 1) }
+                    let frames = try (0..<count).map { i -> FlutterStandardTypedData in
+                        let image = try generator.copyCGImage(at: CMTime(seconds: duration * Double(i) / Double(count), preferredTimescale: 600), actualTime: nil)
+                        guard let bytes = UIImage(cgImage: image).jpegData(compressionQuality: 0.75) else { throw NSError(domain: "VideoFrames", code: 2) }
+                        return FlutterStandardTypedData(bytes: bytes)
+                    }
+                    DispatchQueue.main.async { result(frames) }
+                } catch { DispatchQueue.main.async { result(FlutterError(code: "THUMBNAILS_FAILED", message: "Could not decode video frames", details: nil)) } }
+            }
         case "checkPermission":
             checkPermission(result: result)
         case "requestPermission":

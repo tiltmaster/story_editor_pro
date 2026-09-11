@@ -221,7 +221,7 @@ void main() {
     expect(edited.placeName, 'مدينة الكويت');
     expect(edited.backgroundStyle, 2);
     expect(edited.layerCount, 4);
-    expect(edited.copyWith(backgroundStyle: 8).backgroundStyle, 4);
+    expect(edited.copyWith(backgroundStyle: 8).backgroundStyle, 5);
     expect(edited.copyWith(backgroundStyle: -1).backgroundStyle, 0);
     expect(edited.copyWith(beauty: double.nan).beauty, 0);
     expect(edited.copyWith(beautyEyes: double.infinity).beautyEyes, 0);

@@ -24,6 +24,7 @@ internal class MediaPipePersonSegmenter(
     modelAssetPath: String,
     sceneAssetPaths: Map<Int, String>,
     private val executor: ExecutorService,
+    private val customSource: CustomBackgroundSource,
     private val onResult: (SegmentedBackground) -> Unit,
     private val onError: (Throwable) -> Unit,
 ) : AutoCloseable {
@@ -99,7 +100,7 @@ internal class MediaPipePersonSegmenter(
                 // whenever inference exceeded the old 250 ms display deadline.
                 if (!closed) {
                     onResult(SegmentedBackground(Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888),
-                        geometry, capturedMs, style, epoch, scenes[style]))
+                        geometry, capturedMs, style, epoch, if (style == 5) requireNotNull(customSource.frame()) else scenes[style]))
                 }
             } finally { masks.forEach { it.close() } }
         } finally { input.close() }
@@ -131,5 +132,5 @@ internal class MediaPipePersonSegmenter(
     }
 
     /** Called on the same worker as inference. */
-    override fun close() { closed = true; task.close() }
+    override fun close() { closed = true; task.close(); customSource.close() }
 }

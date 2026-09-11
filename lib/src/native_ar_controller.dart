@@ -193,6 +193,7 @@ class NativeArController {
   bool _faceTrackingReady = false;
   bool _backgroundReady = false;
   int _backgroundStyle = 0;
+  String _backgroundPath = '';
 
   Stream<NativeArEvent> get events => _events.stream;
   NativeArCapabilities get capabilities => _capabilities;
@@ -294,6 +295,17 @@ class NativeArController {
     return false;
   }
 
+  Future<void> awaitFrame() async {
+    await _methodChannel
+        .invokeMethod<bool>('awaitFrame')
+        .timeout(const Duration(seconds: 3));
+  }
+
+  Future<void> restartBackground() async {
+    _backgroundReady = false;
+    await _methodChannel.invokeMethod<void>('restartBackground');
+  }
+
   Future<bool> setLens(
     String lensId, {
     double intensity = 1.0,
@@ -306,6 +318,8 @@ class NativeArController {
     double beautyEyes = 0,
     double beautySlim = 0,
     int backgroundStyle = 0,
+    String backgroundPath = '',
+    bool backgroundIsVideo = false,
   }) async {
     _checkNotDisposed();
     if (!intensity.isFinite) throw ArgumentError.value(intensity, 'intensity');
@@ -317,8 +331,11 @@ class NativeArController {
     if (!_capabilities.available) return false;
     try {
       _listenToNativeEvents();
-      final style = backgroundStyle.clamp(0, 4);
-      if (_backgroundStyle != style) _backgroundReady = false;
+      final style = backgroundStyle.clamp(0, 5);
+      if (_backgroundStyle != style || _backgroundPath != backgroundPath) {
+        _backgroundReady = false;
+      }
+      _backgroundPath = backgroundPath;
       _backgroundStyle = style;
       await _methodChannel.invokeMethod<void>('setLens', <String, Object?>{
         'lensId': lensId,
@@ -332,6 +349,8 @@ class NativeArController {
         'beautyEyes': beautyEyes.isFinite ? beautyEyes.clamp(0, 1) : 0,
         'beautySlim': beautySlim.isFinite ? beautySlim.clamp(0, 1) : 0,
         'backgroundStyle': style,
+        'backgroundPath': backgroundPath,
+        'backgroundIsVideo': backgroundIsVideo,
       });
       return true;
     } on MissingPluginException catch (error) {

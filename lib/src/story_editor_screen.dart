@@ -1,3 +1,5 @@
+import 'camera_action_button.dart';
+import 'video_trim_timeline.dart';
 import 'dart:io';
 import 'face_beauty.dart';
 import 'dart:math' as math;
@@ -77,6 +79,7 @@ class StoryEditorScreen extends StatefulWidget {
   final String initialFilterPreset;
   final double initialFilterStrength;
   final double initialBeautyStrength;
+  final StoryEditorMusicSelection? initialMusic;
 
   const StoryEditorScreen({
     super.key,
@@ -94,6 +97,7 @@ class StoryEditorScreen extends StatefulWidget {
     this.initialFilterPreset = StoryEditorFilters.none,
     this.initialFilterStrength = 0.95,
     this.initialBeautyStrength = 0,
+    this.initialMusic,
   }) : mediaPath = imagePath;
 
   @override
@@ -144,6 +148,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedMusic = widget.initialMusic;
     // Determine media type
     _mediaType = widget.mediaType ?? _detectMediaType(widget.mediaPath);
 
@@ -1705,24 +1710,18 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ],
               ),
               const SizedBox(height: 18),
-              RangeSlider(
-                values: RangeValues(startMs.toDouble(), endMs.toDouble()),
-                min: 0,
-                max: durationMs.toDouble(),
-                labels: RangeLabels(
-                  _formatTrimTime(startMs),
-                  _formatTrimTime(endMs),
-                ),
-                onChanged: (values) {
-                  final nextStart = values.start.round();
-                  final nextEnd = values.end.round();
-                  if (nextEnd - nextStart < 250) return;
-                  setSheetState(() {
-                    startMs = nextStart;
-                    endMs = nextEnd;
-                  });
-                  controller.seekTo(Duration(milliseconds: nextStart));
-                },
+              VideoTrimTimeline(
+                path: widget.mediaPath,
+                durationMs: durationMs,
+                startMs: startMs,
+                endMs: endMs,
+                mirrored: widget.flipHorizontally,
+                onChanged: (values) => setSheetState(() {
+                  startMs = values.start.round();
+                  endMs = values.end.round();
+                }),
+                onSeek: (milliseconds) =>
+                    controller.seekTo(Duration(milliseconds: milliseconds)),
               ),
               const SizedBox(height: 8),
               Row(
@@ -2502,37 +2501,11 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           Icons.save => _editorText('Save to gallery', 'حفظ في المعرض'),
           _ => _editorText('Close', 'إغلاق'),
         };
-    return Tooltip(
-      message: title,
-      child: Semantics(
-        button: true,
-        label: title,
-        enabled: onTap != null,
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              // Match the camera screen's icon-button contrast.
-              color: isActive
-                  ? Colors.white.withValues(alpha: 0.30)
-                  : Colors.black.withValues(alpha: 0.42),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.22),
-                width: 1.0,
-              ),
-            ),
-            child: Center(
-              child: Opacity(
-                opacity: onTap == null ? 0.35 : 1,
-                child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
-              ),
-            ),
-          ),
-        ),
-      ),
+    return CameraActionButton(
+      label: title,
+      onTap: onTap,
+      active: isActive,
+      child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
     );
   }
 

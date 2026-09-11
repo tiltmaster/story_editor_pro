@@ -1,3 +1,13 @@
+## 1.9.0
+
+- Keep camera-switch transitions covered until newly composed frames are ready; ignore overlapping flip requests.
+- Restore a familiar side tool rail, show all five effects categories, and use consistent circular camera/editor controls.
+- Put recording lock beside the shutter and remove the idle timer bubble over the capture area.
+- Add image/video gallery backgrounds to the native Android and iOS person compositor. Videos loop, restart for recording, and mute their own audio.
+- Replace the trim slider with decoded video thumbnails, draggable handles, seeking, and accessible Arabic labels.
+- Expose the host music picker before capture and preserve its callback and selection when entering the editor.
+- Redesign Postcard as white airmail stationery and Editorial as a charcoal/red publication card, with full backdrops and RTL typography.
+
 ## 1.8.0
 
 - Keep background scenes visible between delayed segmentation results and transient inference failures; require recent tracking for capture.

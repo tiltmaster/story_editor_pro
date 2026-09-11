@@ -132,6 +132,19 @@ class StoryEditorProPlugin :
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
+            "getVideoThumbnails" -> {
+                val path = call.argument<String>("path")
+                if (path == null) { result.error("INVALID_ARGS", "Missing video", null); return }
+                val count = (call.argument<Int>("count") ?: 10).coerceIn(2, 16)
+                Thread {
+                    try {
+                        val frames = VideoThumbnails.read(path, count)
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { result.success(frames) }
+                    } catch (_: Exception) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { result.error("THUMBNAILS_FAILED", "Could not decode video frames", null) }
+                    }
+                }.start()
+            }
             "checkPermission" -> checkPermission(result)
             "requestPermission" -> requestPermission(result)
             "checkGalleryPermission" -> checkGalleryPermission(result)

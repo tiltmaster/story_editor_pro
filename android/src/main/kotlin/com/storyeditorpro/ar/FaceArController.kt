@@ -135,7 +135,15 @@ internal class FaceArController(
                         val nextBeautyEyes = beautyArgument("beautyEyes")
                         val nextBeautySlim = beautyArgument("beautySlim")
                         val nextBackgroundStyle = (call.argument<Number>("backgroundStyle")?.toInt() ?: 0).also {
-                            require(it in 0..4)
+                            require(it in 0..5)
+                        }
+                        val nextPath = call.argument<String>("backgroundPath") ?: ""
+                        val nextVideo = call.argument<Boolean>("backgroundIsVideo") ?: false
+                        if (nextBackgroundStyle == 5) require(java.io.File(nextPath).isFile)
+                        if (nextPath != customPath || nextVideo != customVideo) {
+                            customPath = nextPath; customVideo = nextVideo
+                            customBackground.select(nextPath, nextVideo)
+                            clearBackground()
                         }
                         val nextContext = CreativeLensContext(
                             languageCode = call.argument<String>("languageCode")
@@ -180,6 +188,16 @@ internal class FaceArController(
                         result.error("INVALID_ARGS", "Unsupported lens or invalid intensity", null)
                     }
                 }
+            }
+            "awaitFrame" -> {
+                framesToWait.set(2)
+                frameWaiter.getAndSet(result)?.success(false)
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (frameWaiter.compareAndSet(result, null)) result.success(false)
+                }, 2000)
+            }
+            "restartBackground" -> {
+                customBackground.restart(); clearBackground(); result.success(null)
             }
             "dispose" -> {
                 resetSession()
@@ -280,6 +298,10 @@ internal class FaceArController(
                     }
                     if (backgroundStyle > 0) emitBackground(
                         backgroundRenderer.isReady(backgroundStyle, backgroundEpoch.get()))
+                    if (frameWaiter.get() != null && framesToWait.decrementAndGet() <= 0) {
+                        val waiting = frameWaiter.getAndSet(null)
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { waiting?.success(true) }
+                    }
                     true
                 }
             } catch (error: Throwable) {
@@ -343,13 +365,20 @@ internal class FaceArController(
         // time. Camera delivery is never held behind inference or model setup.
     }
 
+    private val frameWaiter = java.util.concurrent.atomic.AtomicReference<io.flutter.plugin.common.MethodChannel.Result?>(null)
+    private val framesToWait = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private val customBackground = CustomBackgroundSource()
+    private var customPath = ""
+    private var customVideo = false
+
     private fun initializeBackgroundAsync() {
         if (closed || segmenter != null || !segmentationInitializing.compareAndSet(false, true)) return
         val expectedGeneration = generation.get()
         segmentationExecutor.execute {
             try {
                 if (closed || expectedGeneration != generation.get() || backgroundStyle == 0) return@execute
-                val local = MediaPipePersonSegmenter(context, segmentationAssetPath, sceneAssetPaths, segmentationExecutor,
+                val local = MediaPipePersonSegmenter(context, segmentationAssetPath, sceneAssetPaths, segmentationExecutor, customBackground,
                     onResult = { background ->
                         if (!closed && expectedGeneration == generation.get() && machine.isActive() &&
                             background.epoch == backgroundEpoch.get() && background.style == backgroundStyle) {

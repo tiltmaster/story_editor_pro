@@ -25,6 +25,7 @@ class CameraEffectsPanel extends StatefulWidget {
     required this.onChanged,
     this.arEvents,
     this.onClose,
+    this.onPickBackground,
     this.locationSession,
     this.uiSession,
   });
@@ -40,6 +41,7 @@ class CameraEffectsPanel extends StatefulWidget {
   final bool backgroundReady;
   final Stream<NativeArEvent>? arEvents;
   final VoidCallback? onClose;
+  final Future<void> Function()? onPickBackground;
   final CameraPlaceSession? locationSession;
   final CameraEffectsUiSession? uiSession;
   final void Function(CameraEffects effects, String lookId, double strength)
@@ -478,57 +480,112 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
               height: 48,
               child: Row(
                 children: [
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          for (final (index, label) in [
-                            (2, t('Lenses', 'عدسات')),
-                            (0, t('Looks', 'ألوان')),
-                            (1, t('Beauty', 'جمال')),
-                            (3, t('Places', 'أماكن')),
-                            (4, t('Background', 'الخلفية')),
-                          ])
-                            Semantics(
-                              key: _tabKeys[index],
-                              selected: _tab == index,
-                              button: true,
-                              child: InkWell(
-                                key: ValueKey('effects-tab-$index'),
-                                onTap: () => _selectTab(index),
-                                child: Container(
-                                  height: 48,
-                                  alignment: Alignment.center,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 11,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    border: Border(
-                                      bottom: BorderSide(
-                                        color: _tab == index
-                                            ? Colors.white
-                                            : Colors.transparent,
-                                        width: 2,
-                                      ),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    label,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: _tab == index
-                                          ? Colors.white
-                                          : Colors.white60,
-                                    ),
-                                  ),
+                  for (final (index, label) in [
+                    (2, t('Lenses', 'عدسات')),
+                    (0, t('Looks', 'ألوان')),
+                    (1, t('Beauty', 'جمال')),
+                    (3, t('Places', 'أماكن')),
+                    (4, t('Scenes', 'خلفيات')),
+                  ])
+                    Expanded(
+                      child: Semantics(
+                        key: _tabKeys[index],
+                        selected: _tab == index,
+                        button: true,
+                        child: InkWell(
+                          key: ValueKey('effects-tab-$index'),
+                          onTap: () => _selectTab(index),
+                          child: Container(
+                            height: 48,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: _tab == index
+                                      ? Colors.white
+                                      : Colors.transparent,
+                                  width: 2,
                                 ),
                               ),
                             ),
-                        ],
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: _tab == index
+                                    ? Colors.white
+                                    : Colors.white60,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            SizedBox(
+              height: 78,
+              child: switch (_tab) {
+                0 => _looks(),
+                1 => _beauty(),
+                2 => _lenses(),
+                3 => _places(),
+                _ => _backgrounds(),
+              },
+            ),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: _undo != null
+                          ? _undoReset()
+                          : _notice != null && _tab != 3
+                          ? _statusText(_notice!)
+                          : switch (_tab) {
+                              0 => _slider(
+                                t('Intensity', 'قوة التأثير'),
+                                _strength,
+                                widget.supportsBeauty && _look != 'none'
+                                    ? (value) => _change(strength: value)
+                                    : null,
+                              ),
+                              1 => _slider(
+                                switch (_beautyControl) {
+                                  1 => t('Eye size', 'حجم العينين'),
+                                  2 => t('Contour', 'تحديد الوجه'),
+                                  _ => t('Smoothing', 'النعومة'),
+                                },
+                                switch (_beautyControl) {
+                                  1 => _effects.beautyEyes,
+                                  2 => _effects.beautySlim,
+                                  _ => _effects.beauty,
+                                },
+                                (_beautyControl == 0
+                                        ? widget.supportsBeauty
+                                        : widget.supportsFaceBeauty)
+                                    ? (value) => _change(
+                                        effects: switch (_beautyControl) {
+                                          1 => _effects.copyWith(
+                                            beautyEyes: value,
+                                          ),
+                                          2 => _effects.copyWith(
+                                            beautySlim: value,
+                                          ),
+                                          _ => _effects.copyWith(beauty: value),
+                                        },
+                                      )
+                                    : null,
+                              ),
+                              2 => _lensStatus(),
+                              3 => _placeStatus(),
+                              _ => _backgroundStatus(),
+                            },
                     ),
                   ),
                   IconButton(
@@ -546,63 +603,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
                       visualDensity: VisualDensity.compact,
                       icon: const Icon(Icons.close_rounded, size: 19),
                     ),
-                  const SizedBox(width: 4),
                 ],
-              ),
-            ),
-            const SizedBox(height: 4),
-            SizedBox(
-              height: 78,
-              child: switch (_tab) {
-                0 => _looks(),
-                1 => _beauty(),
-                2 => _lenses(),
-                3 => _places(),
-                _ => _backgrounds(),
-              },
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _undo != null
-                    ? _undoReset()
-                    : _notice != null && _tab != 3
-                    ? _statusText(_notice!)
-                    : switch (_tab) {
-                        0 => _slider(
-                          t('Intensity', 'قوة التأثير'),
-                          _strength,
-                          widget.supportsBeauty && _look != 'none'
-                              ? (value) => _change(strength: value)
-                              : null,
-                        ),
-                        1 => _slider(
-                          switch (_beautyControl) {
-                            1 => t('Eye size', 'حجم العينين'),
-                            2 => t('Contour', 'تحديد الوجه'),
-                            _ => t('Smoothing', 'النعومة'),
-                          },
-                          switch (_beautyControl) {
-                            1 => _effects.beautyEyes,
-                            2 => _effects.beautySlim,
-                            _ => _effects.beauty,
-                          },
-                          (_beautyControl == 0
-                                  ? widget.supportsBeauty
-                                  : widget.supportsFaceBeauty)
-                              ? (value) => _change(
-                                  effects: switch (_beautyControl) {
-                                    1 => _effects.copyWith(beautyEyes: value),
-                                    2 => _effects.copyWith(beautySlim: value),
-                                    _ => _effects.copyWith(beauty: value),
-                                  },
-                                )
-                              : null,
-                        ),
-                        2 => _lensStatus(),
-                        3 => _placeStatus(),
-                        _ => _backgroundStatus(),
-                      },
               ),
             ),
           ],
@@ -847,6 +848,15 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
   ]);
 
   Widget _backgrounds() => _row([
+    if (widget.onPickBackground != null)
+      _card(
+        id: 'custom-background',
+        label: t('Your media', 'وسائطك'),
+        icon: Icons.add_photo_alternate_outlined,
+        colors: [const Color(0xFF313746), const Color(0xFF151820)],
+        selected: _effects.backgroundStyle == 5,
+        onTap: widget.supportsBackground ? widget.onPickBackground : null,
+      ),
     for (final (style, label, icon, colors) in [
       (
         0,
@@ -900,6 +910,14 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         ),
       );
     }
+    if (_effects.backgroundStyle == 5) {
+      return _statusText(
+        t(
+          'Your photo or video · Video audio muted',
+          'صورتك أو فيديوك · صوت الخلفية مكتوم',
+        ),
+      );
+    }
     if (_effects.backgroundStyle == 0) {
       return _statusText(
         t(
@@ -936,13 +954,13 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         'postcard',
         t('Postcard', 'بطاقة بريدية'),
         Icons.photo_outlined,
-        [const Color(0xFF86765C), const Color(0xFFDBD0B6)],
+        [const Color(0xFF293C56), const Color(0xFFB73544)],
       ),
       (
         'editorial',
         t('Editorial', 'مجلة'),
         Icons.view_agenda_outlined,
-        [const Color(0xFF454750), const Color(0xFF9EA1AB)],
+        [const Color(0xFF202125), const Color(0xFF9E2939)],
       ),
       (
         'stamp',

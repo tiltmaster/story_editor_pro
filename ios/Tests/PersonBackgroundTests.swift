@@ -35,7 +35,7 @@ final class PersonBackgroundTests: XCTestCase {
             .cropped(to: CGRect(x: 30, y: 40, width: 300, height: 200))
         let backgroundMask = CIImage(color: .black).cropped(to: extent)
         let personMask = CIImage(color: .white).cropped(to: extent)
-        for style in [2, 3] {
+        for style in [2, 3, 5] {
             let replaced = PersonBackgroundCompositor.composite(source: source, mask: backgroundMask, style: style, scene: scene)
             XCTAssertEqual(replaced.extent, extent)
             XCTAssertEqual(pixel(replaced, x: 11, y: 21), [0, 0, 255, 255])
@@ -53,6 +53,12 @@ final class PersonBackgroundTests: XCTestCase {
                            format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
         }
         return bytes
+    }
+
+    func testUnloadedCustomSceneNeverSubstitutesAnUnrelatedBackground() {
+        let source = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 20, height: 30))
+        let mask = CIImage(color: .black).cropped(to: source.extent)
+        XCTAssertTrue(PersonBackgroundCompositor.composite(source: source, mask: mask, style: 5) === source)
     }
 
     func testBackgroundConfigurationDoesNotRequireFaceModelAndRejectsUnknownStyles() throws {
@@ -114,7 +120,7 @@ final class PersonBackgroundTests: XCTestCase {
             backgrounds.insert(pixel(replaced, x: 50, y: 100))
         }
         XCTAssertEqual(backgrounds.count, 4)
-        for style in [0, -1, 5] {
+        for style in [0, -1, 6] {
             XCTAssertEqual(pixel(PersonBackgroundCompositor.composite(source: source, mask: noPerson, style: style),
                                  x: 50, y: 100), [255, 0, 0, 255])
         }

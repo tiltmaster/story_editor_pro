@@ -1,3 +1,4 @@
+import 'camera_action_button.dart';
 import 'dart:async';
 import 'face_beauty.dart';
 import 'dart:io';
@@ -1142,6 +1143,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             beautyEyes: effects.beautyEyes,
             beautySlim: effects.beautySlim,
             backgroundStyle: effects.backgroundStyle,
+            backgroundPath: effects.backgroundPath,
+            backgroundIsVideo: effects.backgroundIsVideo,
             languageCode: locale.languageCode,
             countryCode: locale.countryCode,
             mirrorOutput: mirror,
@@ -1183,10 +1186,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (_effectsOpen) await _ensureCameraFilterShader();
   }
 
-  Widget _buildEffectsTray() => Positioned(
-    left: 12,
-    right: 12,
-    top: 66,
+  Widget _buildEffectsTray() => PositionedDirectional(
+    start: 12,
+    end: 76,
+    top: 74,
     child: CameraEffectsPanel(
       key: const ValueKey('camera_effects_tray'),
       effects: _effects,
@@ -1198,6 +1201,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       supportedFaceLenses: _supportedNativeLensIds,
       supportsPlaces: _usingNativeCamera && _nativeArPrepared,
       backgroundReady: _nativeArController.backgroundReady,
+      onPickBackground: _pickCustomBackground,
       supportsBackground:
           _usingNativeCamera && _nativeArController.capabilities.backgrounds,
       supportsBeauty:
@@ -1216,6 +1220,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             effects.beautySlim != _effects.beautySlim ||
             effects.faceLens != _effects.faceLens ||
             effects.backgroundStyle != _effects.backgroundStyle ||
+            effects.backgroundPath != _effects.backgroundPath ||
             effects.placeStyle != _effects.placeStyle ||
             effects.placeName != _effects.placeName;
         setState(() {
@@ -1321,6 +1326,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Future<void> _beginBackendRecording() async {
+    if (_usingNativeCamera &&
+        _effects.backgroundStyle == 5 &&
+        _effects.backgroundIsVideo) {
+      await _nativeArController.restartBackground();
+    }
     // Selection updates are intentionally unawaited while swiping. Close that
     // race at the recording boundary so frame zero has the selected lens.
     await _ensureNativeEffectsReady();
@@ -1749,14 +1759,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 await Navigator.push<Map<String, dynamic>?>(
                   context,
                   MaterialPageRoute(
-                    builder: (ctx) => StoryEditorScreen(
-                      imagePath: file.path,
-                      primaryColor: widget.primaryColor,
-                      isFromGallery: true,
-                      initialTextOverlay: pendingOverlay,
-                      closeFriendsList: widget.closeFriendsList,
-                      userProfileImageUrl: widget.userProfileImageUrl,
-                      onShare: widget.onStoryShare,
+                    builder: (ctx) => _withEditorConfig(
+                      StoryEditorScreen(
+                        initialMusic: _cameraMusic,
+                        imagePath: file.path,
+                        primaryColor: widget.primaryColor,
+                        isFromGallery: true,
+                        initialTextOverlay: pendingOverlay,
+                        closeFriendsList: widget.closeFriendsList,
+                        userProfileImageUrl: widget.userProfileImageUrl,
+                        onShare: widget.onStoryShare,
+                      ),
                     ),
                   ),
                 );
@@ -1852,19 +1865,22 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             await Navigator.push<Map<String, dynamic>?>(
               context,
               MaterialPageRoute(
-                builder: (context) => StoryEditorScreen(
-                  imagePath: imagePath,
-                  primaryColor: widget.primaryColor,
-                  // The live selfie preview is mirrored for interaction only;
-                  // native and package-camera captures remain unmirrored.
-                  flipHorizontally: capturedFlipHorizontally,
-                  initialFilterPreset: capturedPixelFilterId,
-                  initialFilterStrength: capturedFilterStrength,
-                  initialBeautyStrength: _effects.beauty,
-                  initialTextOverlay: pendingOverlay,
-                  closeFriendsList: widget.closeFriendsList,
-                  userProfileImageUrl: widget.userProfileImageUrl,
-                  onShare: widget.onStoryShare,
+                builder: (context) => _withEditorConfig(
+                  StoryEditorScreen(
+                    initialMusic: _cameraMusic,
+                    imagePath: imagePath,
+                    primaryColor: widget.primaryColor,
+                    // The live selfie preview is mirrored for interaction only;
+                    // native and package-camera captures remain unmirrored.
+                    flipHorizontally: capturedFlipHorizontally,
+                    initialFilterPreset: capturedPixelFilterId,
+                    initialFilterStrength: capturedFilterStrength,
+                    initialBeautyStrength: _effects.beauty,
+                    initialTextOverlay: pendingOverlay,
+                    closeFriendsList: widget.closeFriendsList,
+                    userProfileImageUrl: widget.userProfileImageUrl,
+                    onShare: widget.onStoryShare,
+                  ),
                 ),
               ),
             );
@@ -2088,13 +2104,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           await Navigator.push<Map<String, dynamic>?>(
             context,
             MaterialPageRoute(
-              builder: (context) => StoryEditorScreen(
-                imagePath: collagePath,
-                primaryColor: widget.primaryColor,
-                initialTextOverlay: pendingOverlay,
-                closeFriendsList: widget.closeFriendsList,
-                userProfileImageUrl: widget.userProfileImageUrl,
-                onShare: widget.onStoryShare,
+              builder: (context) => _withEditorConfig(
+                StoryEditorScreen(
+                  initialMusic: _cameraMusic,
+                  imagePath: collagePath,
+                  primaryColor: widget.primaryColor,
+                  initialTextOverlay: pendingOverlay,
+                  closeFriendsList: widget.closeFriendsList,
+                  userProfileImageUrl: widget.userProfileImageUrl,
+                  onShare: widget.onStoryShare,
+                ),
               ),
             ),
           );
@@ -2473,17 +2492,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           await Navigator.push<Map<String, dynamic>?>(
             context,
             MaterialPageRoute(
-              builder: (context) => StoryEditorScreen(
-                imagePath: videoPath,
-                mediaType: MediaType.video,
-                primaryColor: widget.primaryColor,
-                flipHorizontally: capturedFlipHorizontally,
-                initialFilterPreset: capturedPixelFilterId,
-                initialFilterStrength: capturedFilterStrength,
-                initialBeautyStrength: _effects.beauty,
-                closeFriendsList: widget.closeFriendsList,
-                userProfileImageUrl: widget.userProfileImageUrl,
-                onShare: widget.onStoryShare,
+              builder: (context) => _withEditorConfig(
+                StoryEditorScreen(
+                  initialMusic: _cameraMusic,
+                  imagePath: videoPath,
+                  mediaType: MediaType.video,
+                  primaryColor: widget.primaryColor,
+                  flipHorizontally: capturedFlipHorizontally,
+                  initialFilterPreset: capturedPixelFilterId,
+                  initialFilterStrength: capturedFilterStrength,
+                  initialBeautyStrength: _effects.beauty,
+                  closeFriendsList: widget.closeFriendsList,
+                  userProfileImageUrl: widget.userProfileImageUrl,
+                  onShare: widget.onStoryShare,
+                ),
               ),
             ),
           );
@@ -2691,17 +2713,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           await Navigator.push<Map<String, dynamic>?>(
             context,
             MaterialPageRoute(
-              builder: (context) => StoryEditorScreen(
-                imagePath: finalPath,
-                mediaType: MediaType.video,
-                primaryColor: widget.primaryColor,
-                flipHorizontally: capturedFlipHorizontally,
-                initialFilterPreset: capturedPixelFilterId,
-                initialFilterStrength: capturedFilterStrength,
-                initialBeautyStrength: _effects.beauty,
-                closeFriendsList: widget.closeFriendsList,
-                userProfileImageUrl: widget.userProfileImageUrl,
-                onShare: widget.onStoryShare,
+              builder: (context) => _withEditorConfig(
+                StoryEditorScreen(
+                  initialMusic: _cameraMusic,
+                  imagePath: finalPath,
+                  mediaType: MediaType.video,
+                  primaryColor: widget.primaryColor,
+                  flipHorizontally: capturedFlipHorizontally,
+                  initialFilterPreset: capturedPixelFilterId,
+                  initialFilterStrength: capturedFilterStrength,
+                  initialBeautyStrength: _effects.beauty,
+                  closeFriendsList: widget.closeFriendsList,
+                  userProfileImageUrl: widget.userProfileImageUrl,
+                  onShare: widget.onStoryShare,
+                ),
               ),
             ),
           );
@@ -2958,17 +2983,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           await Navigator.push<Map<String, dynamic>?>(
             context,
             MaterialPageRoute(
-              builder: (context) => StoryEditorScreen(
-                imagePath: videoPath,
-                mediaType: MediaType.video,
-                primaryColor: widget.primaryColor,
-                flipHorizontally: capturedFlipHorizontally,
-                initialFilterPreset: capturedPixelFilterId,
-                initialFilterStrength: capturedFilterStrength,
-                initialBeautyStrength: _effects.beauty,
-                closeFriendsList: widget.closeFriendsList,
-                userProfileImageUrl: widget.userProfileImageUrl,
-                onShare: widget.onStoryShare,
+              builder: (context) => _withEditorConfig(
+                StoryEditorScreen(
+                  initialMusic: _cameraMusic,
+                  imagePath: videoPath,
+                  mediaType: MediaType.video,
+                  primaryColor: widget.primaryColor,
+                  flipHorizontally: capturedFlipHorizontally,
+                  initialFilterPreset: capturedPixelFilterId,
+                  initialFilterStrength: capturedFilterStrength,
+                  initialBeautyStrength: _effects.beauty,
+                  closeFriendsList: widget.closeFriendsList,
+                  userProfileImageUrl: widget.userProfileImageUrl,
+                  onShare: widget.onStoryShare,
+                ),
               ),
             ),
           );
@@ -3006,8 +3034,126 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
+  StoryEditorMusicSelection? _cameraMusic;
+
+  Future<void> _pickCameraMusic() async {
+    final picker = context.storyEditorConfig.onPickMusic;
+    if (picker == null || _filterSelectionLocked) return;
+    final selection = await picker(context);
+    if (mounted && selection != null) setState(() => _cameraMusic = selection);
+  }
+
+  Widget _buildCameraMusic() => PositionedDirectional(
+    top: 18,
+    start: 76,
+    end: 76,
+    child: Center(
+      child: Semantics(
+        button: true,
+        label: context.storyStrings.editorAddMusic,
+        child: GestureDetector(
+          onTap: _pickCameraMusic,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .42),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: .22)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.music_note_rounded,
+                  size: 20,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    _cameraMusic?.title ??
+                        _cameraText('Add sound', 'إضافة صوت'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Future<void> _pickCustomBackground() async {
+    if (_filterSelectionLocked) return;
+    try {
+      final permission = await PhotoManager.requestPermissionExtend();
+      if (!permission.hasAccess) throw StateError('Gallery access is required');
+      final albums = await PhotoManager.getAssetPathList(
+        type: RequestType.common,
+        onlyAll: true,
+      );
+      if (albums.isEmpty) throw StateError('No photos or videos found');
+      final album = albums.first;
+      final count = await album.assetCountAsync;
+      if (!mounted) return;
+      final config = context.storyEditorConfig;
+      final asset = await Navigator.push<AssetEntity>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => StoryEditorConfigProvider(
+            config: config,
+            child: _GalleryPickerPage(album: album, totalCount: count),
+          ),
+        ),
+      );
+      if (asset == null) return;
+      final file = await asset.originFile;
+      if (file == null) throw StateError('Could not load this media');
+      // Keep a stable app-cache copy; cloud/gallery temporary files can expire.
+      final folder = await getTemporaryDirectory();
+      final extension = file.path.split('.').last;
+      final copy = await file.copy(
+        '${folder.path}/story_background_${DateTime.now().microsecondsSinceEpoch}.$extension',
+      );
+      if (!mounted) return;
+      setState(
+        () => _effects = _effects.copyWith(
+          backgroundStyle: 5,
+          backgroundPath: copy.path,
+          backgroundIsVideo: asset.type == AssetType.video,
+        ),
+      );
+      await _applyNativeArSelection();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _cameraText(
+                'Could not open this background. Check gallery access and try another file.',
+                'تعذّر فتح الخلفية. تحقق من إذن المعرض وجرّب ملفًا آخر.',
+              ),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _withEditorConfig(Widget editor) => StoryEditorConfigProvider(
+    config: context.storyEditorConfig,
+    child: editor,
+  );
+
   Future<void> _switchCamera() async {
-    if (_isVideoRecording ||
+    if (_cameraSwitching ||
+        _isVideoRecording ||
         _recordingStartInProgress ||
         _isCapturing ||
         !_cameraReady) {
@@ -3016,6 +3162,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     setState(() => _cameraSwitching = true);
     try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
       HapticFeedback.lightImpact();
 
       if (_usingNativeCamera) {
@@ -3027,12 +3175,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             _zoomLevel = 1.0.clamp(_minZoom, _maxZoom);
             _baseZoomLevel = _zoomLevel;
             if (!mounted) return;
-            setState(() {});
             // The selected lens context includes selfie-output mirroring. A
             // successful back/front switch changes that value, so re-send the
             // active selection before another frame or capture can use stale
             // text/graphic orientation.
-            if (_nativeArPrepared) await _applyNativeArSelection();
+            if (_nativeArPrepared) {
+              await _applyNativeArSelection();
+              await _nativeArController.awaitFrame();
+            }
           }
         } catch (error) {
           debugPrint('Native camera switch error: $error');
@@ -3301,13 +3451,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     ),
                     child: _buildFullscreenCameraPreview(),
                   ),
-                  // Top controls (X, Flash, Settings)
+                  if (_cameraSwitching)
+                    const ColoredBox(
+                      key: ValueKey('camera_switch_cover'),
+                      color: Colors.black,
+                    ),
+                  // Top controls
                   _buildTopControlsRow(),
+                  if (context.storyEditorConfig.onPickMusic != null &&
+                      !_filterSelectionLocked)
+                    _buildCameraMusic(),
                   if (_focusPoint != null) _buildFocusReticle(),
                   if (_exposureOpen && !_filterSelectionLocked)
                     _buildExposureControl(),
-                  if (_isVideoRecording &&
-                      !_recordGesture.locked &&
+                  if ((_isVideoRecording || _recordingStartInProgress) &&
                       !_isBoomerangMode &&
                       !_isHandsFreeMode)
                     _buildRecordingLockHint(),
@@ -4577,7 +4734,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: AnchoredShutterControl(
         key: const ValueKey('camera_timer_capture_control'),
         width: 180,
-        status: status,
+        status: _isVideoRecording ? status : null,
         shutter: shutter,
       ),
     );
@@ -4977,30 +5134,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     double size = 44,
     String? label,
   }) {
-    final button = GestureDetector(
+    return CameraActionButton(
+      size: size,
+      label: label,
       onTap: onTap,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.black.withValues(alpha: 0.42),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.22),
-            width: 1.0,
-          ),
-        ),
-        child: Center(
-          child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
-        ),
-      ),
+      child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
     );
-    return label == null
-        ? button
-        : Tooltip(
-            message: label,
-            child: Semantics(button: true, label: label, child: button),
-          );
   }
 
   Widget _buildFocusReticle() => Positioned.fill(
@@ -5081,31 +5220,45 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     ),
   );
 
-  Widget _buildRecordingLockHint() => Positioned(
-    bottom: 42,
-    left: Directionality.of(context) == TextDirection.rtl ? null : 12,
-    right: Directionality.of(context) == TextDirection.rtl ? 12 : null,
-    child: IgnorePointer(
-      child: Container(
-        width: 90,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+  Widget _buildRecordingLockHint() => Positioned.fill(
+    child: LayoutBuilder(
+      builder: (context, box) {
+        final rtl = Directionality.of(context) == TextDirection.rtl;
+        final diameter = context.storyEditorConfig.shutterButtonSizeLarge * .9;
+        final offset = box.maxWidth / 2 - diameter / 2 - 12 - 44;
+        final config = context.storyEditorConfig;
+        final bottomOffset =
+            MediaQuery.sizeOf(context).height < config.smallScreenBreakpoint
+            ? 10.0
+            : 20.0;
+        return Stack(
           children: [
-            const Icon(Icons.lock_open_rounded, color: Colors.white, size: 22),
-            const SizedBox(height: 4),
-            Text(
-              _cameraText('Slide to lock', 'اسحب للتثبيت'),
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 11),
+            Positioned(
+              left: rtl ? null : offset,
+              right: rtl ? offset : null,
+              bottom:
+                  bottomOffset +
+                  CameraFilterSliderContract.integratedControlHeight / 2 -
+                  24,
+              child: _buildIconButton(
+                icon: _recordGesture.locked
+                    ? Icons.lock_rounded
+                    : Icons.lock_open_rounded,
+                label: _recordGesture.locked
+                    ? _cameraText('Stop recording', 'إيقاف التسجيل')
+                    : _cameraText('Lock recording', 'تثبيت التسجيل'),
+                onTap: () {
+                  if (_recordGesture.locked) {
+                    _stopVideoRecording();
+                  } else {
+                    setState(() => _recordGesture.lock());
+                  }
+                },
+              ),
             ),
           ],
-        ),
-      ),
+        );
+      },
     ),
   );
 
@@ -5170,31 +5323,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// A single top row keeps every camera tool visible without covering the face.
+  /// Familiar camera tool rail, mirrored for Arabic.
   Widget _buildSideToolsColumn() {
     final config = context.storyEditorConfig;
-    final hidden = _filterSelectionLocked;
     return PositionedDirectional(
-      top: 12,
-      start: 62,
-      end: 6,
+      top: 16,
+      end: 16,
+      bottom: 180,
       child: IgnorePointer(
-        ignoring: hidden,
+        ignoring: _filterSelectionLocked,
         child: AnimatedOpacity(
-          opacity: hidden ? 0 : 1,
+          opacity: _filterSelectionLocked ? 0 : 1,
           duration: const Duration(milliseconds: 150),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              Expanded(
-                child: _buildIconButton(
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                _buildIconButton(
                   iconWidget: _flashIcon,
                   label: _cameraText('Flash', 'الفلاش'),
                   onTap: _toggleFlash,
                 ),
-              ),
-              Expanded(
-                child: Semantics(
+                const SizedBox(height: 10),
+                Semantics(
                   key: const ValueKey('camera_effects_button'),
                   button: true,
                   selected: _effectsOpen,
@@ -5205,10 +5355,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     onTap: _showEffectsPanel,
                   ),
                 ),
-              ),
-              if (_cameraControls.exposure)
-                Expanded(
-                  child: _buildIconButton(
+                if (_cameraControls.exposure) ...[
+                  const SizedBox(height: 10),
+                  _buildIconButton(
                     icon: Icons.exposure_rounded,
                     label: _cameraText('Brightness', 'الإضاءة'),
                     onTap: () => setState(() {
@@ -5216,36 +5365,34 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                       _effectsOpen = false;
                     }),
                   ),
-                ),
-              if (config.enableBoomerang)
-                Expanded(
-                  child: Tooltip(
+                ],
+                if (config.enableHandsFree) ...[
+                  const SizedBox(height: 10),
+                  _buildHandsFreeButton(),
+                ],
+                if (config.enableBoomerang) ...[
+                  const SizedBox(height: 10),
+                  Tooltip(
                     message: _cameraText('Loop', 'تكرار'),
                     child: _buildBoomerangButton(),
                   ),
-                ),
-              if (config.enableGradientTextEditor)
-                Expanded(
-                  child: Tooltip(
-                    message: _cameraText('Create', 'إنشاء'),
-                    child: _buildCreateModeButton(),
-                  ),
-                ),
-              if (config.enableCollage)
-                Expanded(
-                  child: Tooltip(
+                ],
+                if (config.enableCollage) ...[
+                  const SizedBox(height: 10),
+                  Tooltip(
                     message: _cameraText('Layout', 'تخطيط'),
                     child: _buildCollageButton(),
                   ),
-                ),
-              if (config.enableHandsFree)
-                Expanded(
-                  child: Tooltip(
-                    message: _cameraText('Timer', 'مؤقّت'),
-                    child: _buildHandsFreeButton(),
+                ],
+                if (config.enableGradientTextEditor) ...[
+                  const SizedBox(height: 10),
+                  Tooltip(
+                    message: _cameraText('Create', 'إنشاء'),
+                    child: _buildCreateModeButton(),
                   ),
-                ),
-            ],
+                ],
+              ],
+            ),
           ),
         ),
       ),
@@ -5330,20 +5477,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               await Navigator.push<Map<String, dynamic>?>(
                 context,
                 MaterialPageRoute(
-                  builder: (ctx) => StoryEditorScreen(
-                    imagePath: bgImagePath,
-                    primaryColor: widget.primaryColor,
-                    closeFriendsList: widget.closeFriendsList,
-                    userProfileImageUrl: widget.userProfileImageUrl,
-                    onShare: widget.onStoryShare,
-                    // Send text as TextOverlay (movable, editable)
-                    // offset: Offset.zero - will be auto centered on editor side
-                    initialTextOverlay: TextOverlay(
-                      text: text,
-                      color: Colors.white,
-                      fontSize: 32,
-                      textStyle: const TextStyle(fontWeight: FontWeight.bold),
-                      offset: Offset.zero,
+                  builder: (ctx) => _withEditorConfig(
+                    StoryEditorScreen(
+                      initialMusic: _cameraMusic,
+                      imagePath: bgImagePath,
+                      primaryColor: widget.primaryColor,
+                      closeFriendsList: widget.closeFriendsList,
+                      userProfileImageUrl: widget.userProfileImageUrl,
+                      onShare: widget.onStoryShare,
+                      // Send text as TextOverlay (movable, editable)
+                      // offset: Offset.zero - will be auto centered on editor side
+                      initialTextOverlay: TextOverlay(
+                        text: text,
+                        color: Colors.white,
+                        fontSize: 32,
+                        textStyle: const TextStyle(fontWeight: FontWeight.bold),
+                        offset: Offset.zero,
+                      ),
                     ),
                   ),
                 ),

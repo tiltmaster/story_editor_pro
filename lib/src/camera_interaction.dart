@@ -14,12 +14,13 @@ class CameraRecordGesture {
     final origin = _origin;
     if (origin == null || locked) return false;
     final towardLock = (origin.dx - position.dx) * (rtl ? -1 : 1);
-    if (towardLock < 64) return false;
+    if (towardLock < 48) return false;
     locked = true;
     return true;
   }
 
   bool get stopOnRelease => !locked;
+  void lock() => locked = true;
   void reset() {
     _origin = null;
     locked = false;

@@ -161,7 +161,7 @@ final class PersonBackgroundProcessor {
 }
 
 enum PersonBackgroundCompositor {
-    static func isValidStyle(_ style: Int) -> Bool { (0...4).contains(style) }
+    static func isValidStyle(_ style: Int) -> Bool { (0...5).contains(style) }
 
     static func alignedMask(_ mask: CIImage, to extent: CGRect) -> CIImage? {
         guard mask.extent.width > 0, mask.extent.height > 0,
@@ -175,10 +175,11 @@ enum PersonBackgroundCompositor {
     }
 
     static func composite(source: CIImage, mask: CIImage, style: Int, scene: CIImage? = nil) -> CIImage {
+        guard style != 5 || scene != nil else { return source }
         guard style != 0, isValidStyle(style), let aligned = alignedMask(mask, to: source.extent) else { return source }
         let extent = source.extent
         let background: CIImage
-        if let scene = scene, style == 2 || style == 3 {
+        if let scene = scene, style == 2 || style == 3 || style == 5 {
             let scale = max(extent.width / scene.extent.width, extent.height / scene.extent.height)
             let scaled = scene.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             background = scaled.transformed(by: CGAffineTransform(

@@ -101,7 +101,11 @@ void main() {
         find.byKey(const ValueKey('camera_effects_button')),
       );
       expect(tray.bottom, lessThan(shutter.top));
-      expect(toggle.bottom, lessThan(tray.top));
+      expect(
+        toggle.overlaps(tray),
+        isFalse,
+        reason: 'The side rail must remain outside the effects tray',
+      );
       expect(tester.takeException(), isNull);
 
       final panel = tester.widget<CameraEffectsPanel>(

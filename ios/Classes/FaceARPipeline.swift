@@ -314,6 +314,10 @@ final class FaceARCoordinator {
     private var intensity: CGFloat = 1
     private var beautyEyes: CGFloat = 0
     private var beautySlim: CGFloat = 0
+    private var customBackground = CustomBackgroundSource()
+    private var lastCustomReady = false
+    private var customPath = ""
+    private var customIsVideo = false
     private var backgroundStyle = 0
     private var backgroundProcessor: PersonBackgroundProcessor?
     private var pose: FaceARPose?
@@ -351,8 +355,8 @@ final class FaceARCoordinator {
     }
 
     var backgroundReady: Bool {
-        lock.lock(); let processor = backgroundProcessor; lock.unlock()
-        return processor?.isReady ?? false
+        lock.lock(); let processor = backgroundProcessor; let custom = backgroundStyle == 5; lock.unlock()
+        return (processor?.isReady ?? false) && (!custom || customBackground.frame() != nil)
     }
 
     var runtimeState: String {
@@ -469,7 +473,9 @@ final class FaceARCoordinator {
         placeName: String = "",
         beautyEyes: Double = 0,
         beautySlim: Double = 0,
-        backgroundStyle: Int = 0
+        backgroundStyle: Int = 0,
+        backgroundPath: String = "",
+        backgroundIsVideo: Bool = false
     ) throws {
         guard value.isFinite, beautyEyes.isFinite, beautySlim.isFinite,
               PersonBackgroundCompositor.isValidStyle(backgroundStyle),
@@ -478,18 +484,26 @@ final class FaceARCoordinator {
               id == "none" || CreativeLensFrameRenderer.lensIds.contains(id) || CreativeLensFrameRenderer.adornmentIds.contains(id) else {
             throw NSError(domain: "FaceAR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown lens id: \(id)"])
         }
+        if backgroundStyle == 5 && !FileManager.default.fileExists(atPath: backgroundPath) {
+            throw NSError(domain: "StoryBackground", code: 1, userInfo: [NSLocalizedDescriptionKey: "Background media is unavailable"])
+        }
         lock.lock()
         lensId = id
         intensity = CGFloat(max(0, min(1, value)))
         self.beautyEyes = CGFloat(max(0, min(1, beautyEyes)))
         self.beautySlim = CGFloat(max(0, min(1, beautySlim)))
-        let backgroundChanged = self.backgroundStyle != backgroundStyle
+        let customChanged = customPath != backgroundPath || customIsVideo != backgroundIsVideo
+        if customChanged {
+            customPath = backgroundPath; customIsVideo = backgroundIsVideo
+            customBackground.select(path: backgroundPath, video: backgroundIsVideo)
+        }
+        let backgroundChanged = self.backgroundStyle != backgroundStyle || customChanged
         self.backgroundStyle = backgroundStyle
         // No segmentation request, model initialization, or worker is created
         // for the ordinary camera. Reapplying a selected style preserves masks.
         if backgroundStyle > 0 && backgroundProcessor == nil {
             backgroundProcessor = PersonBackgroundProcessor { [weak self] ready, message in
-                var event: [String: Any] = ["type": "background", "backgroundReady": ready]
+                var event: [String: Any] = ["type": "background", "backgroundReady": self?.backgroundReady ?? false]
                 if let message = message {
                     event["code"] = "BACKGROUND_SEGMENTATION_FAILED"
                     event["message"] = message
@@ -520,7 +534,31 @@ final class FaceARCoordinator {
         if needsPreparation { prepare() }
     }
 
+    private var frameWaiter: ((Bool) -> Void)?
+    private var framesToWait = 0
+    private var frameWaitVersion = 0
+    func awaitFrame(_ completion: @escaping (Bool) -> Void) {
+        lock.lock(); let previous = frameWaiter; frameWaiter = completion; framesToWait = 2; frameWaitVersion += 1; let expected = frameWaitVersion; lock.unlock()
+        previous?(false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock(); guard self.frameWaitVersion == expected else { self.lock.unlock(); return }; let pending = self.frameWaiter; self.frameWaiter = nil; self.lock.unlock()
+            pending?(false)
+        }
+    }
+    func restartBackground() {
+        customBackground.restart()
+        lock.lock(); let processor = backgroundProcessor; lock.unlock()
+        processor?.invalidate()
+    }
+
     func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime) -> CVPixelBuffer {
+        defer {
+            lock.lock(); framesToWait -= 1
+            let pending = framesToWait <= 0 ? frameWaiter : nil
+            if pending != nil { frameWaiter = nil }; lock.unlock()
+            if let pending = pending { DispatchQueue.main.async { pending(true) } }
+        }
         lock.lock()
         let currentLensId = lensId
         let active = enabled && state == .active
@@ -575,12 +613,17 @@ final class FaceARCoordinator {
             backgroundMask = processor?.latestMask(sourceSize: CGSize(
                 width: CVPixelBufferGetWidth(pixelBuffer), height: CVPixelBufferGetHeight(pixelBuffer)))
         }
+        if currentBackgroundStyle == 5 {
+            let ready = backgroundMask != nil && (processor?.isReady ?? false) && customBackground.frame() != nil
+            lock.lock(); let changed = ready != lastCustomReady; lastCustomReady = ready; lock.unlock()
+            if changed { emit(["type": "background", "backgroundReady": ready]) }
+        }
         guard creativeActive || backgroundMask != nil else { return pixelBuffer }
         renderLock.lock(); defer { renderLock.unlock() }
         let time = seconds.isFinite ? seconds : ProcessInfo.processInfo.systemUptime
         if let mask = backgroundMask {
             let source = PersonBackgroundCompositor.composite(source: CIImage(cvPixelBuffer: pixelBuffer),
-                                                               mask: mask, style: currentBackgroundStyle, scene: backgroundScenes[currentBackgroundStyle])
+                                                               mask: mask, style: currentBackgroundStyle, scene: currentBackgroundStyle == 5 ? customBackground.frame() : backgroundScenes[currentBackgroundStyle])
             return activeCreativeRenderer?.render(source: source, lensId: currentLensId,
                 intensity: currentIntensity, lensContext: currentCreativeContext, pose: currentPose, time: time) ?? pixelBuffer
         }
@@ -621,7 +664,7 @@ final class FaceARCoordinator {
         if currentBackgroundStyle > 0 {
             do {
                 let mask = try PersonBackgroundProcessor.photoMask(for: upright)
-                photoSource = PersonBackgroundCompositor.composite(source: upright, mask: mask, style: currentBackgroundStyle, scene: backgroundScenes[currentBackgroundStyle])
+                photoSource = PersonBackgroundCompositor.composite(source: upright, mask: mask, style: currentBackgroundStyle, scene: currentBackgroundStyle == 5 ? customBackground.frame() : backgroundScenes[currentBackgroundStyle])
             } catch {
                 emit(["type": "background", "backgroundReady": backgroundReady,
                       "code": "BACKGROUND_PHOTO_FAILED", "message": error.localizedDescription])
@@ -681,6 +724,8 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
         case "setEnabled":
             coordinator.setEnabled((call.arguments as? [String: Any])?["enabled"] as? Bool ?? false)
             result(["state": coordinator.runtimeState, "faceReady": coordinator.faceReady, "backgroundReady": coordinator.backgroundReady])
+        case "awaitFrame": coordinator.awaitFrame { result($0) }
+        case "restartBackground": coordinator.restartBackground(); result(nil)
         case "setLens":
             let args = call.arguments as? [String: Any]
             do {
@@ -695,7 +740,9 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
                     placeName: args?["placeName"] as? String ?? "",
                     beautyEyes: (args?["beautyEyes"] as? NSNumber)?.doubleValue ?? 0,
                     beautySlim: (args?["beautySlim"] as? NSNumber)?.doubleValue ?? 0,
-                    backgroundStyle: (args?["backgroundStyle"] as? NSNumber)?.intValue ?? 0
+                    backgroundStyle: (args?["backgroundStyle"] as? NSNumber)?.intValue ?? 0,
+                    backgroundPath: args?["backgroundPath"] as? String ?? "",
+                    backgroundIsVideo: args?["backgroundIsVideo"] as? Bool ?? false
                 )
                 result(nil)
             } catch {
