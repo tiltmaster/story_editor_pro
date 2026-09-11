@@ -8,6 +8,23 @@ import XCTest
 final class PersonBackgroundTests: XCTestCase {
     private let context = CIContext(options: [.useSoftwareRenderer: true])
 
+    func testPhotographicSceneUsesCoverFramingAndPreservesPersonPixels() {
+        let extent = CGRect(x: 10, y: 20, width: 100, height: 200)
+        let source = CIImage(color: CIColor(red: 1, green: 0, blue: 0)).cropped(to: extent)
+        let scene = CIImage(color: CIColor(red: 0, green: 0, blue: 1))
+            .cropped(to: CGRect(x: 30, y: 40, width: 300, height: 200))
+        let backgroundMask = CIImage(color: .black).cropped(to: extent)
+        let personMask = CIImage(color: .white).cropped(to: extent)
+        for style in [2, 3] {
+            let replaced = PersonBackgroundCompositor.composite(source: source, mask: backgroundMask, style: style, scene: scene)
+            XCTAssertEqual(replaced.extent, extent)
+            XCTAssertEqual(pixel(replaced, x: 11, y: 21), [0, 0, 255, 255])
+            XCTAssertEqual(pixel(replaced, x: 108, y: 218), [0, 0, 255, 255])
+            let preserved = PersonBackgroundCompositor.composite(source: source, mask: personMask, style: style, scene: scene)
+            XCTAssertEqual(pixel(preserved, x: 50, y: 100), [255, 0, 0, 255])
+        }
+    }
+
     private func pixel(_ image: CIImage, x: Int, y: Int) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: 4)
         bytes.withUnsafeMutableBytes { buffer in

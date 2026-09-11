@@ -36,7 +36,9 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
             canvas.translate(sensorCrop.exactCenterX(), sensorCrop.exactCenterY())
             canvas.rotate(-frame.rotationDegrees.toFloat())
             canvas.translate(-width / 2, -height / 2)
-            if (OverlayGeometry.shouldPreMirror(frame.isMirroring, lensContext.mirrorOutput)) {
+            // CameraX outputs explicitly use MIRROR_MODE_OFF. Frame.isMirroring
+            // describes the input transform, not another output mirror.
+            if (lensContext.mirrorOutput) {
                 canvas.scale(-1f, 1f, width / 2, height / 2)
             }
             val u = min(width / 1080f, height / 1920f)
@@ -95,7 +97,7 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
         val gold=Color.rgb(230,193,134)
         val arabic=value.languageCode=="ar"
         // Deliberately above camera controls; all typography scales with crop.
-        val baseline=h*0.72f
+        val baseline=h*0.78f
         when(value.placeStyle) {
             "postcard" -> {
                 paint.shader=LinearGradient(0f,baseline-190*u,0f,baseline+100*u,Color.TRANSPARENT,Color.argb(135,20,14,20),Shader.TileMode.CLAMP)
@@ -109,11 +111,11 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
                 val left=w*0.08f
                 val leading=if(arabic) w*0.92f else left
                 val alignment=if(arabic) Paint.Align.RIGHT else Paint.Align.LEFT
-                round(c,left-20*u,baseline-153*u,w*0.84f+40*u,255*u,8*u,Color.argb(170,16,23,27))
-                text(c,if(arabic) "هنا والآن" else "HERE / NOW",leading,baseline-105*u,22*u,gold,mono=true,align=alignment)
-                text(c,name,leading,baseline-10*u,82*u,cream,serif=true,align=alignment,maxWidth=w*0.82f)
+                round(c,left-20*u,baseline-131*u,w*0.84f+40*u,218*u,24*u,Color.argb(142,16,23,27))
+                text(c,if(arabic) "هنا والآن" else "HERE / NOW",leading,baseline-94*u,20*u,gold,mono=true,align=alignment)
+                text(c,name,leading,baseline-12*u,66*u,cream,serif=true,align=alignment,maxWidth=w*0.82f)
                 rule(c,left,baseline+25*u,w*0.92f,gold,2*u)
-                text(c,date("EEEE · HH:mm",now,locale),leading,baseline+72*u,24*u,cream,align=alignment,maxWidth=w*0.82f)
+                text(c,date("EEEE · HH:mm",now,locale),leading,baseline+64*u,22*u,cream,align=alignment,maxWidth=w*0.82f)
             }
             "stamp" -> {
                 val save=c.save();c.rotate(-7f,w/2,baseline-20*u)

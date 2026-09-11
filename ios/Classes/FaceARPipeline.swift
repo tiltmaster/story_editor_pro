@@ -329,8 +329,10 @@ final class FaceARCoordinator {
     private var creativeRenderer: CreativeLensFrameRenderer?
     private var creativeContext = CreativeLensContext()
 
-    init(modelPath: String?) {
+    private let backgroundScenes: [Int: CIImage]
+    init(modelPath: String?, scenePaths: [Int: String] = [:]) {
         self.modelPath = modelPath
+        self.backgroundScenes = scenePaths.compactMapValues { CIImage(contentsOf: URL(fileURLWithPath: $0)) }
     }
 
     var capabilities: [String: Any] {
@@ -578,7 +580,7 @@ final class FaceARCoordinator {
         let time = seconds.isFinite ? seconds : ProcessInfo.processInfo.systemUptime
         if let mask = backgroundMask {
             let source = PersonBackgroundCompositor.composite(source: CIImage(cvPixelBuffer: pixelBuffer),
-                                                               mask: mask, style: currentBackgroundStyle)
+                                                               mask: mask, style: currentBackgroundStyle, scene: backgroundScenes[currentBackgroundStyle])
             return activeCreativeRenderer?.render(source: source, lensId: currentLensId,
                 intensity: currentIntensity, lensContext: currentCreativeContext, pose: currentPose, time: time) ?? pixelBuffer
         }
@@ -619,7 +621,7 @@ final class FaceARCoordinator {
         if currentBackgroundStyle > 0 {
             do {
                 let mask = try PersonBackgroundProcessor.photoMask(for: upright)
-                photoSource = PersonBackgroundCompositor.composite(source: upright, mask: mask, style: currentBackgroundStyle)
+                photoSource = PersonBackgroundCompositor.composite(source: upright, mask: mask, style: currentBackgroundStyle, scene: backgroundScenes[currentBackgroundStyle])
             } catch {
                 emit(["type": "background", "backgroundReady": backgroundReady,
                       "code": "BACKGROUND_PHOTO_FAILED", "message": error.localizedDescription])

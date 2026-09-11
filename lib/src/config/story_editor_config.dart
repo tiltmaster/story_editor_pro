@@ -1,3 +1,4 @@
+import '../camera_nearby_places.dart';
 import 'package:flutter/material.dart';
 import 'story_editor_strings.dart';
 import 'story_editor_theme.dart';
@@ -39,6 +40,10 @@ class StoryEditorConfig {
   /// Settings callbacks (replaces SharedPreferences)
   final StoryEditorSettings settings;
 
+  /// Optional host-owned places backend. Queried only when Nearby is tapped.
+  /// Without this, Places uses native reverse geocoding for the current city.
+  final CameraNearbyResolver? nearbyPlacesResolver;
+
   // ============ Feature Toggles ============
 
   /// Enable boomerang mode button in camera toolbar (default: true)
@@ -56,7 +61,7 @@ class StoryEditorConfig {
   /// Show gallery picker button on camera screen (default: true)
   final bool showGalleryButton;
 
-  /// Mirror front camera preview like a selfie camera (default: false).
+  /// Mirror front camera preview like a selfie camera (default: true).
   final bool mirrorFrontCameraPreview;
 
   /// Whether the embedding app resolves camera permission before navigation.
@@ -158,9 +163,10 @@ class StoryEditorConfig {
     this.enableHandsFree = true,
     this.enableGradientTextEditor = true,
     this.showGalleryButton = false,
-    this.mirrorFrontCameraPreview = false,
+    this.mirrorFrontCameraPreview = true,
     this.cameraPermissionManagedByHost = false,
     this.onPickMusic,
+    this.nearbyPlacesResolver,
     this.handsFreeDelayOptions = const [3, 5, 10, 15],
     this.defaultHandsFreeDelay = 3,
     this.maxHandsFreeRecordingSeconds = 60,
@@ -197,6 +203,7 @@ class StoryEditorConfig {
     bool? enableHandsFree,
     bool? enableGradientTextEditor,
     bool? showGalleryButton,
+    CameraNearbyResolver? nearbyPlacesResolver,
     bool? mirrorFrontCameraPreview,
     bool? cameraPermissionManagedByHost,
     Future<StoryEditorMusicSelection?> Function(BuildContext context)?
@@ -236,6 +243,7 @@ class StoryEditorConfig {
       enableGradientTextEditor:
           enableGradientTextEditor ?? this.enableGradientTextEditor,
       showGalleryButton: showGalleryButton ?? this.showGalleryButton,
+      nearbyPlacesResolver: nearbyPlacesResolver ?? this.nearbyPlacesResolver,
       mirrorFrontCameraPreview:
           mirrorFrontCameraPreview ?? this.mirrorFrontCameraPreview,
       cameraPermissionManagedByHost:

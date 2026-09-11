@@ -21,7 +21,6 @@ import 'video_overlay_export_service.dart';
 import 'boomerang_recorder.dart';
 import 'gradient_text_editor.dart';
 import 'smart_shutter_button.dart';
-import 'camera_settings_screen.dart';
 import 'config/story_editor_config.dart';
 import 'config/story_editor_filters.dart';
 import 'models/story_result.dart';
@@ -169,7 +168,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   // MultiLayout (Collage) state
   bool _isLayoutMode = false;
-  bool _showLayoutSelector = false;
   LayoutType _selectedLayout = LayoutType.twoVertical;
   List<File?> _capturedLayoutPhotos = [];
   int _activeLayoutIndex = 0;
@@ -180,7 +178,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   // Hands-free mode state
   bool _isHandsFreeMode = false;
-  bool _showHandsFreeSelector = false;
   int _handsFreeDelaySeconds = 3; // 3, 5 or 10 seconds
   bool _isHandsFreeCountingDown = false;
   int _handsFreeCountdown = 0;
@@ -193,6 +190,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   late final PageController _filterPageController;
+  final GlobalKey _filterCarouselKey = GlobalKey(debugLabel: 'camera-carousel');
+  bool get _hasSingleFilterPosition =>
+      _filterPageController.positions.length == 1;
   int _activeFilterIndex = 0;
   double _activeFilterStrength = 0.85;
   CameraEffects _effects = const CameraEffects();
@@ -202,7 +202,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Future<void> _ensureCameraFilterShader() =>
       _cameraFilterLoadFuture ??= _loadCameraFilterShader();
   bool _effectsOpen = false;
-  final CameraPlaceSession _placeSession = CameraPlaceSession();
+  late final CameraPlaceSession _placeSession = CameraPlaceSession(
+    nearbyResolver: StoryEditorConfigProvider.read(
+      context,
+    ).nearbyPlacesResolver,
+  );
   final CameraEffectsUiSession _effectsUiSession = CameraEffectsUiSession();
   final CameraRecordGesture _recordGesture = CameraRecordGesture();
   NativeCameraControls _cameraControls = const NativeCameraControls();
@@ -211,7 +215,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Timer? _focusTimer;
   double _exposureOffset = 0;
   bool _exposureOpen = false;
-  bool _moreToolsOpen = false;
   bool _cameraSwitching = false;
   double? _pendingExposure;
   Future<void>? _exposureRequest;
@@ -230,6 +233,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         _maxZoom = controls.maxZoom;
         _zoomLevel = _zoomLevel.clamp(_minZoom, _maxZoom);
         _exposureOffset = 0;
+        _appliedExposureOffset = 0;
+        _pendingExposure = null;
       });
     } catch (error) {
       debugPrint('Camera controls unavailable: $error');
@@ -280,17 +285,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
+  double _appliedExposureOffset = 0;
+
   Future<void> _drainExposure() async {
     while (_pendingExposure != null && mounted && _cameraReady) {
       final value = _pendingExposure!;
       _pendingExposure = null;
       try {
         if (_usingNativeCamera) {
-          await _nativeCameraController.setExposureOffset(value);
+          if (!await _nativeCameraController.setExposureOffset(value)) {
+            throw StateError("Exposure unavailable");
+          }
         } else {
           await _cameraController!.setExposureOffset(value);
         }
+        _appliedExposureOffset = value;
       } catch (error) {
+        if (mounted && _pendingExposure == null) {
+          setState(() => _exposureOffset = _appliedExposureOffset);
+        }
         debugPrint('Exposure adjustment failed: $error');
       }
     }
@@ -665,7 +678,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   void _onFilterScroll() {
     if (_filterSelectionLocked) return;
-    if (!_filterPageController.hasClients) return;
+    if (!_hasSingleFilterPosition) return;
     final page = _filterPageController.page;
     if (page == null) return;
     final nextIndex = page.round().clamp(0, _combinedFilterCount - 1);
@@ -690,7 +703,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (_activeFilterIndex != 0 && mounted) {
       setState(() => _activeFilterIndex = 0);
     }
-    if (_filterPageController.hasClients) {
+    if (_hasSingleFilterPosition) {
       _filterPageController.jumpToPage(0);
     }
     unawaited(_applyNativeArSelection());
@@ -748,8 +761,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       return;
     }
 
-    final config = StoryEditorConfigProvider.read(context);
-    final useFrontCamera = await config.settings.getFrontCameraDefault();
+    const useFrontCamera = true;
     if (_routeDisposing || !mounted) return;
     NativePrewarmedCamera? prewarmed;
 
@@ -767,9 +779,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         await _initializeFlutterFallback(useFrontCamera: useFrontCamera);
         return;
       }
-      final requestedFacing = useFrontCamera
-          ? NativeStoryCameraFacing.front
-          : NativeStoryCameraFacing.back;
+      const requestedFacing = NativeStoryCameraFacing.front;
       final usedPrewarm = prewarmed?.facing == requestedFacing;
       late final Duration controllerInitialization;
       late final Duration screenWaitForController;
@@ -1069,7 +1079,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       setState(update);
       if (selectedNativeLens) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _filterPageController.hasClients) {
+          if (mounted && _hasSingleFilterPosition) {
             _filterPageController.jumpToPage(0);
           }
         });
@@ -1176,7 +1186,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildEffectsTray() => Positioned(
     left: 12,
     right: 12,
-    bottom: 142,
+    top: 66,
     child: CameraEffectsPanel(
       key: const ValueKey('camera_effects_tray'),
       effects: _effects,
@@ -1213,7 +1223,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _activeFilterStrength = strength;
           if (index >= 0) _activeFilterIndex = index;
         });
-        if (lookChanged && _filterPageController.hasClients && index >= 0) {
+        if (lookChanged && _hasSingleFilterPosition && index >= 0) {
           _filterPageController.jumpToPage(index);
         }
         // Smoothing and color strength update the live shader directly.
@@ -2066,7 +2076,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           _isProcessingVideo = false;
           _isLayoutProcessing = false;
           _isLayoutMode = false;
-          _showLayoutSelector = false;
         });
 
         // Navigate to editor
@@ -3097,19 +3106,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         statusBarBrightness: Brightness.dark,
       ),
       child: PopScope<void>(
-        canPop:
-            !_effectsOpen &&
-            !_moreToolsOpen &&
-            !_exposureOpen &&
-            !_filterSelectionLocked,
+        canPop: !_effectsOpen && !_exposureOpen && !_filterSelectionLocked,
         onPopInvokedWithResult: (didPop, _) {
           if (!didPop) {
             if (_effectsOpen) {
               setState(() => _effectsOpen = false);
             } else if (_exposureOpen) {
               setState(() => _exposureOpen = false);
-            } else if (_moreToolsOpen) {
-              setState(() => _moreToolsOpen = false);
             }
           }
         },
@@ -3255,46 +3258,55 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       children: [
         // Camera preview area (top controls + camera + capture button)
         Expanded(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // Camera preview - only apply ClipRRect to this
-              ClipRRect(
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  topRight: Radius.circular(16),
-                ),
-                child: _buildFullscreenCameraPreview(),
+          child: Center(
+            child: AspectRatio(
+              aspectRatio: 9 / 16,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Camera preview - only apply ClipRRect to this
+                  ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                    child: _buildFullscreenCameraPreview(),
+                  ),
+                  // Top controls (X, Flash, Settings)
+                  _buildTopControlsRow(),
+                  if (_focusPoint != null) _buildFocusReticle(),
+                  if (_exposureOpen && !_filterSelectionLocked)
+                    _buildExposureControl(),
+                  if (_isVideoRecording &&
+                      !_recordGesture.locked &&
+                      !_isBoomerangMode &&
+                      !_isHandsFreeMode)
+                    _buildRecordingLockHint(),
+                  // Right side icons (Boomerang, Text, Collage, HandsFree)
+                  _buildSideToolsColumn(),
+                  // Capture button - centered at bottom
+                  _buildCaptureButtonArea(),
+                  if (_effectsOpen && !_filterSelectionLocked)
+                    _buildEffectsTray(),
+                  // Pending text overlay indicator
+                  if (_pendingTextOverlay != null) _buildPendingTextIndicator(),
+                  // Zoom indicator
+                  if (_zoomLevel > _minZoom) _buildZoomIndicator(),
+                  // Hands-free countdown overlay
+                  if (_isHandsFreeCountingDown)
+                    _buildHandsFreeCountdownOverlay(),
+                  // White flash effect
+                  if (_showFlash)
+                    AnimatedOpacity(
+                      opacity: _showFlash ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 100),
+                      child: Container(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                ],
               ),
-              // Top controls (X, Flash, Settings)
-              _buildTopControlsRow(),
-              if (_focusPoint != null) _buildFocusReticle(),
-              if (_exposureOpen && !_filterSelectionLocked)
-                _buildExposureControl(),
-              if (_isVideoRecording &&
-                  !_recordGesture.locked &&
-                  !_isBoomerangMode &&
-                  !_isHandsFreeMode)
-                _buildRecordingLockHint(),
-              // Right side icons (Boomerang, Text, Collage, HandsFree)
-              _buildSideToolsColumn(),
-              // Capture button - centered at bottom
-              _buildCaptureButtonArea(),
-              if (_effectsOpen && !_filterSelectionLocked) _buildEffectsTray(),
-              // Pending text overlay indicator
-              if (_pendingTextOverlay != null) _buildPendingTextIndicator(),
-              // Zoom indicator
-              if (_zoomLevel > _minZoom) _buildZoomIndicator(),
-              // Hands-free countdown overlay
-              if (_isHandsFreeCountingDown) _buildHandsFreeCountdownOverlay(),
-              // White flash effect
-              if (_showFlash)
-                AnimatedOpacity(
-                  opacity: _showFlash ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 100),
-                  child: Container(color: Colors.white.withValues(alpha: 0.1)),
-                ),
-            ],
+            ),
           ),
         ),
         // Bottom bar
@@ -3697,11 +3709,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             if (!_canSelectFilterIndex(next)) return;
             setState(() => _activeFilterIndex = next);
             unawaited(_applyNativeArSelection());
-            _filterPageController.animateToPage(
-              next,
-              duration: CameraFilterSliderContract.swipeAnimationDuration,
-              curve: Curves.easeOut,
-            );
+            if (_hasSingleFilterPosition) {
+              _filterPageController.animateToPage(
+                next,
+                duration: CameraFilterSliderContract.swipeAnimationDuration,
+                curve: Curves.easeOut,
+              );
+            }
           },
           child: ClipRect(
             child: SizedBox.expand(
@@ -3815,9 +3829,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             // Arabic/RTL Directionality, so the X can never slide under the
             // settings rail.
             child: Align(
-              alignment: _toolsOnLeft
-                  ? Alignment.centerRight
-                  : Alignment.centerLeft,
+              alignment: AlignmentDirectional.centerStart,
               child: _buildIconButton(
                 iconWidget: SvgPicture.asset(
                   'packages/story_editor_pro/assets/icons/xmark.svg',
@@ -3833,7 +3845,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   if (_isLayoutMode) {
                     setState(() {
                       _isLayoutMode = false;
-                      _showLayoutSelector = false;
                       _capturedLayoutPhotos = [];
                       _activeLayoutIndex = 0;
                     });
@@ -3844,7 +3855,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   } else if (_isHandsFreeMode) {
                     setState(() {
                       _isHandsFreeMode = false;
-                      _showHandsFreeSelector = false;
                     });
                   } else {
                     Navigator.pop(context);
@@ -3910,6 +3920,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         children: [
           Positioned.fill(
             child: Offstage(
+              key: _filterCarouselKey,
               offstage: !showFilters,
               child: Align(
                 alignment: Alignment.center,
@@ -3967,7 +3978,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             animation: _filterPageController,
             builder: (context, child) {
               double page = _activeFilterIndex.toDouble();
-              if (_filterPageController.hasClients &&
+              if (_hasSingleFilterPosition &&
                   _filterPageController.position.hasPixels) {
                 page =
                     _filterPageController.page ?? _activeFilterIndex.toDouble();
@@ -3998,12 +4009,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                         return;
                       }
                       HapticFeedback.selectionClick();
-                      _filterPageController.animateToPage(
-                        index,
-                        duration:
-                            CameraFilterSliderContract.swipeAnimationDuration,
-                        curve: Curves.easeOut,
-                      );
+                      if (_hasSingleFilterPosition) {
+                        _filterPageController.animateToPage(
+                          index,
+                          duration:
+                              CameraFilterSliderContract.swipeAnimationDuration,
+                          curve: Curves.easeOut,
+                        );
+                      }
                     },
                     child: Center(
                       child: Padding(
@@ -4907,31 +4920,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  Widget _buildLabeledTool(Widget child, String label, {VoidCallback? onTap}) =>
-      GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Semantics(
-          button: true,
-          label: label,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              child,
-              const SizedBox(height: 3),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  shadows: [Shadow(color: Colors.black, blurRadius: 4)],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-
   Widget _buildModeSelector() {
     return Expanded(
       child: Padding(
@@ -5039,7 +5027,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                '${_cameraText("Brightness", "الإضاءة")} ${_exposureOffset >= 0 ? "+" : ""}${_exposureOffset.toStringAsFixed(1)}',
+                '${_cameraText("Brightness", "الإضاءة")} ${_exposureOffset >= 0 ? "+" : ""}${_exposureOffset.toStringAsFixed(1)} EV',
                 style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
@@ -5053,6 +5041,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               min: _cameraControls.minExposure,
               max: _cameraControls.maxExposure,
               onChanged: _changeExposure,
+            ),
+            TextButton(
+              onPressed: () => _changeExposure(0),
+              child: Text(_cameraText("Reset brightness", "إعادة ضبط الإضاءة")),
             ),
           ],
         ),
@@ -5149,166 +5141,82 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Tool buttons on the right side - for Column structure
+  /// A single top row keeps every camera tool visible without covering the face.
   Widget _buildSideToolsColumn() {
     final config = context.storyEditorConfig;
-    final screenHeight = MediaQuery.of(context).size.height;
-    // Less spacing on small screens, more on large screens
-    final bottomOffset = screenHeight * 0.15; // 15% of screen
-    final itemSpacing = screenHeight < config.smallScreenBreakpoint
-        ? 8.0
-        : 16.0;
-
-    // Hide during recording or processing
-    final shouldHide =
-        _isProcessingVideo ||
-        _isLayoutProcessing ||
-        _isHandsFreeCountingDown ||
-        _isVideoRecording;
-    return Positioned(
-      right: _toolsOnLeft ? null : 16,
-      left: _toolsOnLeft ? 16 : null,
-      top: 0,
-      bottom: bottomOffset,
-      child: AnimatedOpacity(
-        opacity: shouldHide ? 0.0 : 1.0,
-        duration: const Duration(milliseconds: 200),
-        child: IgnorePointer(
-          ignoring: shouldHide,
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Align the rail's first icon with the top-left X button.
-                  const SizedBox(height: 16),
-                  for (final item in [
-                    if (!_effectsOpen && !_moreToolsOpen)
-                      _buildIconButton(
-                        iconWidget: SvgPicture.asset(
-                          'packages/story_editor_pro/assets/icons/settings.svg',
-                          width: 24,
-                          height: 24,
-                          colorFilter: const ColorFilter.mode(
-                            Colors.white,
-                            BlendMode.srcIn,
-                          ),
-                        ),
-                        label: config.strings.cameraSettings,
-                        onTap: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const CameraSettingsScreen(),
-                            ),
-                          );
-                          if (mounted) {
-                            _loadSettings();
-                          }
-                        },
-                      ),
-                    if (!_effectsOpen && !_moreToolsOpen)
-                      _buildIconButton(
-                        iconWidget: _flashIcon,
-                        label:
-                            _cameraText('Flash: ', 'الفلاش: ') +
-                            switch (_flashMode) {
-                              FlashMode.off => _cameraText('Off', 'إيقاف'),
-                              FlashMode.auto => _cameraText('Auto', 'تلقائي'),
-                              _ => _cameraText('On', 'تشغيل'),
-                            },
-                        onTap: _toggleFlash,
-                      ),
-                    Tooltip(
-                      message: config.strings.cameraEffectsLabel(
-                        _effects.layerCount,
-                      ),
-                      child: Semantics(
-                        key: const ValueKey('camera_effects_button'),
-                        button: true,
-                        selected: _effectsOpen,
-                        label: config.strings.cameraEffectsLabel(
-                          _effects.layerCount,
-                        ),
-                        child: Badge(
-                          isLabelVisible: _effects.layerCount > 0,
-                          label: Text('${_effects.layerCount}'),
-                          child: _buildIconButton(
-                            icon: Icons.auto_awesome_rounded,
-                            onTap: _showEffectsPanel,
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (!_effectsOpen &&
-                        !_moreToolsOpen &&
-                        _cameraControls.exposure &&
-                        _cameraControls.maxExposure >
-                            _cameraControls.minExposure)
-                      _buildIconButton(
-                        icon: Icons.exposure_rounded,
-                        label: _cameraText('Brightness', 'الإضاءة'),
-                        onTap: () =>
-                            setState(() => _exposureOpen = !_exposureOpen),
-                      ),
-                    if (!_effectsOpen &&
-                        _moreToolsOpen &&
-                        config.enableBoomerang)
-                      _buildLabeledTool(
-                        _buildBoomerangButton(),
-                        _cameraText('Loop', 'تكرار'),
-                      ),
-                    if (!_effectsOpen &&
-                        _moreToolsOpen &&
-                        config.enableGradientTextEditor)
-                      _buildLabeledTool(
-                        _buildCreateModeButton(),
-                        _cameraText('Create', 'إنشاء'),
-                      ),
-                    if (!_effectsOpen && _moreToolsOpen && config.enableCollage)
-                      _buildLabeledTool(
-                        _buildCollageButton(),
-                        _cameraText('Layout', 'تخطيط'),
-                      ),
-                    if (!_effectsOpen &&
-                        _moreToolsOpen &&
-                        config.enableHandsFree)
-                      _buildLabeledTool(
-                        _buildHandsFreeButton(),
-                        _cameraText('Timer', 'مؤقّت'),
-                      ),
-                    if (!_effectsOpen &&
-                        (config.enableBoomerang ||
-                            config.enableGradientTextEditor ||
-                            config.enableCollage ||
-                            config.enableHandsFree))
-                      _buildLabeledTool(
-                        _buildIconButton(
-                          icon: _moreToolsOpen
-                              ? Icons.expand_less
-                              : Icons.more_horiz,
-                          onTap: () => setState(() {
-                            _moreToolsOpen = !_moreToolsOpen;
-                            _exposureOpen = false;
-                          }),
-                        ),
-                        _moreToolsOpen
-                            ? _cameraText('Less', 'أقل')
-                            : _cameraText('More', 'المزيد'),
-                        onTap: () => setState(() {
-                          _moreToolsOpen = !_moreToolsOpen;
-                          _exposureOpen = false;
-                        }),
-                      ),
-                  ].asMap().entries) ...[
-                    if (item.key > 0) SizedBox(height: itemSpacing),
-                    item.value,
-                  ],
-                ],
+    final hidden = _filterSelectionLocked;
+    return PositionedDirectional(
+      top: 12,
+      start: 62,
+      end: 6,
+      child: IgnorePointer(
+        ignoring: hidden,
+        child: AnimatedOpacity(
+          opacity: hidden ? 0 : 1,
+          duration: const Duration(milliseconds: 150),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              Expanded(
+                child: _buildIconButton(
+                  iconWidget: _flashIcon,
+                  label: _cameraText('Flash', 'الفلاش'),
+                  onTap: _toggleFlash,
+                ),
               ),
-            ),
+              Expanded(
+                child: Semantics(
+                  key: const ValueKey('camera_effects_button'),
+                  button: true,
+                  selected: _effectsOpen,
+                  label: config.strings.cameraEffectsLabel(_effects.layerCount),
+                  child: _buildIconButton(
+                    icon: Icons.auto_awesome_rounded,
+                    label: _cameraText('Effects', 'التأثيرات'),
+                    onTap: _showEffectsPanel,
+                  ),
+                ),
+              ),
+              if (_cameraControls.exposure)
+                Expanded(
+                  child: _buildIconButton(
+                    icon: Icons.exposure_rounded,
+                    label: _cameraText('Brightness', 'الإضاءة'),
+                    onTap: () => setState(() {
+                      _exposureOpen = !_exposureOpen;
+                      _effectsOpen = false;
+                    }),
+                  ),
+                ),
+              if (config.enableBoomerang)
+                Expanded(
+                  child: Tooltip(
+                    message: _cameraText('Loop', 'تكرار'),
+                    child: _buildBoomerangButton(),
+                  ),
+                ),
+              if (config.enableGradientTextEditor)
+                Expanded(
+                  child: Tooltip(
+                    message: _cameraText('Create', 'إنشاء'),
+                    child: _buildCreateModeButton(),
+                  ),
+                ),
+              if (config.enableCollage)
+                Expanded(
+                  child: Tooltip(
+                    message: _cameraText('Layout', 'تخطيط'),
+                    child: _buildCollageButton(),
+                  ),
+                ),
+              if (config.enableHandsFree)
+                Expanded(
+                  child: Tooltip(
+                    message: _cameraText('Timer', 'مؤقّت'),
+                    child: _buildHandsFreeButton(),
+                  ),
+                ),
+            ],
           ),
         ),
       ),
@@ -5334,9 +5242,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           // Close other modes if boomerang is opened
           if (_isBoomerangMode) {
             _isLayoutMode = false;
-            _showLayoutSelector = false;
             _isHandsFreeMode = false;
-            _showHandsFreeSelector = false;
           }
         });
 
@@ -5422,245 +5328,66 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  /// Hands-free button - expands downward to show duration options when clicked
-  Widget _buildHandsFreeButton() {
-    // Duration options (seconds)
-    const List<int> delayOptions = [3, 5, 10, 15];
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        borderRadius: _showHandsFreeSelector
-            ? BorderRadius.circular(24)
-            : BorderRadius.circular(100),
-        color: _isHandsFreeMode
-            ? Colors.white.withValues(alpha: 0.25)
-            : Colors.black.withValues(alpha: 0.42),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.22),
-          width: 1.0,
+  /// Timer and layout choices are anchored to their icons.
+  Widget _buildHandsFreeButton() => PopupMenuButton<int>(
+    tooltip: _cameraText('Timer', 'مؤقّت'),
+    icon: Icon(
+      Icons.timer_outlined,
+      color: _isHandsFreeMode ? Colors.amber.shade100 : Colors.white,
+    ),
+    color: const Color(0xFF202024),
+    itemBuilder: (_) => [
+      PopupMenuItem(value: 0, child: Text(_cameraText('Off', 'إيقاف'))),
+      for (final seconds in context.storyEditorConfig.handsFreeDelayOptions)
+        PopupMenuItem(
+          value: seconds,
+          child: Text('$seconds ${_cameraText('seconds', 'ثوانٍ')}'),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Main hands-free button (always visible)
-          GestureDetector(
-            onTap: () {
-              HapticFeedback.selectionClick();
-              setState(() {
-                if (!_isHandsFreeMode) {
-                  // Open hands-free mode and selector
-                  _isHandsFreeMode = true;
-                  _showHandsFreeSelector = true;
-                  _isBoomerangMode = false;
-                  _isLayoutMode = false;
-                  _showLayoutSelector = false;
-                } else {
-                  // Close everything when clicked while mode is active (return to normal mode)
-                  _isHandsFreeMode = false;
-                  _showHandsFreeSelector = false;
-                }
-              });
-            },
-            child: const Icon(
-              Icons.access_time_rounded,
-              size: 25,
-              color: Colors.white,
+    ],
+    onSelected: (seconds) => setState(() {
+      _isHandsFreeMode = seconds > 0;
+      if (seconds > 0) _handsFreeDelaySeconds = seconds;
+      _isBoomerangMode = false;
+      _isLayoutMode = false;
+      _effectsOpen = false;
+    }),
+  );
+
+  Widget _buildCollageButton() => PopupMenuButton<LayoutType>(
+    tooltip: _cameraText('Layout', 'تخطيط'),
+    icon: Icon(
+      Icons.grid_view_rounded,
+      color: _isLayoutMode ? Colors.amber.shade100 : Colors.white,
+    ),
+    color: const Color(0xFF202024),
+    itemBuilder: (_) => [
+      for (final layout in LayoutType.values)
+        PopupMenuItem(
+          value: layout,
+          child: Text(switch (layout) {
+            LayoutType.twoVertical => _cameraText(
+              'Two · stacked',
+              'صورتان · عمودي',
             ),
-          ),
-
-          // Duration options (expands downward)
-          AnimatedSize(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOutCubic,
-            child: _showHandsFreeSelector
-                ? Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(height: 12),
-                      ...delayOptions.map((seconds) {
-                        final isSelected = _handsFreeDelaySeconds == seconds;
-                        return GestureDetector(
-                          onTap: () {
-                            HapticFeedback.selectionClick();
-                            setState(() {
-                              _handsFreeDelaySeconds = seconds;
-                            });
-                            // Just select duration, will start when button is pressed
-                          },
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            margin: const EdgeInsets.only(bottom: 8),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isSelected
-                                  ? Colors.white.withValues(alpha: 0.3)
-                                  : Colors.transparent,
-                              border: Border.all(
-                                color: isSelected
-                                    ? Colors.white
-                                    : Colors.white60,
-                                width: isSelected ? 2 : 1,
-                              ),
-                            ),
-                            child: Center(
-                              child: Text(
-                                '$seconds',
-                                style: TextStyle(
-                                  color: isSelected
-                                      ? Colors.white
-                                      : Colors.white60,
-                                  fontSize: 14,
-                                  fontWeight: isSelected
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }),
-                    ],
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Collage button - expands downward to show layout options when clicked
-  Widget _buildCollageButton() {
-    // Layout SVG icon paths
-    const Map<LayoutType, String> layoutIcons = {
-      LayoutType.twoVertical:
-          'packages/story_editor_pro/assets/icons/collage-frame-two-horizontal.svg',
-      LayoutType.twoHorizontal:
-          'packages/story_editor_pro/assets/icons/collage-frame-two-vertical.svg',
-      LayoutType.fourGrid:
-          'packages/story_editor_pro/assets/icons/collage-frame-four.svg',
-      LayoutType.sixGrid:
-          'packages/story_editor_pro/assets/icons/collage-frame-six.svg',
-    };
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        borderRadius: _showLayoutSelector
-            ? BorderRadius.circular(24)
-            : BorderRadius.circular(100),
-        color: _isLayoutMode
-            ? Colors.white.withValues(alpha: 0.25)
-            : Colors.white.withValues(alpha: 0.15),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Main collage button (always visible)
-          GestureDetector(
-            onTap: () {
-              HapticFeedback.selectionClick();
-              setState(() {
-                if (!_isLayoutMode) {
-                  // Open layout mode and selector
-                  _isLayoutMode = true;
-                  _showLayoutSelector = true;
-                  _isBoomerangMode = false;
-                  _isHandsFreeMode = false;
-                  _showHandsFreeSelector = false;
-                  _capturedLayoutPhotos = List.filled(
-                    _selectedLayout.photoCount,
-                    null,
-                  );
-                  _activeLayoutIndex = 0;
-                } else if (_showLayoutSelector) {
-                  // Close mode when clicked while selector is open
-                  _isLayoutMode = false;
-                  _showLayoutSelector = false;
-                  _capturedLayoutPhotos = [];
-                  _activeLayoutIndex = 0;
-                } else {
-                  // Open selector when clicked while selector is closed
-                  _showLayoutSelector = true;
-                }
-              });
-            },
-            onLongPress: () {
-              // Close layout mode on long press
-              if (_isLayoutMode) {
-                HapticFeedback.mediumImpact();
-                setState(() {
-                  _isLayoutMode = false;
-                  _showLayoutSelector = false;
-                  _capturedLayoutPhotos = [];
-                  _activeLayoutIndex = 0;
-                });
-              }
-            },
-            child: SvgPicture.asset(
-              'packages/story_editor_pro/assets/icons/collage-frame.svg',
-              width: 24,
-              height: 24,
-              colorFilter: const ColorFilter.mode(
-                Colors.white,
-                BlendMode.srcIn,
-              ),
+            LayoutType.twoHorizontal => _cameraText(
+              'Two · side by side',
+              'صورتان · أفقي',
             ),
-          ),
-
-          // Layout options (expands downward)
-          AnimatedSize(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOutCubic,
-            child: _showLayoutSelector
-                ? Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(height: 12),
-                      ...LayoutType.values.map((layout) {
-                        final isSelected = _selectedLayout == layout;
-                        return GestureDetector(
-                          onTap: () {
-                            HapticFeedback.selectionClick();
-                            setState(() {
-                              _selectedLayout = layout;
-                              _capturedLayoutPhotos = List.filled(
-                                layout.photoCount,
-                                null,
-                              );
-                              _activeLayoutIndex = 0;
-                            });
-                          },
-                          child: Container(
-                            width: 24,
-                            height: 24,
-                            margin: const EdgeInsets.only(bottom: 12),
-                            child: SvgPicture.asset(
-                              layoutIcons[layout]!,
-                              width: 24,
-                              height: 24,
-                              colorFilter: ColorFilter.mode(
-                                isSelected ? Colors.white : Colors.white60,
-                                BlendMode.srcIn,
-                              ),
-                            ),
-                          ),
-                        );
-                      }),
-                    ],
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
-      ),
-    );
-  }
+            LayoutType.fourGrid => _cameraText('Four photos', 'أربع صور'),
+            LayoutType.sixGrid => _cameraText('Six photos', 'ست صور'),
+          }),
+        ),
+    ],
+    onSelected: (layout) => setState(() {
+      _selectedLayout = layout;
+      _isLayoutMode = true;
+      _isBoomerangMode = false;
+      _isHandsFreeMode = false;
+      _effectsOpen = false;
+      _capturedLayoutPhotos = List.filled(layout.photoCount, null);
+      _activeLayoutIndex = 0;
+    }),
+  );
 }
 
 /// CustomPainter that draws circular progress indicator with gradient

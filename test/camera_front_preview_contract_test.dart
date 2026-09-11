@@ -4,8 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:story_editor_pro/story_editor_pro.dart';
 
 void main() {
-  test('front camera defaults to unmirrored anatomical handedness', () {
-    expect(const StoryEditorConfig().mirrorFrontCameraPreview, isFalse);
+  test('front camera defaults to familiar mirrored selfie presentation', () {
+    expect(const StoryEditorConfig().mirrorFrontCameraPreview, isTrue);
   });
 
   test('front handedness is backend-aware and preserved in saved media', () {

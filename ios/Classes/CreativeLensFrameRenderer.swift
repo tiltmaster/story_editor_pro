@@ -227,7 +227,7 @@ final class CreativeLensFrameRenderer {
     }
 
     private func drawPlace(in cg: CGContext, size: CGSize, unit u: CGFloat, now: Date, value: CreativeLensContext) {
-        let w = size.width, baseline = size.height * 0.72
+        let w = size.width, baseline = size.height * 0.78
         let cream = UIColor(red: 1, green: 245/255, blue: 225/255, alpha: 1)
         let gold = UIColor(red: 230/255, green: 193/255, blue: 134/255, alpha: 1)
         let arabic = value.languageCode == "ar"
@@ -268,12 +268,12 @@ final class CreativeLensFrameRenderer {
             let left = w*0.08
             let leading = arabic ? w*0.92 : left
             let alignment: NSTextAlignment = arabic ? .right : .left
-            rounded(CGRect(x: left-20*u,y: baseline-153*u,width: w*0.84+40*u,height: 255*u),radius: 8*u,
-                    color: UIColor(red: 16/255,green: 23/255,blue: 27/255,alpha: 0.67),in: cg)
-            label(arabic ? "هنا والآن" : "HERE / NOW",at: CGPoint(x: leading,y: baseline-127*u),size: 22*u,color: gold,mono: true,align: alignment)
-            title(value.placeName,x: leading,baseline: baseline-10*u,size: 82*u,color: cream,maxWidth: w*0.82,centered: false,rightAligned: arabic)
+            rounded(CGRect(x: left-20*u,y: baseline-131*u,width: w*0.84+40*u,height: 218*u),radius: 24*u,
+                    color: UIColor(red: 16/255,green: 23/255,blue: 27/255,alpha: 0.56),in: cg)
+            label(arabic ? "هنا والآن" : "HERE / NOW",at: CGPoint(x: leading,y: baseline-114*u),size: 20*u,color: gold,mono: true,align: alignment)
+            title(value.placeName,x: leading,baseline: baseline-12*u,size: 66*u,color: cream,maxWidth: w*0.82,centered: false,rightAligned: arabic)
             rule(left,baseline+25*u,w*0.92)
-            label(format("EEEE · HH:mm",now,locale(value)),at: CGPoint(x: leading,y: baseline+48*u),size: 24*u,color: cream,align: alignment)
+            label(format("EEEE · HH:mm",now,locale(value)),at: CGPoint(x: leading,y: baseline+42*u),size: 22*u,color: cream,align: alignment)
         case "stamp":
             cg.saveGState(); cg.translateBy(x: w/2,y: baseline-20*u); cg.rotate(by: -.pi*7/180)
             cg.translateBy(x: -w/2,y: -baseline+20*u)

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'story_editor_pro'
-  s.version          = '1.7.0'
+  s.version          = '1.8.0'
   s.summary          = 'A Flutter story editor plugin with native camera support.'
   s.description      = <<-DESC
 A Flutter story editor plugin with native camera support for iOS and Android.

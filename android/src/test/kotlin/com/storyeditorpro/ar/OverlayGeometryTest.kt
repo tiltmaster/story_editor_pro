@@ -19,14 +19,6 @@ class OverlayGeometryTest {
         }
     }
 
-    @Test fun nativeAndDartMirrorsCancelExactlyOnceForReadableText() {
-        for (nativeMirror in listOf(false, true)) for (dartMirror in listOf(false, true)) {
-            val preMirror = OverlayGeometry.shouldPreMirror(nativeMirror, dartMirror)
-            val outputX = (if (preMirror) -1 else 1) * (if (nativeMirror) -1 else 1) * (if (dartMirror) -1 else 1)
-            assertEquals(1, outputX)
-        }
-    }
-
     @Test fun portraitViewportDoesNotDependOnLandscapeSurfaceResolution() {
         assertFalse(CameraViewportPolicy.isLandscape(0))
         assertFalse(CameraViewportPolicy.isLandscape(2))

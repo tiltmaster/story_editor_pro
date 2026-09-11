@@ -22,10 +22,15 @@ import kotlin.math.roundToInt
 internal class MediaPipePersonSegmenter(
     context: Context,
     modelAssetPath: String,
+    sceneAssetPaths: Map<Int, String>,
     private val executor: ExecutorService,
     private val onResult: (SegmentedBackground) -> Unit,
     private val onError: (Throwable) -> Unit,
 ) : AutoCloseable {
+    private val scenes = sceneAssetPaths.mapValues { (_, path) ->
+        context.assets.open(path).use { android.graphics.BitmapFactory.decodeStream(it)
+            ?: error("Could not decode background scene") }
+    }
     private val busy = AtomicBoolean(false)
     @Volatile private var closed = false
     private var lastTimestampMs = 0L
@@ -91,7 +96,7 @@ internal class MediaPipePersonSegmenter(
                 }
                 if (!closed && BackgroundMaskPolicy.isFresh(capturedMs, SystemClock.elapsedRealtime())) {
                     onResult(SegmentedBackground(Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888),
-                        geometry, capturedMs, style, epoch))
+                        geometry, capturedMs, style, epoch, scenes[style]))
                 }
             } finally { masks.forEach { it.close() } }
         } finally { input.close() }

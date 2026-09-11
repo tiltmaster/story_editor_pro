@@ -64,7 +64,9 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
             return Bundle.main.path(forResource: applicationKey, ofType: nil)
         }
         let coordinator = FaceARCoordinator(
-            modelPath: bundledAssetPath("assets/ar/models/face_landmarker.task")
+            modelPath: bundledAssetPath("assets/ar/models/face_landmarker.task"),
+            scenePaths: [2: bundledAssetPath("assets/ar/backgrounds/sunset_terrace.png"),
+                         3: bundledAssetPath("assets/ar/backgrounds/night_waterfront.png")].compactMapValues { $0 }
         )
         let arHandler = FaceARMethodHandler(coordinator: coordinator)
         let eventHandler = FaceAREventStreamHandler(coordinator: coordinator)

@@ -99,6 +99,9 @@ class StoryEditorProPlugin :
         )
         arController = FaceArController(context, modelAssetPath, resolveFlutterAsset(
             flutterAssets, "assets/ar/models/selfie_segmenter.tflite",
+        ), mapOf(
+            2 to resolveFlutterAsset(flutterAssets, "assets/ar/backgrounds/sunset_terrace.png"),
+            3 to resolveFlutterAsset(flutterAssets, "assets/ar/backgrounds/night_waterfront.png"),
         ))
         arMethodChannel = MethodChannel(
             flutterPluginBinding.binaryMessenger,

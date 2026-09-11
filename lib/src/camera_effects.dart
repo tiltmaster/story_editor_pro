@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
 
+import 'camera_nearby_places.dart';
 export 'camera_effects_session.dart';
+export 'camera_nearby_places.dart';
 
 /// Independent camera layers. Selecting a look never clears beauty or a lens.
 @immutable
@@ -65,10 +67,53 @@ typedef CameraPlaceResolver = Future<String> Function(String localeIdentifier);
 /// Keeps verified city names for one open camera session, including in-flight
 /// requests. Closing and reopening the effects tray does not reacquire GPS.
 class CameraPlaceSession {
-  CameraPlaceSession({CameraPlaceResolver? resolver})
-    : _resolver = resolver ?? _resolve;
+  CameraPlaceSession({
+    CameraPlaceResolver? resolver,
+    CameraNearbyResolver? nearbyResolver,
+  }) : _resolver = resolver ?? _resolve,
+       _nearbyResolver = nearbyResolver;
 
   final CameraPlaceResolver _resolver;
+  final CameraNearbyResolver? _nearbyResolver;
+  bool get supportsNearby => _nearbyResolver != null;
+  final Map<String, (DateTime, List<CameraNearbyPlace>)> _nearby = {};
+  final Map<String, Future<List<CameraNearbyPlace>>> _nearbyPending = {};
+  final Map<String, String> stylesByPlace = {};
+
+  Future<List<CameraNearbyPlace>> nearby({
+    required String localeIdentifier,
+  }) async {
+    final cached = _nearby[localeIdentifier];
+    if (cached != null &&
+        DateTime.now().difference(cached.$1) < const Duration(minutes: 10)) {
+      return cached.$2;
+    }
+    final pending = _nearbyPending[localeIdentifier];
+    if (pending != null) return pending;
+    final request = () async {
+      final resolver = _nearbyResolver;
+      if (resolver == null) {
+        throw StateError("No nearby-place provider configured");
+      }
+      final position = await cameraPlacePosition();
+      final places = normalizeNearbyCameraPlaces(
+        await resolver(
+          position.latitude,
+          position.longitude,
+          localeIdentifier,
+        ).timeout(const Duration(seconds: 25)),
+      );
+      _nearby[localeIdentifier] = (DateTime.now(), places);
+      return places;
+    }();
+    _nearbyPending[localeIdentifier] = request;
+    try {
+      return await request;
+    } finally {
+      _nearbyPending.remove(localeIdentifier);
+    }
+  }
+
   final Map<String, String> _names = {};
   final Map<String, Future<String>> _pending = {};
 
@@ -98,23 +143,7 @@ class CameraPlaceSession {
 /// Invoked when the user selects Places, never during camera initialization.
 /// Precise coordinates are discarded after reverse geocoding.
 Future<String> resolveCameraPlace({String localeIdentifier = 'en'}) async {
-  if (!await Geolocator.isLocationServiceEnabled()) {
-    throw StateError('Turn on location services and retry.');
-  }
-  var permission = await Geolocator.checkPermission();
-  if (permission == LocationPermission.denied) {
-    permission = await Geolocator.requestPermission();
-  }
-  if (permission != LocationPermission.whileInUse &&
-      permission != LocationPermission.always) {
-    throw StateError('Allow location access in Settings and retry.');
-  }
-  final position = await Geolocator.getCurrentPosition(
-    locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.medium,
-      timeLimit: Duration(seconds: 10),
-    ),
-  );
+  final position = await cameraPlacePosition();
   await geo.setLocaleIdentifier(localeIdentifier);
   final places = await geo
       .placemarkFromCoordinates(position.latitude, position.longitude)
@@ -130,4 +159,24 @@ Future<String> resolveCameraPlace({String localeIdentifier = 'en'}) async {
     }
   }
   throw StateError('Could not find a city here. Please retry.');
+}
+
+Future<Position> cameraPlacePosition() async {
+  if (!await Geolocator.isLocationServiceEnabled()) {
+    throw StateError('Turn on location services and retry.');
+  }
+  var permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+  }
+  if (permission != LocationPermission.whileInUse &&
+      permission != LocationPermission.always) {
+    throw StateError('Allow location access in Settings and retry.');
+  }
+  return Geolocator.getCurrentPosition(
+    locationSettings: const LocationSettings(
+      accuracy: LocationAccuracy.medium,
+      timeLimit: Duration(seconds: 10),
+    ),
+  );
 }

@@ -3,6 +3,9 @@ package com.storyeditorpro.ar
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.os.SystemClock
 import androidx.camera.effects.Frame
 import java.util.concurrent.atomic.AtomicReference
@@ -13,12 +16,16 @@ internal data class SegmentedBackground(
     val capturedMs: Long,
     val style: Int,
     val epoch: Int,
+    val scene: Bitmap? = null,
 )
 
 /** Native composition is shared by preview, JPEG capture and recorded video. */
 internal class PersonBackgroundRenderer {
     private val latest = AtomicReference<SegmentedBackground?>(null)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+    }
 
     fun update(background: SegmentedBackground) { latest.set(background) }
     fun clear() { latest.set(null) }
@@ -43,6 +50,32 @@ internal class PersonBackgroundRenderer {
                 0, target, 0, 3)) return
         // The frame subsequently applies crop/rotation/mirroring to camera and
         // matte together; adding a separate selfie mirror here would misalign it.
-        frame.overlayCanvas.drawBitmap(bitmap, transform, paint)
+        val scene = background.scene
+        if (scene == null) {
+            frame.overlayCanvas.drawBitmap(bitmap, transform, paint)
+            return
+        }
+        // Keep the photographic scene at its original resolution. Only the
+        // segmentation alpha is low-resolution; Canvas scales it on the GPU.
+        val canvas = frame.overlayCanvas
+        val saved = canvas.save()
+        try {
+            canvas.concat(transform)
+            val bounds = RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+            val layer = canvas.saveLayer(bounds, null)
+            // The model's square mask is stretched back onto a portrait camera
+            // frame. Fit the scene in camera space before that transform so
+            // buildings and horizons keep their photographic proportions.
+            val rotated = source.rotationDegrees % 180 != 0
+            val sourceWidth = (if (rotated) source.height else source.width).toFloat()
+            val sourceHeight = (if (rotated) source.width else source.height).toFloat()
+            val scale = maxOf(sourceWidth / scene.width, sourceHeight / scene.height)
+            val width = scene.width * scale / sourceWidth * bounds.width()
+            val height = scene.height * scale / sourceHeight * bounds.height()
+            canvas.drawBitmap(scene, null, RectF((bounds.width()-width)/2, (bounds.height()-height)/2,
+                (bounds.width()+width)/2, (bounds.height()+height)/2), paint)
+            canvas.drawBitmap(bitmap, 0f, 0f, maskPaint)
+            canvas.restoreToCount(layer)
+        } finally { canvas.restoreToCount(saved) }
     }
 }

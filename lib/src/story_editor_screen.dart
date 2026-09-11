@@ -467,151 +467,161 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             Container(height: statusBarHeight, color: Colors.black),
             // Remaining area
             Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Image area - rounded corners
-                  ClipRRect(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
-                    ),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        // Black background
-                        Container(color: Colors.black),
-                        // RepaintBoundary - full frame capture (for image export)
-                        RepaintBoundary(
-                          key: _repaintKey,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              // Background media (photo or video)
-                              Transform.translate(
-                                offset: _bgImageOffset,
-                                child: Transform.scale(
-                                  scale: _bgImageScale,
-                                  child: _buildBackgroundMedia(),
-                                ),
-                              ),
-                              // Overlay-only RepaintBoundary (transparent, for video export)
-                              RepaintBoundary(
-                                key: _overlayRepaintKey,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    // Image overlays + smart stickers rebuild via
-                                    // _overlayTick during drags (cheap, scoped) —
-                                    // see _bumpOverlays().
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: _overlayTick,
-                                      builder: (_, __, ___) => Stack(
-                                        fit: StackFit.expand,
-                                        children: [
-                                          ..._buildImageOverlays(),
-                                          // Smart stickers (time/date/location/…)
-                                          // — gesture-enabled single copies inside
-                                          // the boundary so they bake into image
-                                          // AND video exports automatically.
-                                          ..._buildSmartStickers(),
-                                        ],
-                                      ),
-                                    ),
-                                    // Text overlays visual copy inside RepaintBoundary for export
-                                    if (!_isTextEditing)
-                                      ..._buildTextOverlaysForExport(),
-                                    // Drawing on top of text/image overlays.
-                                    // IgnorePointer is CRITICAL: a CustomPaint
-                                    // with a painter hit-tests as opaque over its
-                                    // whole area (CustomPainter.hitTest defaults
-                                    // to "hit"), and a Stack stops at the first
-                                    // child that claims a touch — without this,
-                                    // the full-canvas drawing layer swallows every
-                                    // gesture before it reaches the sticker/image
-                                    // overlays below.
-                                    IgnorePointer(
-                                      child: ClipRect(
-                                        child: CustomPaint(
-                                          painter: DrawingPainter(
-                                            paths: _drawings,
-                                          ),
-                                          size: Size.infinite,
-                                          isComplex: true,
-                                          willChange: true,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: AspectRatio(
+                  aspectRatio:
+                      context.storyEditorConfig.storyCanvasWidth /
+                      context.storyEditorConfig.storyCanvasHeight,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Image area - rounded corners
+                      ClipRRect(
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
                         ),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            // Black background
+                            Container(color: Colors.black),
+                            // RepaintBoundary - full frame capture (for image export)
+                            RepaintBoundary(
+                              key: _repaintKey,
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  // Background media (photo or video)
+                                  Transform.translate(
+                                    offset: _bgImageOffset,
+                                    child: Transform.scale(
+                                      scale: _bgImageScale,
+                                      child: _buildBackgroundMedia(),
+                                    ),
+                                  ),
+                                  // Overlay-only RepaintBoundary (transparent, for video export)
+                                  RepaintBoundary(
+                                    key: _overlayRepaintKey,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        // Image overlays + smart stickers rebuild via
+                                        // _overlayTick during drags (cheap, scoped) —
+                                        // see _bumpOverlays().
+                                        ValueListenableBuilder<int>(
+                                          valueListenable: _overlayTick,
+                                          builder: (_, __, ___) => Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              ..._buildImageOverlays(),
+                                              // Smart stickers (time/date/location/…)
+                                              // — gesture-enabled single copies inside
+                                              // the boundary so they bake into image
+                                              // AND video exports automatically.
+                                              ..._buildSmartStickers(),
+                                            ],
+                                          ),
+                                        ),
+                                        // Text overlays visual copy inside RepaintBoundary for export
+                                        if (!_isTextEditing)
+                                          ..._buildTextOverlaysForExport(),
+                                        // Drawing on top of text/image overlays.
+                                        // IgnorePointer is CRITICAL: a CustomPaint
+                                        // with a painter hit-tests as opaque over its
+                                        // whole area (CustomPainter.hitTest defaults
+                                        // to "hit"), and a Stack stops at the first
+                                        // child that claims a touch — without this,
+                                        // the full-canvas drawing layer swallows every
+                                        // gesture before it reaches the sticker/image
+                                        // overlays below.
+                                        IgnorePointer(
+                                          child: ClipRect(
+                                            child: CustomPaint(
+                                              painter: DrawingPainter(
+                                                paths: _drawings,
+                                              ),
+                                              size: Size.infinite,
+                                              isComplex: true,
+                                              willChange: true,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // All interactive layers disabled during save/share
+                      if (!_isSaving) ...[
+                        // Background image gesture handler - always active (works with two fingers)
+                        _buildBackgroundImageGesture(),
+                        // Text overlays - interactive (with gestures)
+                        if (!_isTextEditing && !_isDrawing)
+                          ..._buildTextOverlays(),
+                        // Drawing always rendered on top of text overlays (visual only, no gestures)
+                        if (!_isDrawing && _drawings.isNotEmpty)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: ClipRect(
+                                child: CustomPaint(
+                                  painter: DrawingPainter(paths: _drawings),
+                                  size: Size.infinite,
+                                ),
+                              ),
+                            ),
+                          ),
+                        // Drawing layer with gesture input (drawing mode only)
+                        if (_isDrawing) _buildDrawingLayer(),
+                        if (!_isTextEditing && !_isDrawing) _buildTopControls(),
+                        if (!_isTextEditing && !_isDrawing)
+                          _buildBottomControls(),
+                        if (_isDrawing) _buildDrawingTools(),
+                        if (_isDrawing) _buildDrawingTopBar(),
+                        if (_isDrawing && _isSliding) _buildBrushSizePreview(),
                       ],
-                    ),
-                  ),
-                  // All interactive layers disabled during save/share
-                  if (!_isSaving) ...[
-                    // Background image gesture handler - always active (works with two fingers)
-                    _buildBackgroundImageGesture(),
-                    // Text overlays - interactive (with gestures)
-                    if (!_isTextEditing && !_isDrawing) ..._buildTextOverlays(),
-                    // Drawing always rendered on top of text overlays (visual only, no gestures)
-                    if (!_isDrawing && _drawings.isNotEmpty)
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: ClipRect(
-                            child: CustomPaint(
-                              painter: DrawingPainter(paths: _drawings),
-                              size: Size.infinite,
+                      // Saving/Sharing indicator overlay
+                      if (_isSaving)
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black.withValues(alpha: 0.3),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const CircularProgressIndicator(
+                                    color: Colors.white,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _isSharing
+                                        ? context
+                                              .storyEditorConfig
+                                              .strings
+                                              .editorSharing
+                                        : context
+                                              .storyEditorConfig
+                                              .strings
+                                              .editorSaving,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    // Drawing layer with gesture input (drawing mode only)
-                    if (_isDrawing) _buildDrawingLayer(),
-                    if (!_isTextEditing && !_isDrawing) _buildTopControls(),
-                    if (!_isTextEditing && !_isDrawing) _buildBottomControls(),
-                    if (_isDrawing) _buildDrawingTools(),
-                    if (_isDrawing) _buildDrawingTopBar(),
-                    if (_isDrawing && _isSliding) _buildBrushSizePreview(),
-                  ],
-                  // Saving/Sharing indicator overlay
-                  if (_isSaving)
-                    Positioned.fill(
-                      child: Container(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const CircularProgressIndicator(
-                                color: Colors.white,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _isSharing
-                                    ? context
-                                          .storyEditorConfig
-                                          .strings
-                                          .editorSharing
-                                    : context
-                                          .storyEditorConfig
-                                          .strings
-                                          .editorSaving,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+                    ],
+                  ),
+                ),
               ),
             ),
           ],

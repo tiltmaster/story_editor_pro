@@ -436,7 +436,7 @@ void main() {
       Directionality.of(tester.element(find.byType(CameraEffectsPanel))),
       TextDirection.rtl,
     );
-    expect(tester.getSize(find.byType(CameraEffectsPanel)).height, 192);
+    expect(tester.getSize(find.byType(CameraEffectsPanel)).height, 174);
     expect(
       tester.getCenter(find.text('ألوان')).dx,
       greaterThan(tester.getCenter(find.text('جمال')).dx),

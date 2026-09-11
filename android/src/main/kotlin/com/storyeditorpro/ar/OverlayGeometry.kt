@@ -30,8 +30,4 @@ internal data class OverlayGeometry(
         else -> Point3f(left + x, top + y, 0f)
     }
 
-    companion object {
-        fun shouldPreMirror(frameMirroring: Boolean, requestedOutputMirroring: Boolean): Boolean =
-            frameMirroring != requestedOutputMirroring
-    }
 }

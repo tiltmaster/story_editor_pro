@@ -1,3 +1,13 @@
+## 1.8.0
+
+- Fix mirrored Android effect text; front selfie mirroring defaults on and camera opens front first.
+- Keep a stable filter carousel across controls transitions and guard detached scroll reads.
+- Match camera and editor story framing so captured effect borders are retained.
+- Move compact effects controls and all camera tools to the top; remove More and settings controls.
+- Add generated photographic sunset and night segmentation scenes on Android and iOS.
+- Add host-backed nearby venue selection with per-place styles and Arabic names.
+- Improve Editorial placement and expose brightness reset with acknowledged exposure values.
+
 ## 1.7.0
 
 - Added native person segmentation and compositing for Studio, Sunset, Night and background blur. Models run locally only when selected; preview, photos and recordings use the native compositor.

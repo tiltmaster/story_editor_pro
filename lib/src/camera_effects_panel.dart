@@ -65,6 +65,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
   (CameraEffects, String, double)? _undo;
   String? _notice;
   bool _locating = false;
+  bool _findingNearby = false;
   String? _locationError;
   late String _requestedPlaceStyle =
       _ui.requestedPlaceStyle ??
@@ -242,7 +243,9 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           _ui.requestedPlaceStyle ??
           (_effects.placeStyle == 'none' ? 'postcard' : _effects.placeStyle);
       _ui.requestedPlaceStyle = _requestedPlaceStyle;
-      if (_requestedPlaceStyle != 'none') _locate();
+      if (_requestedPlaceStyle != 'none' && _effects.placeName.isEmpty) {
+        _locate();
+      }
     }
   }
 
@@ -288,8 +291,104 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       _change(
         effects: _effects.copyWith(placeStyle: 'none', placeName: ''),
       );
+    } else if (_effects.placeName.isNotEmpty) {
+      _locationSession.stylesByPlace[_effects.placeName] = style;
+      _change(effects: _effects.copyWith(placeStyle: style));
     } else {
       _locate();
+    }
+  }
+
+  Future<void> _chooseNearby(BuildContext anchor) async {
+    if (_findingNearby) return;
+    final locale = Localizations.localeOf(context).toString();
+    setState(() => _findingNearby = true);
+    try {
+      final places = await _locationSession.nearby(localeIdentifier: locale);
+      if (!mounted || !anchor.mounted) return;
+      if (places.isEmpty) {
+        setState(
+          () => _notice = t(
+            'No nearby places found. Your city is still available.',
+            'لا توجد أماكن قريبة. يمكنك استخدام اسم مدينتك.',
+          ),
+        );
+        return;
+      }
+      final box = anchor.findRenderObject()! as RenderBox;
+      final overlay =
+          Overlay.of(context).context.findRenderObject()! as RenderBox;
+      final rect = Rect.fromPoints(
+        box.localToGlobal(Offset.zero, ancestor: overlay),
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay),
+      );
+      // Loading has finished; do not keep an animated spinner running behind
+      // the menu while waiting for the user's selection.
+      setState(() => _findingNearby = false);
+      final selected = await showMenu<CameraNearbyPlace>(
+        context: context,
+        position: RelativeRect.fromRect(rect, Offset.zero & overlay.size),
+        constraints: const BoxConstraints(maxWidth: 320, maxHeight: 260),
+        color: const Color(0xFF202024),
+        items: [
+          PopupMenuItem<CameraNearbyPlace>(
+            enabled: false,
+            height: 32,
+            child: Text(
+              t('Nearby places', 'أماكن قريبة'),
+              style: const TextStyle(color: Colors.white60, fontSize: 11),
+            ),
+          ),
+          for (final place in places)
+            PopupMenuItem(
+              value: place,
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.place_outlined,
+                    size: 18,
+                    color: Colors.white70,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      place.name,
+                      maxLines: 2,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${NumberFormat.decimalPattern(locale).format(place.distanceMeters.round())} ${t('m', 'م')}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      );
+      if (!mounted || selected == null) return;
+      _requestedPlaceStyle =
+          _locationSession.stylesByPlace[selected.name] ??
+          (_requestedPlaceStyle == 'none' ? 'postcard' : _requestedPlaceStyle);
+      _ui.requestedPlaceStyle = _requestedPlaceStyle;
+      _change(
+        effects: _effects.copyWith(
+          placeName: selected.name,
+          placeStyle: _requestedPlaceStyle,
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _notice = t(
+            'Nearby places unavailable. Tap Nearby to retry.',
+            'الأماكن القريبة غير متاحة. اضغط «قريب» للمحاولة مجدداً.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _findingNearby = false);
     }
   }
 
@@ -372,7 +471,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       borderRadius: BorderRadius.circular(22),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        height: 192,
+        height: 174,
         child: Column(
           children: [
             SizedBox(
@@ -453,7 +552,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
             ),
             const SizedBox(height: 4),
             SizedBox(
-              height: 91,
+              height: 78,
               child: switch (_tab) {
                 0 => _looks(),
                 1 => _beauty(),
@@ -467,7 +566,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: _undo != null
                     ? _undoReset()
-                    : _notice != null
+                    : _notice != null && _tab != 3
                     ? _statusText(_notice!)
                     : switch (_tab) {
                         0 => _slider(
@@ -939,11 +1038,32 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         const SizedBox(width: 6),
         Expanded(
           child: _statusText(
-            _effects.placeName.isNotEmpty
-                ? _effects.placeName
-                : t('Your current city · GPS', 'مدينتك الحالية · GPS'),
+            _notice ??
+                (_effects.placeName.isNotEmpty
+                    ? _effects.placeName
+                    : t('Your current city · GPS', 'مدينتك الحالية · GPS')),
           ),
         ),
+        if (_locationSession.supportsNearby)
+          Builder(
+            builder: (anchor) => TextButton.icon(
+              key: const ValueKey('camera-nearby-places'),
+              onPressed: _findingNearby ? null : () => _chooseNearby(anchor),
+              icon: _findingNearby
+                  ? const SizedBox.square(
+                      dimension: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                    )
+                  : const Icon(Icons.expand_more, size: 16),
+              label: Text(
+                t('Nearby', 'قريب'),
+                style: const TextStyle(fontSize: 11),
+              ),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1049,8 +1169,8 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           child: Column(
             children: [
               Container(
-                width: 54,
-                height: 54,
+                width: 46,
+                height: 46,
                 padding: const EdgeInsets.all(3),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,

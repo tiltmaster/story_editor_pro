@@ -139,18 +139,23 @@ void main() {
         same(carouselPosition),
         reason: 'The carousel keeps its position while controls are open',
       );
-      await tester.tap(find.text('المزيد'));
-      await tester.pump();
-      expect(find.text('أقل'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.binding.handlePopRoute();
-      await tester.pump();
-      expect(find.text('المزيد'), findsOneWidget);
-      expect(find.byType(StoryCameraScreen), findsOneWidget);
-      expect(
-        tester.getRect(find.byKey(AnchoredShutterControl.shutterAnchorKey)),
-        shutter,
-      );
+      expect(find.byIcon(Icons.more_horiz), findsNothing);
+      expect(find.byTooltip('تكرار'), findsOneWidget);
+      // Repeated focus taps and controls transitions must leave exactly one
+      // carousel position; this reproduced the attached PageController crash.
+      for (var i = 0; i < 8; i++) {
+        await tester.tapAt(const Offset(150, 290));
+        await tester.pump(const Duration(milliseconds: 320));
+        await tester.tap(find.byKey(const ValueKey('camera_effects_button')));
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('camera_effects_button')));
+        await tester.pump();
+        final carousel = tester.widget<PageView>(
+          find.byKey(const ValueKey('camera_filter_slider')),
+        );
+        expect(carousel.controller!.positions.length, 1);
+        expect(tester.takeException(), isNull);
+      }
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 1));
       expect(tester.takeException(), isNull);

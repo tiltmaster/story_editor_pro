@@ -28,6 +28,7 @@ internal class FaceArController(
     private val context: Context,
     private val modelAssetPath: String,
     private val segmentationAssetPath: String,
+    private val sceneAssetPaths: Map<Int, String>,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler, AutoCloseable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val trackerExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -347,7 +348,7 @@ internal class FaceArController(
         segmentationExecutor.execute {
             try {
                 if (closed || expectedGeneration != generation.get() || backgroundStyle == 0) return@execute
-                val local = MediaPipePersonSegmenter(context, segmentationAssetPath, segmentationExecutor,
+                val local = MediaPipePersonSegmenter(context, segmentationAssetPath, sceneAssetPaths, segmentationExecutor,
                     onResult = { background ->
                         if (!closed && expectedGeneration == generation.get() && machine.isActive() &&
                             background.epoch == backgroundEpoch.get() && background.style == backgroundStyle) {
