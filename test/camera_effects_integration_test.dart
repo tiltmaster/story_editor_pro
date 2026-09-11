@@ -160,6 +160,13 @@ void main() {
         expect(carousel.controller!.positions.length, 1);
         expect(tester.takeException(), isNull);
       }
+      await tester.tap(find.byTooltip('مؤقّت'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('3 ثوانٍ'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('اضغط للتسجيل · مؤقّت 3 ثوانٍ'), findsOneWidget);
+      expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 1));
       expect(tester.takeException(), isNull);

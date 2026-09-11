@@ -5131,10 +5131,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Text(
-          _cameraText(
-            "Tap photo · Hold video",
-            "صورة بضغطة · فيديو بضغطة مطوّلة",
-          ),
+          _isHandsFreeMode
+              ? _cameraText(
+                  'Tap to record · ${_handsFreeDelaySeconds}s timer',
+                  'اضغط للتسجيل · مؤقّت $_handsFreeDelaySeconds ثوانٍ',
+                )
+              : _isBoomerangMode
+              ? _cameraText('Tap to record a loop', 'اضغط لتسجيل تكرار')
+              : _cameraText(
+                  "Tap photo · Hold video",
+                  "صورة بضغطة · فيديو بضغطة مطوّلة",
+                ),
           textAlign: TextAlign.center,
           maxLines: 2,
           style: const TextStyle(
