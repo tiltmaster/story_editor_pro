@@ -8,7 +8,7 @@ struct CreativeLensContext {
     let mirrorOutput: Bool
     let compositionId: String
     let placeStyle: String
-    let placeX, placeY, placeScale: CGFloat
+    let placeX, placeY, placeScale, placeRotation: CGFloat
     let placeArtwork: UIImage?
     let placeName: String
 
@@ -16,12 +16,12 @@ struct CreativeLensContext {
 
     init(languageCode: String = "en", countryCode: String = "", mirrorOutput: Bool = false,
          compositionId: String = "none", placeStyle: String = "none", placeName: String = "",
-         placeX: CGFloat = 0.5, placeY: CGFloat = 0.68, placeScale: CGFloat = 1, placeArtwork: UIImage? = nil) {
+         placeX: CGFloat = 0.5, placeY: CGFloat = 0.68, placeScale: CGFloat = 1, placeRotation: CGFloat = 0, placeArtwork: UIImage? = nil) {
         self.languageCode = String(languageCode.prefix(8)).lowercased()
         self.countryCode = String(countryCode.prefix(3)).uppercased()
         self.mirrorOutput = mirrorOutput
         self.compositionId = compositionId
-        self.placeX = placeX; self.placeY = placeY; self.placeScale = placeScale; self.placeArtwork = placeArtwork
+        self.placeX = placeX; self.placeY = placeY; self.placeScale = placeScale; self.placeRotation = placeRotation; self.placeArtwork = placeArtwork
         self.placeStyle = placeStyle
         self.placeName = String(placeName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
     }
@@ -85,10 +85,13 @@ final class CreativeLensFrameRenderer {
         if lensContext.placeStyle != "none", !lensContext.placeName.isEmpty,
            let artwork = lensContext.placeArtwork, let sticker = CIImage(image: artwork) {
             let unit = min(CGFloat(width)/1080, CGFloat(height)/1920) * lensContext.placeScale
-            let stickerWidth = sticker.extent.width * unit, stickerHeight = sticker.extent.height * unit
-            var positioned = sticker.transformed(by: CGAffineTransform(scaleX: unit, y: unit))
-                .transformed(by: CGAffineTransform(translationX: CGFloat(width)*lensContext.placeX-stickerWidth/2,
-                    y: CGFloat(height)*(1-lensContext.placeY)-stickerHeight/2))
+            // CI uses a bottom-left origin; Flutter's clockwise angle is negative here.
+            var positioned = sticker
+                .transformed(by: CGAffineTransform(translationX: -sticker.extent.midX, y: -sticker.extent.midY))
+                .transformed(by: CGAffineTransform(scaleX: unit, y: unit))
+                .transformed(by: CGAffineTransform(rotationAngle: -lensContext.placeRotation))
+                .transformed(by: CGAffineTransform(translationX: CGFloat(width)*lensContext.placeX,
+                    y: CGFloat(height)*(1-lensContext.placeY)))
             if lensContext.mirrorOutput {
                 positioned = positioned.transformed(by: CGAffineTransform(a:-1,b:0,c:0,d:1,tx:CGFloat(width),ty:0))
             }

@@ -1145,6 +1145,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             placeX: effects.placeX,
             placeY: effects.placeY,
             placeScale: effects.placeScale,
+            placeRotation: effects.placeRotation,
+            placeIdentity: effects.placeIdentity,
             beautyEyes: effects.beautyEyes,
             beautySlim: effects.beautySlim,
             backgroundStyle: effects.backgroundStyle,
@@ -1228,7 +1230,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             effects.backgroundPath != _effects.backgroundPath ||
             effects.placeVariant != _effects.placeVariant ||
             effects.placeStyle != _effects.placeStyle ||
-            effects.placeName != _effects.placeName;
+            effects.placeName != _effects.placeName ||
+            effects.placeIdentity != _effects.placeIdentity;
         setState(() {
           _effects = effects;
           _activeFilterStrength = strength;
@@ -3905,6 +3908,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               x: effects.placeX,
               y: effects.placeY,
               scale: effects.placeScale,
+              rotation: effects.placeRotation,
             );
           })
           .catchError((Object error) {

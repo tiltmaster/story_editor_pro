@@ -127,7 +127,8 @@ internal class FaceArController(
                 creativeContext = creativeContext.copy(
                     placeX = component("x", .5f).coerceIn(0f, 1f),
                     placeY = component("y", .68f).coerceIn(0f, 1f),
-                    placeScale = component("scale", 1f).coerceIn(.6f, 1.6f))
+                    placeScale = component("scale", 1f).coerceIn(.6f, 1.6f),
+                    placeRotation = component("rotation", 0f))
                 result.success(null)
                 } catch (error: IllegalArgumentException) { result.error("INVALID_ARGS", error.message, null) }
             }
@@ -176,6 +177,7 @@ internal class FaceArController(
                             placeX = (call.argument<Number>("placeX")?.toFloat() ?: .5f).also { require(it.isFinite()) }.coerceIn(0f, 1f),
                             placeY = (call.argument<Number>("placeY")?.toFloat() ?: .68f).also { require(it.isFinite()) }.coerceIn(0f, 1f),
                             placeScale = (call.argument<Number>("placeScale")?.toFloat() ?: 1f).also { require(it.isFinite()) }.coerceIn(.6f, 1.6f),
+                            placeRotation = (call.argument<Number>("placeRotation")?.toFloat() ?: 0f).also { require(it.isFinite()) },
                             placeArtwork = call.argument<ByteArray>("placeArtwork")?.let {
                                 require(it.size <= 2_000_000)
                                 android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)

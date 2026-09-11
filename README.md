@@ -704,6 +704,12 @@ class CloseFriend {
 
 ---
 
+## Place artwork and gestures
+
+Places uses the selected area's identity for its illustration: local landmarks where supported, venue-specific scenes for cafés, beaches, parks and other categories, or a neighborhood motif for an unknown area. Each family has three treatments. Tap to switch style; drag to move; pinch and twist two fingers to resize and rotate. The same artwork and transform are composed into native preview, photos and video, with Arabic text shaped before compositing.
+
+Nearby providers can optionally return `CameraPlaceIdentity(locality: ..., countryCode: ..., kind: ...)` in each `CameraNearbyPlace.identity`. Use the place's actual ISO country code, not the device locale. Default reverse geocoding retains this information automatically. See [place artwork coverage and integration](docs/place-artwork.md).
+
 ## Example
 
 `example/` is a local, ignored app directory. It is not distributed in this

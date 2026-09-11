@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+import 'place_identity.dart';
+export 'place_identity.dart';
 import 'place_sticker_geometry.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geocoding/geocoding.dart' as geo;
@@ -24,6 +27,8 @@ class CameraEffects {
     this.placeX = .5,
     this.placeY = .68,
     this.placeScale = 1,
+    this.placeRotation = 0,
+    this.placeIdentity = const CameraPlaceIdentity(),
   });
 
   final double beauty;
@@ -38,7 +43,8 @@ class CameraEffects {
   final String placeStyle;
   final String placeName;
   final int placeVariant;
-  final double placeX, placeY, placeScale;
+  final double placeX, placeY, placeScale, placeRotation;
+  final CameraPlaceIdentity placeIdentity;
 
   int get layerCount =>
       (beauty > 0 || beautyEyes > 0 || beautySlim > 0 ? 1 : 0) +
@@ -60,15 +66,20 @@ class CameraEffects {
     double? placeX,
     double? placeY,
     double? placeScale,
+    double? placeRotation,
+    CameraPlaceIdentity? placeIdentity,
   }) {
     final nextStyle = placeStyle ?? this.placeStyle;
-    final nextScale = placeScale == null
-        ? this.placeScale
-        : (placeScale.isFinite
-              ? placeScale.clamp(.6, placeStickerMaxScale(nextStyle))
-              : 1.0);
-    final fittedScale = nextScale.clamp(.6, placeStickerMaxScale(nextStyle));
-    final size = placeStickerSize(nextStyle) * fittedScale;
+    final angle = placeRotation ?? this.placeRotation;
+    final rotation = angle.isFinite
+        ? (angle + math.pi) % (2 * math.pi) - math.pi
+        : 0.0;
+    final requestedScale = placeScale ?? this.placeScale;
+    final fittedScale = (requestedScale.isFinite ? requestedScale : 1.0).clamp(
+      .6,
+      placeStickerMaxScale(nextStyle, rotation),
+    );
+    final size = rotatedPlaceStickerSize(nextStyle, rotation) * fittedScale;
     final marginX = nextStyle == 'none' ? 0.0 : size.width / 2160 + .015;
     final marginY = nextStyle == 'none' ? 0.0 : size.height / 3840 + .015;
     return CameraEffects(
@@ -84,6 +95,8 @@ class CameraEffects {
       placeX: _amount(placeX, this.placeX).clamp(marginX, 1 - marginX),
       placeY: _amount(placeY, this.placeY).clamp(marginY, 1 - marginY),
       placeScale: fittedScale,
+      placeRotation: rotation,
+      placeIdentity: placeIdentity ?? this.placeIdentity,
       placeName: placeName == null
           ? this.placeName
           : String.fromCharCodes(placeName.trim().runes.take(64)),
@@ -105,10 +118,13 @@ class CameraPlaceSession {
   CameraPlaceSession({
     CameraPlaceResolver? resolver,
     CameraNearbyResolver? nearbyResolver,
-  }) : _resolver = resolver ?? _resolve,
+  }) : _resolver = resolver,
        _nearbyResolver = nearbyResolver;
 
-  final CameraPlaceResolver _resolver;
+  final CameraPlaceResolver? _resolver;
+  final Map<String, CameraPlaceIdentity> _identities = {};
+  CameraPlaceIdentity identityFor(String name) =>
+      _identities[name] ?? const CameraPlaceIdentity();
   final CameraNearbyResolver? _nearbyResolver;
   bool get supportsNearby => _nearbyResolver != null;
   final Map<String, (DateTime, List<CameraNearbyPlace>)> _nearby = {};
@@ -152,15 +168,20 @@ class CameraPlaceSession {
   final Map<String, String> _names = {};
   final Map<String, Future<String>> _pending = {};
 
-  static Future<String> _resolve(String locale) =>
-      resolveCameraPlace(localeIdentifier: locale);
+  Future<String> _resolve(String locale) async {
+    if (_resolver != null) return _resolver(locale);
+    final result = await _resolveCameraPlaceDetails(locale);
+    _identities[String.fromCharCodes(result.$1.trim().runes.take(64))] =
+        result.$2;
+    return result.$1;
+  }
 
   Future<String> resolve({required String localeIdentifier}) async {
     final cached = _names[localeIdentifier];
     if (cached != null) return cached;
     final pending = _pending[localeIdentifier];
     if (pending != null) return pending;
-    final request = _resolver(localeIdentifier).then((name) {
+    final request = _resolve(localeIdentifier).then((name) {
       final city = String.fromCharCodes(name.trim().runes.take(64));
       if (city.isEmpty) throw StateError('No city was returned.');
       _names[localeIdentifier] = city;
@@ -177,7 +198,12 @@ class CameraPlaceSession {
 
 /// Invoked when the user selects Places, never during camera initialization.
 /// Precise coordinates are discarded after reverse geocoding.
-Future<String> resolveCameraPlace({String localeIdentifier = 'en'}) async {
+Future<String> resolveCameraPlace({String localeIdentifier = 'en'}) async =>
+    (await _resolveCameraPlaceDetails(localeIdentifier)).$1;
+
+Future<(String, CameraPlaceIdentity)> _resolveCameraPlaceDetails(
+  String localeIdentifier,
+) async {
   final position = await cameraPlacePosition();
   await geo.setLocaleIdentifier(localeIdentifier);
   final places = await geo
@@ -190,7 +216,15 @@ Future<String> resolveCameraPlace({String localeIdentifier = 'en'}) async {
       place.administrativeArea,
       place.country,
     ]) {
-      if (name != null && name.trim().isNotEmpty) return name.trim();
+      if (name != null && name.trim().isNotEmpty) {
+        return (
+          name.trim(),
+          CameraPlaceIdentity(
+            locality: place.locality ?? '',
+            countryCode: place.isoCountryCode ?? '',
+          ),
+        );
+      }
     }
   }
   throw StateError('Could not find a city here. Please retry.');

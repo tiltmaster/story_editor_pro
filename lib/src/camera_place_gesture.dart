@@ -39,48 +39,40 @@ class _CameraPlaceGestureState extends State<CameraPlaceGesture> {
             top: e.placeY * box.maxHeight - art.height / 2,
             width: art.width,
             height: art.height,
-            child: Semantics(
-              label:
-                  '${e.placeName}. ${rtl ? 'اضغط لتغيير النمط، اسحب للتحريك، ضم إصبعين لتغيير الحجم' : 'Tap to change style, drag to move, pinch to resize'}',
-              button: true,
-              child: GestureDetector(
-                key: const ValueKey('camera-place-sticker'),
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.onCycle,
-                onScaleStart: (d) {
-                  _start = local(d.focalPoint);
-                  _initial = e;
-                  setState(() => _dragging = true);
-                },
-                onScaleUpdate: (d) {
-                  final delta = local(d.focalPoint) - _start;
-                  final scale = (_initial.placeScale * d.scale).clamp(
-                    .6,
-                    placeStickerMaxScale(e.placeStyle),
-                  );
-                  final nextSize =
-                      placeStickerSize(e.placeStyle) * (unit * scale);
-                  final marginX = nextSize.width / box.maxWidth / 2 + .015;
-                  final marginY = nextSize.height / box.maxHeight / 2 + .015;
-                  widget.onChanged(
-                    e.copyWith(
-                      placeScale: scale,
-                      placeX: (_initial.placeX + delta.dx / box.maxWidth).clamp(
-                        marginX,
-                        1 - marginX,
+            child: Transform.rotate(
+              angle: e.placeRotation,
+              child: Semantics(
+                label:
+                    '${e.placeName}. ${rtl ? 'اضغط لتغيير النمط، اسحب للتحريك، ضم إصبعين لتغيير الحجم ولفهما للتدوير' : 'Tap to change style, drag to move, pinch to resize, twist two fingers to rotate'}',
+                button: true,
+                child: GestureDetector(
+                  key: const ValueKey('camera-place-sticker'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onCycle,
+                  onScaleStart: (d) {
+                    _start = local(d.focalPoint);
+                    _initial = e;
+                    setState(() => _dragging = true);
+                  },
+                  onScaleUpdate: (d) {
+                    final delta = local(d.focalPoint) - _start;
+                    widget.onChanged(
+                      e.copyWith(
+                        placeScale: _initial.placeScale * d.scale,
+                        placeRotation: _initial.placeRotation + d.rotation,
+                        placeX: _initial.placeX + delta.dx / box.maxWidth,
+                        placeY: _initial.placeY + delta.dy / box.maxHeight,
                       ),
-                      placeY: (_initial.placeY + delta.dy / box.maxHeight)
-                          .clamp(marginY, 1 - marginY),
+                    );
+                  },
+                  onScaleEnd: (_) => setState(() => _dragging = false),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: _dragging
+                          ? Border.all(color: Colors.white70)
+                          : null,
                     ),
-                  );
-                },
-                onScaleEnd: (_) => setState(() => _dragging = false),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    border: _dragging
-                        ? Border.all(color: Colors.white70)
-                        : null,
                   ),
                 ),
               ),

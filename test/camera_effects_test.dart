@@ -539,6 +539,37 @@ void main() {
         reason:
             'Moving or reapplying a sticker must not rasterize/upload it again',
       );
+      await controller.setLens(
+        NativeArLensIds.celestial,
+        placeStyle: 'editorial',
+        placeName: 'Kyoto',
+        languageCode: 'ar',
+        placeIdentity: const CameraPlaceIdentity(kind: CameraPlaceKind.park),
+        placeRotation: .7,
+      );
+      expect(
+        (calls.last.arguments as Map)['placeArtwork'],
+        isNotEmpty,
+        reason:
+            'Provider category changes must invalidate artwork even when the name stays the same',
+      );
+      expect((calls.last.arguments as Map)['placeRotation'], .7);
+      await controller.updatePlaceSticker(
+        x: .3,
+        y: .4,
+        scale: 1.2,
+        rotation: -.4,
+      );
+      expect((calls.last.arguments as Map)['rotation'], -.4);
+      await expectLater(
+        controller.updatePlaceSticker(
+          x: .3,
+          y: .4,
+          scale: 1,
+          rotation: double.infinity,
+        ),
+        throwsArgumentError,
+      );
       await controller.updatePlaceSticker(x: .3, y: .4, scale: 1.2);
       expect(calls.last.method, 'updatePlaceSticker');
       expect(calls.last.arguments, {'x': .3, 'y': .4, 'scale': 1.2});

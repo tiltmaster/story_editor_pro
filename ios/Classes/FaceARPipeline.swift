@@ -462,15 +462,15 @@ final class FaceARCoordinator {
         if value && needsTracker { prepare() }
     }
 
-    func updatePlaceSticker(x: Double, y: Double, scale: Double) {
-        guard x.isFinite, y.isFinite, scale.isFinite else { return }
+    func updatePlaceSticker(x: Double, y: Double, scale: Double, rotation: Double = 0) {
+        guard x.isFinite, y.isFinite, scale.isFinite, rotation.isFinite else { return }
         lock.lock(); defer { lock.unlock() }
         let old = creativeContext
         creativeContext = CreativeLensContext(languageCode: old.languageCode, countryCode: old.countryCode,
             mirrorOutput: old.mirrorOutput, compositionId: old.compositionId,
             placeStyle: old.placeStyle, placeName: old.placeName,
             placeX: CGFloat(min(1, max(0, x))), placeY: CGFloat(min(1, max(0, y))),
-            placeScale: CGFloat(min(1.6, max(0.6, scale))), placeArtwork: old.placeArtwork)
+            placeScale: CGFloat(min(1.6, max(0.6, scale))), placeRotation: CGFloat(rotation), placeArtwork: old.placeArtwork)
     }
 
     func setLens(
@@ -482,7 +482,7 @@ final class FaceARCoordinator {
         compositionId: String = "none",
         placeStyle: String = "none",
         placeName: String = "",
-        placeX: Double = 0.5, placeY: Double = 0.68, placeScale: Double = 1, placeArtwork: Data? = nil,
+        placeX: Double = 0.5, placeY: Double = 0.68, placeScale: Double = 1, placeRotation: Double = 0, placeArtwork: Data? = nil,
         beautyEyes: Double = 0,
         beautySlim: Double = 0,
         backgroundStyle: Int = 0,
@@ -490,7 +490,7 @@ final class FaceARCoordinator {
         backgroundIsVideo: Bool = false
     ) throws {
         guard value.isFinite, beautyEyes.isFinite, beautySlim.isFinite,
-              placeX.isFinite, placeY.isFinite, placeScale.isFinite,
+              placeX.isFinite, placeY.isFinite, placeScale.isFinite, placeRotation.isFinite,
               PersonBackgroundCompositor.isValidStyle(backgroundStyle),
               ["none", "postcard", "editorial", "stamp"].contains(placeStyle),
               compositionId == "none" || CreativeLensFrameRenderer.lensIds.contains(compositionId),
@@ -533,6 +533,7 @@ final class FaceARCoordinator {
             compositionId: compositionId, placeStyle: placeStyle, placeName: placeName,
             placeX: CGFloat(min(1, max(0, placeX))), placeY: CGFloat(min(1, max(0, placeY))),
             placeScale: CGFloat(min(1.6, max(0.6, placeScale))),
+            placeRotation: CGFloat(placeRotation),
             placeArtwork: placeArtwork.flatMap { UIImage(data: $0) } ?? creativeContext.placeArtwork
         )
         let requiresTracker = self.beautyEyes > 0 || self.beautySlim > 0 || CreativeLensFrameRenderer.adornmentIds.contains(id)
@@ -746,7 +747,8 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
             let args = call.arguments as? [String: Any]
             coordinator.updatePlaceSticker(x: (args?["x"] as? NSNumber)?.doubleValue ?? 0.5,
                 y: (args?["y"] as? NSNumber)?.doubleValue ?? 0.68,
-                scale: (args?["scale"] as? NSNumber)?.doubleValue ?? 1)
+                scale: (args?["scale"] as? NSNumber)?.doubleValue ?? 1,
+                rotation: (args?["rotation"] as? NSNumber)?.doubleValue ?? 0)
             result(nil)
         case "setLens":
             let args = call.arguments as? [String: Any]
@@ -763,6 +765,7 @@ final class FaceARMethodHandler: NSObject, FlutterPlugin {
                     placeX: (args?["placeX"] as? NSNumber)?.doubleValue ?? 0.5,
                     placeY: (args?["placeY"] as? NSNumber)?.doubleValue ?? 0.68,
                     placeScale: (args?["placeScale"] as? NSNumber)?.doubleValue ?? 1,
+                    placeRotation: (args?["placeRotation"] as? NSNumber)?.doubleValue ?? 0,
                     placeArtwork: (args?["placeArtwork"] as? FlutterStandardTypedData)?.data,
                     beautyEyes: (args?["beautyEyes"] as? NSNumber)?.doubleValue ?? 0,
                     beautySlim: (args?["beautySlim"] as? NSNumber)?.doubleValue ?? 0,

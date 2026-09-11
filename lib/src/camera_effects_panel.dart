@@ -1,3 +1,4 @@
+import 'place_art.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -273,6 +274,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         _change(
           effects: _effects.copyWith(
             placeName: name,
+            placeIdentity: _locationSession.identityFor(name),
             placeStyle: _requestedPlaceStyle,
           ),
         );
@@ -360,8 +362,8 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
               value: place,
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.place_outlined,
+                  Icon(
+                    PlaceArt(place.name, place.identity).icon,
                     size: 18,
                     color: Colors.white70,
                   ),
@@ -391,6 +393,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       _change(
         effects: _effects.copyWith(
           placeName: selected.name,
+          placeIdentity: selected.identity,
           placeStyle: _requestedPlaceStyle,
         ),
       );
@@ -1068,8 +1071,8 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
             _notice ??
                 (_effects.placeName.isNotEmpty
                     ? t(
-                        'Tap sticker: style · Drag: move',
-                        'اضغط للنمط · اسحب للتحريك',
+                        'Tap: style · Drag · Pinch & rotate',
+                        'اضغط للنمط · اسحب · ضم ولف',
                       )
                     : t('Your current city · GPS', 'مدينتك الحالية · GPS')),
           ),

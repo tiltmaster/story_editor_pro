@@ -241,11 +241,12 @@ final class FaceARPipelineTests: XCTestCase {
             ("الكويت" as NSString).draw(at: CGPoint(x: 30,y: 250), withAttributes: [.font: UIFont.systemFont(ofSize: 40), .foregroundColor: UIColor.black])
         }
         for style in ["postcard", "editorial", "stamp"] {
+          for angle in [CGFloat(0), CGFloat(0.45), CGFloat(-0.8)] {
             let renderer = CreativeLensFrameRenderer()
             let normal = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
-                lensContext: CreativeLensContext(languageCode: "ar", placeStyle: style, placeName: "الكويت", placeX: 0.3, placeY: 0.6, placeArtwork: artwork)))
+                lensContext: CreativeLensContext(languageCode: "ar", placeStyle: style, placeName: "الكويت", placeX: 0.3, placeY: 0.6, placeRotation: angle, placeArtwork: artwork)))
             let mirrored = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
-                lensContext: CreativeLensContext(languageCode: "ar", mirrorOutput: true, placeStyle: style, placeName: "الكويت", placeX: 0.3, placeY: 0.6, placeArtwork: artwork)))
+                lensContext: CreativeLensContext(languageCode: "ar", mirrorOutput: true, placeStyle: style, placeName: "الكويت", placeX: 0.3, placeY: 0.6, placeRotation: angle, placeArtwork: artwork)))
             XCTAssertEqual(CVPixelBufferGetWidth(normal), 360)
             XCTAssertEqual(CVPixelBufferGetHeight(normal), 640)
             let restored = CIImage(cvPixelBuffer: mirrored).transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 360, ty: 0))
@@ -253,6 +254,13 @@ final class FaceARPipelineTests: XCTestCase {
             // differently. Compare with a tiny tolerance using actual pixels.
             let normalBytes = Array(try pixels(CIImage(cvPixelBuffer: normal)))
             XCTAssertNotEqual(normalBytes, Array(try pixels(source)), "Native artwork must be present")
+            if angle != 0 {
+                let upright = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
+                    lensContext: CreativeLensContext(languageCode: "ar", placeStyle: style, placeName: "الكويت",
+                        placeX: 0.3, placeY: 0.6, placeArtwork: artwork)))
+                XCTAssertNotEqual(normalBytes, Array(try pixels(CIImage(cvPixelBuffer: upright))),
+                    "Rotation must change native pixels, not just the Flutter hit target")
+            }
             let moved = try XCTUnwrap(renderer.render(source: source, lensId: "none", intensity: 1,
                 lensContext: CreativeLensContext(placeStyle: style, placeName: "الكويت",
                     placeX: 0.65, placeY: 0.4, placeScale: 0.8, placeArtwork: artwork)))
@@ -263,6 +271,7 @@ final class FaceARPipelineTests: XCTestCase {
             XCTAssertEqual(normalBytes.count, restoredBytes.count)
             let difference = zip(normalBytes, restoredBytes).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
             XCTAssertLessThan(Double(difference) / Double(normalBytes.count), 1.0)
+          }
         }
     }
 

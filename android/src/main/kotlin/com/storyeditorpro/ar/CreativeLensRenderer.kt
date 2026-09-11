@@ -116,7 +116,11 @@ internal class CreativeLensRenderer(@Suppress("UNUSED_PARAMETER") context: Conte
         val height = artwork.height * scale
         val x = w * value.placeX; val y = h * value.placeY
         paint.reset(); paint.isAntiAlias = true; paint.isFilterBitmap = true
-        c.drawBitmap(artwork, null, RectF(x-width/2, y-height/2, x+width/2, y+height/2), paint)
+        val saved = c.save()
+        try {
+            c.rotate(value.placeRotation * (180f / Math.PI.toFloat()), x, y)
+            c.drawBitmap(artwork, null, RectF(x-width/2, y-height/2, x+width/2, y+height/2), paint)
+        } finally { c.restoreToCount(saved) }
     }
 
     private fun date(pattern: String,now: Date,locale: Locale): String {

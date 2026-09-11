@@ -32,4 +32,7 @@ export 'src/config/story_editor_filters.dart';
 // Models
 export 'src/models/story_result.dart';
 
-export 'src/camera_nearby_places.dart' show CameraNearbyPlace, CameraNearbyResolver;
+export 'src/camera_nearby_places.dart'
+    show CameraNearbyPlace, CameraNearbyResolver;
+
+export 'src/place_identity.dart' show CameraPlaceIdentity, CameraPlaceKind;

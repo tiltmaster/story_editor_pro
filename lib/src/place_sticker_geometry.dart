@@ -5,8 +5,20 @@ import 'dart:ui';
 Size placeStickerSize(String style) => switch (style) {
   'postcard' => const Size(340, 410),
   'stamp' => const Size(680, 240),
-  _ => const Size(510, 120),
+  _ => const Size(510, 160),
 };
 
-double placeStickerMaxScale(String style) =>
-    math.min(1.6, 1040 / placeStickerSize(style).width);
+/// Axis-aligned bounds after rotating around the sticker center.
+Size rotatedPlaceStickerSize(String style, double angle) {
+  final size = placeStickerSize(style);
+  final c = math.cos(angle).abs(), s = math.sin(angle).abs();
+  return Size(
+    size.width * c + size.height * s,
+    size.width * s + size.height * c,
+  );
+}
+
+double placeStickerMaxScale(String style, [double rotation = 0]) {
+  final size = rotatedPlaceStickerSize(style, rotation);
+  return math.min(1.6, math.min(1040 / size.width, 1860 / size.height));
+}

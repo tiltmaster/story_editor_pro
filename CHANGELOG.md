@@ -1,3 +1,11 @@
+## 1.9.2
+
+- Replace generic place pins with illustrated location badges, using verified locality/country data and optional venue categories. Add original regional motifs for Al Jahra, Kuwait City, Dubai, Paris, London and Sydney, plus coast, park, café, market, museum, desert, mountain, airport and neighborhood artwork.
+- Redesign stamps as scenic, medallion and engraved editions of the selected area; give boarding passes distinct destination-poster, night-travel and airmail layouts.
+- Add two-finger rotation to all three place sticker families. Preserve rotation across style changes and native preview/photo/video composition on Android and iOS, including mirrored front cameras.
+- Clamp the complete rotated sticker within the capture frame. Reuse cached artwork during drag, pinch and rotation without rerasterizing or restarting tracking.
+- Add optional `CameraNearbyPlace.identity` (`CameraPlaceIdentity` / `CameraPlaceKind`) for provider-supplied locality, country and venue category. Existing providers remain compatible.
+
 ## 1.9.1
 
 - Replace large place cards with three perforated postage stamps, three boarding-pass treatments and three compact location pins. Editorial is now labelled Location; Passport is Boarding pass.

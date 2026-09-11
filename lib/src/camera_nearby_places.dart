@@ -1,13 +1,17 @@
+import 'place_identity.dart';
+
 /// A real nearby venue. Names are never generated or inferred from coordinates.
 class CameraNearbyPlace {
   const CameraNearbyPlace({
     required this.id,
     required this.name,
     required this.distanceMeters,
+    this.identity = const CameraPlaceIdentity(),
   });
   final String id;
   final String name;
   final double distanceMeters;
+  final CameraPlaceIdentity identity;
 }
 
 typedef CameraNearbyResolver =
@@ -41,6 +45,7 @@ List<CameraNearbyPlace> normalizeNearbyCameraPlaces(
           id: p.id,
           name: String.fromCharCodes(p.name.trim().runes.take(64)),
           distanceMeters: p.distanceMeters,
+          identity: p.identity,
         ),
       )
       .toList(growable: false);
