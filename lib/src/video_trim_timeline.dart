@@ -24,6 +24,8 @@ class VideoTrimTimeline extends StatefulWidget {
 
 class _VideoTrimTimelineState extends State<VideoTrimTimeline> {
   late Future<List<Uint8List>> _frames;
+  double _dragOriginX = 0;
+  int _dragStartMs = 0, _dragEndMs = 0;
   void _load() {
     _frames = const MethodChannel('story_editor_pro')
         .invokeListMethod<Uint8List>('getVideoThumbnails', {
@@ -55,17 +57,17 @@ class _VideoTrimTimelineState extends State<VideoTrimTimeline> {
           final width = box.maxWidth - 24;
           final left = 12 + width * widget.startMs / widget.durationMs;
           final right = 12 + width * widget.endMs / widget.durationMs;
-          void adjust(bool start, double dx) {
+          void adjust(bool start, double dx, {bool dragging = false}) {
+            final startMs = dragging ? _dragStartMs : widget.startMs;
+            final endMs = dragging ? _dragEndMs : widget.endMs;
             final delta = dx * widget.durationMs / width;
             final a = start
-                ? (widget.startMs + delta)
-                      .clamp(0, widget.endMs - 250)
-                      .toDouble()
-                : widget.startMs.toDouble();
+                ? (startMs + delta).clamp(0, endMs - 250).toDouble()
+                : startMs.toDouble();
             final b = start
-                ? widget.endMs.toDouble()
-                : (widget.endMs + delta)
-                      .clamp(widget.startMs + 250, widget.durationMs)
+                ? endMs.toDouble()
+                : (endMs + delta)
+                      .clamp(startMs + 250, widget.durationMs)
                       .toDouble();
             widget.onChanged(RangeValues(a, b));
             widget.onSeek((start ? a : b).round());
@@ -86,7 +88,16 @@ class _VideoTrimTimelineState extends State<VideoTrimTimeline> {
             onDecrease: () => adjust(start, -width * 250 / widget.durationMs),
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onHorizontalDragUpdate: (event) => adjust(start, event.delta.dx),
+              onHorizontalDragDown: (event) {
+                _dragOriginX = event.globalPosition.dx;
+                _dragStartMs = widget.startMs;
+                _dragEndMs = widget.endMs;
+              },
+              onHorizontalDragUpdate: (event) => adjust(
+                start,
+                event.globalPosition.dx - _dragOriginX,
+                dragging: true,
+              ),
               child: SizedBox(
                 width: 28,
                 height: 88,

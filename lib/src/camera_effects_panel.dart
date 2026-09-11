@@ -194,7 +194,14 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
     if (oldWidget.backgroundReady != widget.backgroundReady) {
       _backgroundReady = widget.backgroundReady;
     }
-    if (oldWidget.effects != widget.effects) _effects = widget.effects;
+    if (oldWidget.effects != widget.effects) {
+      if (_effects.backgroundStyle != widget.effects.backgroundStyle ||
+          _effects.backgroundPath != widget.effects.backgroundPath) {
+        _backgroundReady = widget.backgroundReady;
+        _backgroundFailed = false;
+      }
+      _effects = widget.effects;
+    }
     if (oldWidget.lookId != widget.lookId) _look = widget.lookId;
     if (oldWidget.lookStrength != widget.lookStrength) {
       _strength = widget.lookStrength;
@@ -903,7 +910,9 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         ),
       );
     }
-    if (_effects.backgroundStyle == 5) {
+    if (_effects.backgroundStyle == 5 &&
+        _backgroundReady &&
+        !_backgroundFailed) {
       return _statusText(
         t(
           'Your photo or video · Video audio muted',

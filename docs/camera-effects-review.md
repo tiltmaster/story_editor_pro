@@ -189,3 +189,17 @@ overwrite the existing local app. Only reusable source, assets, docs and tests
 are versioned. Java's local socket workaround for this Windows build uses
 `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=H:\story_editor_pro\build\java-tmp`;
 consuming applications do not need that setting.
+
+
+## 1.9 camera controls and reaction media — 11 September 2026
+
+- Camera tools use a side rail, including a timer with the same circular backdrop as other actions. The effects strip is 148 logical pixels tall, with five visible categories, neutral lens tiles and one close control on the rail. Arabic and larger text are covered by widget tests.
+- Gallery queries explicitly order newest first. Thumbnail configuration is read without subscribing during initialization. Custom gallery images and looping videos feed the native person compositor; custom scene orientation is compensated independently of selfie mirroring. Video backgrounds decode at up to 10 fps and mute their own audio.
+- The lock sits directly beside the shutter. A short horizontal slide locks recording, release keeps it running, and tapping the shutter ends it. Timer idle guidance no longer overlays the shutter; recording status sits above its control area.
+- Music selection uses the host picker before or after capture, retaining both metadata and route-local configuration. The host remains responsible for playback and final music mixing.
+- Trimming displays ten decoded frames, draggable in/out handles, and seeking. Drag positions accumulate across pointer events instead of losing movement between widget rebuilds.
+- Postcard uses white airmail stationery and a postmark. Editorial uses a charcoal backdrop with a red rule. Both keep full backdrops above capture controls.
+
+S23 Ultra checks: gallery opened with the newest test media first; timer backdrop and compact controls rendered; Postcard/Editorial backdrops were complete; four recorded camera switches showed correctly oriented place text whenever visible. A gallery image and a looping gallery video rendered as backgrounds. Hold/slide/release locked recording successfully. The editor displayed decoded scene changes in its filmstrip and exported a trimmed 4.24-second 1080×1920 video with 65 video frames and an AAC microphone track. Indoor output averaged about 15 fps in this test; this is not a 30/60 fps certification. The phone faced the ceiling during these final reaction-media tests, so moving-person segmentation quality still needs physical acceptance.
+
+Local validation: 116 Flutter tests and static analysis pass; Android JVM mask tests include custom-media matte generation. iOS compilation and simulator tests passed for the initial 1.9 implementation; the final mirror-compensation change must also pass the release CI run. APKs, example hosts and device captures remain excluded from source control.

@@ -61,6 +61,19 @@ final class PersonBackgroundTests: XCTestCase {
         XCTAssertTrue(PersonBackgroundCompositor.composite(source: source, mask: mask, style: 5) === source)
     }
 
+    func testCustomMediaMirrorCompensationDoesNotMirrorThePersonMask() {
+        let extent = CGRect(x: 0, y: 0, width: 20, height: 20)
+        let source = CIImage(color: .green).cropped(to: extent)
+        let scene = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 10, height: 20))
+            .composited(over: CIImage(color: .blue).cropped(to: extent))
+        let mask = CIImage(color: .black).cropped(to: extent)
+        let result = PersonBackgroundCompositor.composite(source: source, mask: mask, style: 5, scene: scene, mirrorScene: true)
+        XCTAssertEqual(pixel(result, x: 2, y: 10), [0, 0, 255, 255])
+        XCTAssertEqual(pixel(result, x: 18, y: 10), [255, 0, 0, 255])
+        let person = PersonBackgroundCompositor.composite(source: source, mask: CIImage(color: .white).cropped(to: extent), style: 5, scene: scene, mirrorScene: true)
+        XCTAssertEqual(pixel(person, x: 2, y: 10), [0, 255, 0, 255])
+    }
+
     func testBackgroundConfigurationDoesNotRequireFaceModelAndRejectsUnknownStyles() throws {
         let coordinator = FaceARCoordinator(modelPath: nil)
         XCTAssertEqual(coordinator.capabilities["backgrounds"] as? Bool, true)

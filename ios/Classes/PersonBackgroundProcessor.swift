@@ -174,14 +174,14 @@ enum PersonBackgroundCompositor {
             .cropped(to: extent)
     }
 
-    static func composite(source: CIImage, mask: CIImage, style: Int, scene: CIImage? = nil) -> CIImage {
+    static func composite(source: CIImage, mask: CIImage, style: Int, scene: CIImage? = nil, mirrorScene: Bool = false) -> CIImage {
         guard style != 5 || scene != nil else { return source }
         guard style != 0, isValidStyle(style), let aligned = alignedMask(mask, to: source.extent) else { return source }
         let extent = source.extent
         let background: CIImage
         if let scene = scene, style == 2 || style == 3 || style == 5 {
             let scale = max(extent.width / scene.extent.width, extent.height / scene.extent.height)
-            let scaled = scene.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let scaled = scene.transformed(by: CGAffineTransform(scaleX: mirrorScene ? -scale : scale, y: scale))
             background = scaled.transformed(by: CGAffineTransform(
                 translationX: extent.midX - scaled.extent.midX,
                 y: extent.midY - scaled.extent.midY)).cropped(to: extent)

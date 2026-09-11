@@ -287,7 +287,8 @@ internal class FaceArController(
                     // Clear once after removing artwork; then pass through.
                     if (drawCreative || drawFace || background != null || overlayHadArtwork) {
                         frame.overlayCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                        if (background != null) backgroundRenderer.draw(frame, background)
+                        if (background != null) backgroundRenderer.draw(frame, background,
+                            background.style == 5 && localContext.mirrorOutput)
                         if (drawCreative) creativeRenderer.draw(
                             frame, localSettings.lensId, localSettings.intensity, localContext,
                         )

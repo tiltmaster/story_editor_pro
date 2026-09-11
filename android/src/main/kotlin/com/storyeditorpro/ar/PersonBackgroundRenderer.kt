@@ -36,7 +36,7 @@ internal class PersonBackgroundRenderer {
     fun isReady(style: Int, epoch: Int): Boolean =
         latest.isReady(style, epoch, SystemClock.elapsedRealtime())
 
-    fun draw(frame: Frame, background: SegmentedBackground) {
+    fun draw(frame: Frame, background: SegmentedBackground, mirrorScene: Boolean = false) {
         val source = background.geometry
         val inverseSensor = Matrix()
         if (!Matrix().apply { setValues(source.sensorToBuffer) }.invert(inverseSensor)) return
@@ -74,8 +74,11 @@ internal class PersonBackgroundRenderer {
             val scale = maxOf(sourceWidth / scene.width, sourceHeight / scene.height)
             val width = scene.width * scale / sourceWidth * bounds.width()
             val height = scene.height * scale / sourceHeight * bounds.height()
+            val sceneSave = canvas.save()
+            if (mirrorScene) canvas.scale(-1f, 1f, bounds.centerX(), bounds.centerY())
             canvas.drawBitmap(scene, null, RectF((bounds.width()-width)/2, (bounds.height()-height)/2,
                 (bounds.width()+width)/2, (bounds.height()+height)/2), paint)
+            canvas.restoreToCount(sceneSave)
             canvas.drawBitmap(bitmap, 0f, 0f, maskPaint)
             canvas.restoreToCount(layer)
         } finally { canvas.restoreToCount(saved) }

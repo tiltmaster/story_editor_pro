@@ -17,6 +17,39 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets(
+    'gallery background remains selected when another effect changes',
+    (tester) async {
+      CameraEffects latest = const CameraEffects();
+      Widget panel(CameraEffects effects) => _app(
+        child: _panel(
+          effects: effects,
+          onChanged: (value, _, __) => latest = value,
+        ),
+      );
+      await tester.pumpWidget(panel(const CameraEffects()));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        panel(
+          const CameraEffects(
+            backgroundStyle: 5,
+            backgroundPath: '/selected.mp4',
+            backgroundIsVideo: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _tap(tester, 'effects-tab-1');
+      final slider = tester.widget<Slider>(find.byType(Slider));
+      slider.onChanged!(.65);
+      await tester.pump();
+      expect(latest.beauty, .65);
+      expect(latest.backgroundStyle, 5);
+      expect(latest.backgroundPath, '/selected.mp4');
+      expect(latest.backgroundIsVideo, isTrue);
+    },
+  );
+
   test('favorite effects persist locally and reject empty effects', () async {
     final session = CameraEffectsUiSession();
     await session.toggleFavorite('lens', NativeArLensIds.butterflies);
@@ -614,30 +647,26 @@ void main() {
     expect(attempts, 2);
   });
 
-  testWidgets(
-    'reopening inline controls reuses the city cache',
-    (tester) async {
-      var requests = 0;
-      final session = CameraPlaceSession(
-        resolver: (_) async {
-          requests++;
-          return 'Kuwait City';
-        },
-      );
-      Widget panel(String key) => _app(
-        child: _panel(
-          key: ValueKey(key),
-          locationSession: session,
-        ),
-      );
-      await tester.pumpWidget(panel('first'));
-      await _tap(tester, 'effects-tab-3');
-      expect(find.byType(Scaffold), findsOneWidget);
-      await tester.pumpWidget(panel('second'));
-      await _tap(tester, 'effects-tab-3');
-      expect(requests, 1);
-    },
-  );
+  testWidgets('reopening inline controls reuses the city cache', (
+    tester,
+  ) async {
+    var requests = 0;
+    final session = CameraPlaceSession(
+      resolver: (_) async {
+        requests++;
+        return 'Kuwait City';
+      },
+    );
+    Widget panel(String key) => _app(
+      child: _panel(key: ValueKey(key), locationSession: session),
+    );
+    await tester.pumpWidget(panel('first'));
+    await _tap(tester, 'effects-tab-3');
+    expect(find.byType(Scaffold), findsOneWidget);
+    await tester.pumpWidget(panel('second'));
+    await _tap(tester, 'effects-tab-3');
+    expect(requests, 1);
+  });
 
   testWidgets('unsupported beauty and location controls cannot apply effects', (
     tester,

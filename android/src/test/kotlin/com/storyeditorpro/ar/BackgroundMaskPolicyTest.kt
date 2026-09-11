@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BackgroundMaskPolicyTest {
+    @Test fun customMediaBuildsAnAlphaMatteWithoutAnAuthoredGradient() {
+        val rgb = BackgroundMaskPolicy.color(5, .3f, .8f)
+        assertEquals(0xFFFFFF, rgb)
+        assertEquals(0xFFFFFFFF.toInt(), (BackgroundMaskPolicy.backgroundAlpha(0f) shl 24) or rgb)
+        assertEquals(0, BackgroundMaskPolicy.backgroundAlpha(1f))
+    }
     @Test fun confidentPersonPixelsRemainTransparentAndBackgroundIsOpaque() {
         assertEquals(0, BackgroundMaskPolicy.backgroundAlpha(1f))
         assertEquals(255, BackgroundMaskPolicy.backgroundAlpha(0f))

@@ -1,5 +1,8 @@
 ## 1.9.0
 
+- Sort galleries newest first, fix thumbnail initialization, and unify timer/menu icon backdrops.
+- Simplify the effects strip, preserve custom-media orientation and keep trim dragging accurate between frames.
+
 - Keep camera-switch transitions covered until newly composed frames are ready; ignore overlapping flip requests.
 - Restore a familiar side tool rail, show all five effects categories, and use consistent circular camera/editor controls.
 - Put recording lock beside the shutter and remove the idle timer bubble over the capture area.

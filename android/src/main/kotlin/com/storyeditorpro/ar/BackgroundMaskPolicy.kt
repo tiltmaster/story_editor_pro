@@ -18,6 +18,8 @@ internal object BackgroundMaskPolicy {
     }
 
     fun color(style: Int, x: Float, y: Float): Int {
+        // Custom media supplies the RGB image; this bitmap contributes alpha only.
+        if (style == 5) return 0xFFFFFF
         require(style in 1..3)
         val radius = sqrt((x - .5f) * (x - .5f) * .65f + (y - .35f) * (y - .35f))
         val glow = (1f - radius / .85f).coerceIn(0f, 1f)

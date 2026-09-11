@@ -623,7 +623,7 @@ final class FaceARCoordinator {
         let time = seconds.isFinite ? seconds : ProcessInfo.processInfo.systemUptime
         if let mask = backgroundMask {
             let source = PersonBackgroundCompositor.composite(source: CIImage(cvPixelBuffer: pixelBuffer),
-                                                               mask: mask, style: currentBackgroundStyle, scene: currentBackgroundStyle == 5 ? customBackground.frame() : backgroundScenes[currentBackgroundStyle])
+                                                               mask: mask, style: currentBackgroundStyle, scene: currentBackgroundStyle == 5 ? customBackground.frame() : backgroundScenes[currentBackgroundStyle], mirrorScene: currentBackgroundStyle == 5 && currentCreativeContext.mirrorOutput)
             return activeCreativeRenderer?.render(source: source, lensId: currentLensId,
                 intensity: currentIntensity, lensContext: currentCreativeContext, pose: currentPose, time: time) ?? pixelBuffer
         }
@@ -664,7 +664,7 @@ final class FaceARCoordinator {
         if currentBackgroundStyle > 0 {
             do {
                 let mask = try PersonBackgroundProcessor.photoMask(for: upright)
-                photoSource = PersonBackgroundCompositor.composite(source: upright, mask: mask, style: currentBackgroundStyle, scene: currentBackgroundStyle == 5 ? customBackground.frame() : backgroundScenes[currentBackgroundStyle])
+                photoSource = PersonBackgroundCompositor.composite(source: upright, mask: mask, style: currentBackgroundStyle, scene: currentBackgroundStyle == 5 ? customBackground.frame() : backgroundScenes[currentBackgroundStyle], mirrorScene: currentBackgroundStyle == 5 && currentContext.mirrorOutput)
             } catch {
                 emit(["type": "background", "backgroundReady": backgroundReady,
                       "code": "BACKGROUND_PHOTO_FAILED", "message": error.localizedDescription])

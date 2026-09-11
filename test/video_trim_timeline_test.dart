@@ -60,6 +60,20 @@ void main() {
     expect(range.start, greaterThan(500));
     expect(range.end - range.start, greaterThanOrEqualTo(250));
     expect(seek, range.start.round());
+    final before = range.start;
+    final drag = await tester.startGesture(
+      tester.getCenter(find.bySemanticsLabel('بداية المقطع')),
+    );
+    await drag.moveBy(const Offset(24, 0));
+    await drag.moveBy(const Offset(24, 0));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(
+      range.start - before,
+      closeTo(48 * 5000 / 296, 2),
+      reason:
+          'Pointer updates between rebuilds must accumulate without losing drag distance',
+    );
     expect(requests, 1, reason: 'Dragging must not decode the filmstrip again');
     expect(tester.takeException(), isNull);
   });

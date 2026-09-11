@@ -31,7 +31,7 @@ class AnchoredShutterControl extends StatelessWidget {
         alignment: Alignment.center,
         clipBehavior: Clip.none,
         children: [
-          if (status != null) Positioned(top: 0, child: status!),
+          if (status != null) Positioned(bottom: height, child: status!),
           Center(
             child: KeyedSubtree(key: shutterAnchorKey, child: shutter),
           ),
