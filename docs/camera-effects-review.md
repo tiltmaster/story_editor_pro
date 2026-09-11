@@ -1,5 +1,30 @@
 # Camera effects review and implementation
 
+## Connected Galaxy S23 Ultra verification — 11 September 2026
+
+- Front preview and captured-photo Analog Tape text are readable; all four
+  frame labels remain inside the editor's story canvas.
+- The host's authenticated place service returned nearby venues; selecting a
+  venue and changing its frame style retained its name.
+- Sunset replacement remained present throughout 690 frames of a 12-second
+  screen recording with subject movement. This is a continuity check, not a
+  camera FPS benchmark. The saved native four-second clip also retained the scene.
+- Exposure changed the real image between −2 EV and +2 EV, then was reset to 0.
+- Android's 250 ms mask-expiry rule caused visible background loss. Android and
+  iOS now retain the last completed same-session matte between inferences,
+  including transient failures. Recent tracking still gates capture; camera
+  changes, disable and scene changes invalidate the old matte. Extended stalls
+  may show an outdated silhouette until a new result arrives.
+- The first gallery-export attempt exposed an Android bitmap-lifetime bug:
+  same-size overlay scaling returned the original bitmap, which was recycled
+  before GL upload. The export path now preserves it through upload.
+- After that fix, a 1080 × 1920 Night + Analog Tape clip exported successfully
+  (89 frames, approximately 4.3 seconds, audio included). Its final MP4 has
+  readable corner labels, complete framing and continuous scene replacement.
+  Indoor test clips varied around 15–21 captured FPS; this does not establish
+  sustained 30 FPS performance or full camera-quality acceptance.
+- Generated Sunset/Night assets are 941 × 1672. They are not native 4K assets.
+
 Reviewed 5 September 2026. The working tree already contained substantial camera,
 export, shader, and AR edits; those were reviewed and extended in place.
 

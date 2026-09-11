@@ -161,7 +161,10 @@ class VideoOverlayProcessor {
             val overlaySrcWidth = overlayBitmap.width
             val overlaySrcHeight = overlayBitmap.height
             val scaledOverlay = scaleOverlayCoverCrop(overlayBitmap, resolvedOutputWidth, resolvedOutputHeight)
-            overlayBitmap.recycle()
+            // Bitmap scaling/cropping may return its input when dimensions
+            // already match (the normal 1080x1920 story export). Keep that
+            // shared bitmap alive until setOverlayBitmap uploads it to GL.
+            if (scaledOverlay !== overlayBitmap) overlayBitmap.recycle()
 
             onProgress?.invoke(0.05)
 
