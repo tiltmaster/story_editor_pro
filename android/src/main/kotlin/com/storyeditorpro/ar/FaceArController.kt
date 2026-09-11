@@ -278,7 +278,8 @@ internal class FaceArController(
                         )
                         overlayHadArtwork = drawCreative || drawFace || background != null
                     }
-                    if (backgroundStyle > 0) emitBackground(background != null)
+                    if (backgroundStyle > 0) emitBackground(
+                        backgroundRenderer.isReady(backgroundStyle, backgroundEpoch.get()))
                     true
                 }
             } catch (error: Throwable) {
@@ -356,8 +357,11 @@ internal class FaceArController(
                         }
                     },
                     onError = {
-                        backgroundRenderer.clear()
-                        emitBackground(false, "BACKGROUND_FAILED")
+                        // A failed inference must not remove the last valid
+                        // scene. A following frame retries on the same worker.
+                        if (!closed && expectedGeneration == generation.get()) {
+                            emitBackground(false, "BACKGROUND_FAILED")
+                        }
                     })
                 if (closed || expectedGeneration != generation.get()) { local.close(); return@execute }
                 segmenter = local

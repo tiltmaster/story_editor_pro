@@ -5,7 +5,9 @@ import kotlin.math.sqrt
 
 /** Person confidence is supplied by the bundled neural segmentation model. */
 internal object BackgroundMaskPolicy {
-    const val MAX_AGE_MS = 250L
+    // Allow a slow inference during encoder startup without toggling capture
+    // readiness on every frame. Display continuity is managed separately.
+    const val MAX_AGE_MS = 1000L
     fun isFresh(capturedMs: Long, nowMs: Long): Boolean = nowMs - capturedMs in 0..MAX_AGE_MS
 
     fun backgroundAlpha(personConfidence: Float): Int {

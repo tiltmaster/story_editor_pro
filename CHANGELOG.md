@@ -1,5 +1,7 @@
 ## 1.8.0
 
+- Keep background scenes visible between delayed segmentation results and transient inference failures; require recent tracking for capture.
+- Handle the first microphone permission prompt without producing an empty recording.
 - Fix mirrored Android effect text; front selfie mirroring defaults on and camera opens front first.
 - Keep a stable filter carousel across controls transitions and guard detached scroll reads.
 - Match camera and editor story framing so captured effect borders are retained.

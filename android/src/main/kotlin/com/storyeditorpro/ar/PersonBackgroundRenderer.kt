@@ -8,7 +8,6 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.os.SystemClock
 import androidx.camera.effects.Frame
-import java.util.concurrent.atomic.AtomicReference
 
 internal data class SegmentedBackground(
     val bitmap: Bitmap,
@@ -21,18 +20,21 @@ internal data class SegmentedBackground(
 
 /** Native composition is shared by preview, JPEG capture and recorded video. */
 internal class PersonBackgroundRenderer {
-    private val latest = AtomicReference<SegmentedBackground?>(null)
+    private val latest = BackgroundMaskCache<SegmentedBackground>()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
     }
 
-    fun update(background: SegmentedBackground) { latest.set(background) }
-    fun clear() { latest.set(null) }
-
-    fun current(style: Int, epoch: Int): SegmentedBackground? = latest.get()?.takeIf {
-        it.style == style && it.epoch == epoch && BackgroundMaskPolicy.isFresh(it.capturedMs, SystemClock.elapsedRealtime())
+    fun update(background: SegmentedBackground) {
+        latest.update(background, background.capturedMs, background.style, background.epoch)
     }
+    fun clear() { latest.clear() }
+
+    fun current(style: Int, epoch: Int): SegmentedBackground? = latest.current(style, epoch)
+
+    fun isReady(style: Int, epoch: Int): Boolean =
+        latest.isReady(style, epoch, SystemClock.elapsedRealtime())
 
     fun draw(frame: Frame, background: SegmentedBackground) {
         val source = background.geometry

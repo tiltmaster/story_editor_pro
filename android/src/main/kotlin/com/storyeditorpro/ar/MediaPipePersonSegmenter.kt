@@ -94,7 +94,10 @@ internal class MediaPipePersonSegmenter(
                         BackgroundMaskPolicy.color(style, x.toFloat() / max(1, width - 1), y.toFloat() / max(1, height - 1))
                     pixels[i] = (alpha shl 24) or rgb
                 }
-                if (!closed && BackgroundMaskPolicy.isFresh(capturedMs, SystemClock.elapsedRealtime())) {
+                // There is only one request in flight. A completed slow request
+                // is still our newest matte; discarding it made scenes vanish
+                // whenever inference exceeded the old 250 ms display deadline.
+                if (!closed) {
                     onResult(SegmentedBackground(Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888),
                         geometry, capturedMs, style, epoch, scenes[style]))
                 }

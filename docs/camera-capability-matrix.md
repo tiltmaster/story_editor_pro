@@ -1,6 +1,6 @@
 # Independent camera capability comparison
 
-Reviewed 8 September 2026 against Snapchat's documented camera and creation
+Implementation updated 11 September 2026 against Snapchat's documented camera and creation
 workflows. This is an implementation and verification ledger, not a percentage
 inferred from the number of filters. Android and iOS use our CameraX /
 AVFoundation pipeline, MediaPipe / Vision analysis and native compositors;
@@ -21,7 +21,7 @@ See [Snapchat's capture instructions](https://help.snapchat.com/hc/en-us/article
 | Tap to focus | Visible reticle; cover-crop and mirror compensation in Dart, sensor-coordinate mapping natively. Geometry tests cover portrait/rotation/crop. |
 | Brightness | Compact exposure slider, actual EV limits and Android EV-step snapping. |
 | Flash | Photo off/on/auto and recording torch; torch is shut down on stop, failure and teardown. |
-| Timer / looping capture | Existing timed hands-free video and boomerang; advanced modes live behind More. |
+| Timer / looping capture | Timed hands-free video and boomerang; tools are inline at the top, with compact timer choices. |
 | Photo/video gallery import | Existing gallery permission and picker flow. |
 
 ## Effects
@@ -37,8 +37,8 @@ carousel leads directly to the same photo/video shutter.
 | Beautification | Pixel smoothing plus tracked eye enlargement and face contour in preview and saved media. | No dense facial makeup/hair recoloring or age transformations. |
 | Face artwork | Celestial, hearts, freckles, neon contour and butterflies; retired glasses unavailable. | Single tracked face; no 3D character/face replacement. |
 | Expression reactions | Mouth-open hearts and wink-driven butterflies, using measured geometry and cooldown. | Two authored reactions, not a general lens-scripting ecosystem. |
-| Person backgrounds | Actual on-device confidence masks: Studio, Sunset, Night and blurred source background. | Hair edges, occlusion and rapid motion require physical-device assessment; no gallery-selected green screen yet. |
-| Location frames | Permission-aware current location and localized reverse-geocoded city; no manual/fabricated city entry. | City-level artwork, not a worldwide venue-specific catalog. |
+| Person backgrounds | On-device confidence masks: Studio, generated photographic Sunset/Night, and blurred source background. Last valid matte stays visible between inferences; capture requires recent tracking. | Generated assets are 941 × 1672, not native 4K. Rapid movement can expose matte lag; no gallery-selected green screen yet. |
+| Location frames | Permission-aware current location, localized city and host-provided nearby venues with remembered styles. | Nearby venues require a host resolver; coverage depends on its place catalog. |
 | Readable output | Native text/canvas orientation plus single final mirror; Arabic shaping in native graphics. | Device acceptance includes both mirror settings and saved photos/video. |
 | World lenses / object anchors | Not implemented. | Requires a separate world-tracking engine and authored 3D content. |
 | Multiple tracked people | Not implemented. | Current face effects track one face. |
@@ -73,7 +73,10 @@ expression thresholds, mask composition and export transformations. CI compiles
 Android and iOS and executes native tests; the local APK is excluded from Git.
 Release-specific results belong in `camera-effects-review.md`.
 
-Physical-device acceptance is performed by the user: cold/warm startup and FPS,
+Connected S23 Ultra checks confirmed readable Analog Tape text in preview and
+captured photos, retained frame borders, GPS-backed nearby venue selection and
+photographic person backgrounds. Broader physical-device acceptance remains:
+cold/warm startup and FPS,
 exposure/focus on real hardware, mask edges during movement, actual expression
 triggers, preview/photo/video consistency, front/back switching, Arabic place
 names, audio and repeated background/resume. Desktop tests cannot certify these

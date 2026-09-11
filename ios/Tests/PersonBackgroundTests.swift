@@ -8,6 +8,26 @@ import XCTest
 final class PersonBackgroundTests: XCTestCase {
     private let context = CIContext(options: [.useSoftwareRenderer: true])
 
+    func testDelayedOrFailedInferenceKeepsSceneButDoesNotAllowStaleCapture() {
+        var cache = PersonBackgroundMaskCache()
+        let size = CGSize(width: 100, height: 200)
+        let mask = CIImage(color: .white).cropped(to: CGRect(origin: .zero, size: size))
+        cache.update(mask, sourceSize: size, capturedAt: 10)
+        XCTAssertTrue(cache.isReady(now: 10.8))
+        XCTAssertFalse(cache.isReady(now: 12))
+        XCTAssertTrue(cache.current(sourceSize: size) === mask)
+        cache.update(nil, sourceSize: size, capturedAt: 12)
+        XCTAssertTrue(cache.current(sourceSize: size) === mask)
+        XCTAssertFalse(cache.isReady(now: 12))
+        cache.update(mask, sourceSize: size, capturedAt: 12)
+        XCTAssertTrue(cache.isReady(now: 12.1))
+        XCTAssertFalse(cache.isReady(now: 11.9))
+        XCTAssertNil(cache.current(sourceSize: CGSize(width: 200, height: 100)))
+        cache = PersonBackgroundMaskCache()
+        XCTAssertNil(cache.current(sourceSize: size))
+        XCTAssertFalse(cache.isReady(now: 12.1))
+    }
+
     func testPhotographicSceneUsesCoverFramingAndPreservesPersonPixels() {
         let extent = CGRect(x: 10, y: 20, width: 100, height: 200)
         let source = CIImage(color: CIColor(red: 1, green: 0, blue: 0)).cropped(to: extent)

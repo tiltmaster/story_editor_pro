@@ -3,11 +3,32 @@ import CoreVideo
 import Foundation
 import Vision
 
+/// A delayed/failed inference must not turn a selected scene off. Keep the
+/// last completed matte for display, but gate capture on recent tracking.
+struct PersonBackgroundMaskCache {
+    private var image: CIImage?
+    private var sourceSize = CGSize.zero
+    private var capturedAt: TimeInterval = -.infinity
+
+    mutating func update(_ result: CIImage?, sourceSize: CGSize, capturedAt: TimeInterval) {
+        guard let result = result else { return }
+        image = result; self.sourceSize = sourceSize; self.capturedAt = capturedAt
+    }
+
+    func current(sourceSize: CGSize) -> CIImage? {
+        sourceSize == self.sourceSize ? image : nil
+    }
+
+    func isReady(now: TimeInterval) -> Bool {
+        let age = now - capturedAt
+        return image != nil && age >= 0 && age <= 1.0
+    }
+}
+
 /// A real Vision person mask is the only input to background replacement.
 /// Capture frames are already upright and unmirrored, so source and mask share
 /// a coordinate space before the final Flutter presentation mirror.
 final class PersonBackgroundProcessor {
-    static let maximumMaskAge: TimeInterval = 0.35
     static let minimumRequestInterval: TimeInterval = 0.10
 
     private let lock = NSLock()
@@ -16,9 +37,7 @@ final class PersonBackgroundProcessor {
     private var generation: UInt = 0
     private var busy = false
     private var lastRequestAt: TimeInterval = -.infinity
-    private var mask: CIImage?
-    private var maskSourceSize = CGSize.zero
-    private var maskSourceTime: TimeInterval = -.infinity
+    private var masks = PersonBackgroundMaskCache()
     private var reportedReady = false
     private var lastFailure: String?
     // This stateful Vision request is created and used only by `queue`.
@@ -30,14 +49,14 @@ final class PersonBackgroundProcessor {
 
     var isReady: Bool {
         lock.lock(); defer { lock.unlock() }
-        return enabled && mask != nil && ProcessInfo.processInfo.systemUptime - maskSourceTime <= Self.maximumMaskAge
+        return enabled && masks.isReady(now: ProcessInfo.processInfo.systemUptime)
     }
 
     func setEnabled(_ value: Bool) {
         lock.lock()
         guard enabled != value else { lock.unlock(); return }
         enabled = value
-        generation &+= 1; busy = false; mask = nil
+        generation &+= 1; busy = false; masks = PersonBackgroundMaskCache()
         lastRequestAt = -.infinity; reportedReady = false; lastFailure = nil
         let currentGeneration = generation
         lock.unlock()
@@ -46,7 +65,7 @@ final class PersonBackgroundProcessor {
 
     func invalidate() {
         lock.lock()
-        generation &+= 1; busy = false; mask = nil
+        generation &+= 1; busy = false; masks = PersonBackgroundMaskCache()
         lastRequestAt = -.infinity; reportedReady = false; lastFailure = nil
         let notify = enabled
         let currentGeneration = generation
@@ -89,10 +108,8 @@ final class PersonBackgroundProcessor {
             self.lock.lock()
             guard self.enabled && self.generation == submittedGeneration else { self.lock.unlock(); return }
             self.busy = false
-            self.mask = generated
-            self.maskSourceSize = sourceSize
-            self.maskSourceTime = now
-            let ready = generated != nil && ProcessInfo.processInfo.systemUptime - now <= Self.maximumMaskAge
+            self.masks.update(generated, sourceSize: sourceSize, capturedAt: now)
+            let ready = self.masks.isReady(now: ProcessInfo.processInfo.systemUptime)
             let changed = ready != self.reportedReady || failure != self.lastFailure
             self.reportedReady = ready; self.lastFailure = failure
             self.lock.unlock()
@@ -102,10 +119,9 @@ final class PersonBackgroundProcessor {
 
     func latestMask(sourceSize: CGSize) -> CIImage? {
         lock.lock()
-        let valid = enabled && sourceSize == maskSourceSize &&
-            ProcessInfo.processInfo.systemUptime - maskSourceTime <= Self.maximumMaskAge
-        let image = valid ? mask : nil
-        let expired = !valid && reportedReady
+        let image = enabled ? masks.current(sourceSize: sourceSize) : nil
+        let ready = image != nil && masks.isReady(now: ProcessInfo.processInfo.systemUptime)
+        let expired = !ready && reportedReady
         if expired { reportedReady = false }
         let currentGeneration = generation
         lock.unlock()
@@ -120,8 +136,7 @@ final class PersonBackgroundProcessor {
             guard let self = self else { return }
             self.lock.lock()
             let current = self.generation == expected
-            let currentlyReady = self.enabled && self.mask != nil &&
-                ProcessInfo.processInfo.systemUptime - self.maskSourceTime <= Self.maximumMaskAge
+            let currentlyReady = self.enabled && self.masks.isReady(now: ProcessInfo.processInfo.systemUptime)
             self.lock.unlock()
             guard current else { return }
             // Camera expiry and worker completion can race. Deliver the current

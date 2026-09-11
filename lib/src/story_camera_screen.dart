@@ -2345,6 +2345,35 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     HapticFeedback.heavyImpact();
 
     try {
+      if (_usingNativeCamera &&
+          Platform.isAndroid &&
+          !await Permission.microphone.isGranted) {
+        final permission = await Permission.microphone.request();
+        // The OS dialog consumes the original hold/release gesture. Do not
+        // start an encoder after that release and immediately stop it with no
+        // valid frames; let the next deliberate hold begin the first video.
+        _recordingStartInProgress = false;
+        _recordingStopRequested = false;
+        _recordGesture.reset();
+        if (!mounted) return;
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              permission.isGranted
+                  ? _cameraText(
+                      'Microphone ready. Hold to record.',
+                      'الميكروفون جاهز. اضغط مطولًا للتسجيل.',
+                    )
+                  : _cameraText(
+                      'Allow microphone access to record video.',
+                      'اسمح بالوصول إلى الميكروفون لتسجيل الفيديو.',
+                    ),
+            ),
+          ),
+        );
+        return;
+      }
       await _beginBackendRecording();
       _recordingStartInProgress = false;
 

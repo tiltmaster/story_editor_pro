@@ -994,7 +994,8 @@ class StoryEditorProPlugin :
                                 videoResultCallback?.error(
                                     "RECORDING_ERROR",
                                     "Recording failed",
-                                    null,
+                                    mapOf("errorCode" to event.error,
+                                        "cause" to event.cause?.javaClass?.simpleName),
                                 )
                             } else {
                                 videoResultCallback?.success(currentVideoPath)

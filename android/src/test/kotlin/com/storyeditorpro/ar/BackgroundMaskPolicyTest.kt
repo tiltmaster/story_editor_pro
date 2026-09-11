@@ -16,10 +16,32 @@ class BackgroundMaskPolicyTest {
         assertEquals(0, BackgroundMaskPolicy.backgroundAlpha(Float.POSITIVE_INFINITY))
     }
 
-    @Test fun staleAndFutureMasksAreNeverReused() {
-        assertTrue(BackgroundMaskPolicy.isFresh(1000, 1250))
-        assertFalse(BackgroundMaskPolicy.isFresh(1000, 1251))
+    @Test fun captureReadinessRejectsStaleAndFutureMasks() {
+        assertTrue(BackgroundMaskPolicy.isFresh(1000, 2000))
+        assertFalse(BackgroundMaskPolicy.isFresh(1000, 2001))
         assertFalse(BackgroundMaskPolicy.isFresh(1001, 1000))
+    }
+
+    @Test fun slowInferenceDoesNotRemoveVisibleSceneButBlocksStaleCapture() {
+        val cache = BackgroundMaskCache<String>()
+        cache.update("sunset matte", 1000, 2, 7)
+        assertTrue(cache.isReady(2, 7, 1500))
+        assertFalse(cache.isReady(2, 7, 5000))
+        assertEquals("sunset matte", cache.current(2, 7))
+        cache.update("new matte", 4900, 2, 7)
+        assertTrue(cache.isReady(2, 7, 5000))
+        assertEquals("new matte", cache.current(2, 7))
+    }
+
+    @Test fun heldMatteCannotCrossCameraOrStyleChangesAndOffClearsIt() {
+        val cache = BackgroundMaskCache<String>()
+        cache.update("old camera", 1000, 2, 7)
+        assertNull(cache.current(2, 8))
+        assertNull(cache.current(3, 7))
+        assertFalse(cache.isReady(2, 8, 1100))
+        cache.clear()
+        assertNull(cache.current(2, 7))
+        assertFalse(cache.isReady(2, 7, 1100))
     }
 
     @Test fun eachAuthoredBackgroundUsesAnOpaqueRgbGradient() {
