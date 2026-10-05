@@ -78,11 +78,20 @@ public class StoryEditorProPlugin: NSObject, FlutterPlugin {
         arEvents.setStreamHandler(eventHandler)
     }
 
+    private let finalVideoValidator = FinalVideoValidator()
+    public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+        finalVideoValidator.cancelAll()
+    }
     private var boomerangProcessor: BoomerangProcessor?
     private var videoOverlayProcessor: VideoOverlayProcessor?
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+        case "validateFinalVideo":
+            finalVideoValidator.validate(call, result: result)
+        case "cancelFinalVideoValidation":
+            if let args = call.arguments as? [String: Any], let id = args["requestId"] as? String { finalVideoValidator.cancel(id) }
+            result(nil)
         case "getVideoThumbnails":
             guard let args = call.arguments as? [String: Any], let path = args["path"] as? String else {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing video", details: nil)); return

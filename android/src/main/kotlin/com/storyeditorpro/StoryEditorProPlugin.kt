@@ -49,6 +49,7 @@ class StoryEditorProPlugin :
     MethodCallHandler,
     ActivityAware,
     PluginRegistry.RequestPermissionsResultListener {
+    private val finalVideoValidator = FinalVideoValidator()
     private lateinit var channel: MethodChannel
     private lateinit var arMethodChannel: MethodChannel
     private lateinit var arEventChannel: EventChannel
@@ -164,6 +165,8 @@ class StoryEditorProPlugin :
             "stopVideoRecording" -> stopVideoRecording(result)
             "createBoomerang" -> createBoomerang(call, result)
             "createBoomerangFromFrames" -> createBoomerangFromFrames(call, result)
+            "validateFinalVideo" -> finalVideoValidator.validate(call, result)
+            "cancelFinalVideoValidation" -> { finalVideoValidator.cancel(call.argument<String>("requestId")); result.success(null) }
             "exportVideoWithOverlay" -> exportVideoWithOverlay(call, result)
             "dispose" -> dispose(result)
             else -> result.notImplemented()
@@ -1082,6 +1085,7 @@ class StoryEditorProPlugin :
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        finalVideoValidator.cancelAll()
         cancelRecordingStart?.invoke()
         turnOffRecordingTorch()
         recording?.stop()
