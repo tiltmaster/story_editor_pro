@@ -18,6 +18,7 @@ import 'gradient_text_editor.dart';
 import 'overlays/smart_stickers.dart';
 import 'video_overlay_export_service.dart';
 import 'models/story_result.dart';
+import 'models/story_capture_metadata.dart';
 import 'config/story_editor_config.dart';
 import 'config/story_editor_filters.dart';
 import 'editor_history.dart';
@@ -80,6 +81,7 @@ class StoryEditorScreen extends StatefulWidget {
   final double initialFilterStrength;
   final double initialBeautyStrength;
   final StoryEditorMusicSelection? initialMusic;
+  final StoryCaptureMetadata? initialCaptureMetadata;
 
   const StoryEditorScreen({
     super.key,
@@ -98,6 +100,7 @@ class StoryEditorScreen extends StatefulWidget {
     this.initialFilterStrength = 0.95,
     this.initialBeautyStrength = 0,
     this.initialMusic,
+    this.initialCaptureMetadata,
   }) : mediaPath = imagePath;
 
   @override
@@ -1807,6 +1810,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           right: 16,
           bottom: MediaQuery.of(context).viewPadding.bottom + 24,
           child: GestureDetector(
+            key: const ValueKey('editor-share'),
             onTap: _isSaving ? null : _showShareSheet,
             child: Container(
               width: 56,
@@ -2506,6 +2510,24 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       onTap: onTap,
       active: isActive,
       child: iconWidget ?? Icon(icon, color: Colors.white, size: 24),
+    );
+  }
+
+  StoryCaptureMetadata _captureMetadata() {
+    final locationStickers = _smartStickers.where((s) => s.type == SmartStickerType.location);
+    final locationLabel = locationStickers.isEmpty ? null : locationStickers.last.data['name'];
+    return StoryCaptureMetadata(
+      place: locationLabel?.trim().isNotEmpty == true
+          ? StoryCapturePlace(source: 'editor_location', label: locationLabel!)
+          : widget.initialCaptureMetadata?.place,
+      stickers: [
+        ...?widget.initialCaptureMetadata?.stickers,
+        for (final s in _smartStickers)
+          StoryCaptureSticker(type: s.type.name, variant: s.skin, value: s.data.values.join(' ')),
+        for (final text in _textOverlays) StoryCaptureSticker(type: 'text', value: text.text),
+        for (final _ in _imageOverlays) const StoryCaptureSticker(type: 'image'),
+        if (_drawings.isNotEmpty) const StoryCaptureSticker(type: 'drawing'),
+      ],
     );
   }
 
@@ -3880,6 +3902,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               ? (_trimEndMs - _trimStartMs)
               : null,
           music: _selectedMusic,
+          captureMetadata: _captureMetadata(),
         );
 
         final shareResult = StoryShareResult(

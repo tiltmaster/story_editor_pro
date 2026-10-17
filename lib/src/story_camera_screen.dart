@@ -1796,8 +1796,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 // onStoryShare callback is called from StoryEditorScreen
               }
             } else if (selectedAsset.type == AssetType.video) {
-              // Video selected - call callback
               widget.onImageCaptured?.call(file.path);
+              if (widget.showEditor && mounted) {
+                await Navigator.push<Map<String, dynamic>?>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => _withEditorConfig(StoryEditorScreen(
+                      imagePath: file.path,
+                      mediaType: MediaType.video,
+                      isFromGallery: true,
+                      initialMusic: _cameraMusic,
+                      primaryColor: widget.primaryColor,
+                      closeFriendsList: widget.closeFriendsList,
+                      userProfileImageUrl: widget.userProfileImageUrl,
+                      onShare: widget.onStoryShare,
+                    )),
+                  ),
+                );
+                _resetFilterSelection();
+              }
             }
           }
         }
@@ -1895,6 +1912,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     initialFilterPreset: capturedPixelFilterId,
                     initialFilterStrength: capturedFilterStrength,
                     initialBeautyStrength: _effects.beauty,
+                  initialCaptureMetadata: _effects.captureMetadata,
                     initialTextOverlay: pendingOverlay,
                     closeFriendsList: widget.closeFriendsList,
                     userProfileImageUrl: widget.userProfileImageUrl,
@@ -2526,6 +2544,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   initialFilterPreset: capturedPixelFilterId,
                   initialFilterStrength: capturedFilterStrength,
                   initialBeautyStrength: _effects.beauty,
+                  initialCaptureMetadata: _effects.captureMetadata,
                   closeFriendsList: widget.closeFriendsList,
                   userProfileImageUrl: widget.userProfileImageUrl,
                   onShare: widget.onStoryShare,
@@ -2547,6 +2566,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           final result = await StoryResult.fromFile(
             finalizedPath,
             durationMs: capturedDurationMs,
+            captureMetadata: _effects.captureMetadata,
           );
           widget.onStoryShare?.call(
             StoryShareResult(
@@ -2747,6 +2767,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   initialFilterPreset: capturedPixelFilterId,
                   initialFilterStrength: capturedFilterStrength,
                   initialBeautyStrength: _effects.beauty,
+                  initialCaptureMetadata: _effects.captureMetadata,
                   closeFriendsList: widget.closeFriendsList,
                   userProfileImageUrl: widget.userProfileImageUrl,
                   onShare: widget.onStoryShare,
@@ -2766,6 +2787,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           final result = await StoryResult.fromFile(
             finalizedPath,
             durationMs: capturedDurationMs,
+            captureMetadata: _effects.captureMetadata,
           );
           widget.onStoryShare?.call(
             StoryShareResult(
@@ -3017,6 +3039,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   initialFilterPreset: capturedPixelFilterId,
                   initialFilterStrength: capturedFilterStrength,
                   initialBeautyStrength: _effects.beauty,
+                  initialCaptureMetadata: _effects.captureMetadata,
                   closeFriendsList: widget.closeFriendsList,
                   userProfileImageUrl: widget.userProfileImageUrl,
                   onShare: widget.onStoryShare,
@@ -3036,6 +3059,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           final result = await StoryResult.fromFile(
             finalizedPath,
             durationMs: capturedDurationMs,
+            captureMetadata: _effects.captureMetadata,
           );
           widget.onStoryShare?.call(
             StoryShareResult(

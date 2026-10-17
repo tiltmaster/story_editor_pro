@@ -7,11 +7,14 @@ class CameraNearbyPlace {
     required this.name,
     required this.distanceMeters,
     this.identity = const CameraPlaceIdentity(),
+    this.latitude, this.longitude, this.legacyPlaceId,
   });
   final String id;
   final String name;
   final double distanceMeters;
   final CameraPlaceIdentity identity;
+  final double? latitude, longitude;
+  final String? legacyPlaceId;
 }
 
 typedef CameraNearbyResolver =
@@ -46,6 +49,7 @@ List<CameraNearbyPlace> normalizeNearbyCameraPlaces(
           name: String.fromCharCodes(p.name.trim().runes.take(64)),
           distanceMeters: p.distanceMeters,
           identity: p.identity,
+          latitude: p.latitude, longitude: p.longitude, legacyPlaceId: p.legacyPlaceId,
         ),
       )
       .toList(growable: false);

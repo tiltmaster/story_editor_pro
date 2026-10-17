@@ -393,6 +393,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       _change(
         effects: _effects.copyWith(
           placeName: selected.name,
+          nearbyPlace: selected,
           placeIdentity: selected.identity,
           placeStyle: _requestedPlaceStyle,
         ),

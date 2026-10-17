@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'place_identity.dart';
+import 'models/story_capture_metadata.dart';
 export 'place_identity.dart';
 import 'place_sticker_geometry.dart';
 import 'package:flutter/foundation.dart';
@@ -29,6 +30,7 @@ class CameraEffects {
     this.placeScale = 1,
     this.placeRotation = 0,
     this.placeIdentity = const CameraPlaceIdentity(),
+    this.nearbyPlace,
   });
 
   final double beauty;
@@ -45,6 +47,19 @@ class CameraEffects {
   final int placeVariant;
   final double placeX, placeY, placeScale, placeRotation;
   final CameraPlaceIdentity placeIdentity;
+  final CameraNearbyPlace? nearbyPlace;
+
+  StoryCaptureMetadata? get captureMetadata {
+    if (placeStyle == 'none' || placeName.isEmpty) return null;
+    final venue = nearbyPlace;
+    return StoryCaptureMetadata(
+      place: StoryCapturePlace(
+        source: venue == null ? 'camera_city' : 'camera_nearby',
+        label: placeName, id: venue?.id, latitude: venue?.latitude,
+        longitude: venue?.longitude, legacyPlaceId: venue?.legacyPlaceId),
+      stickers: [StoryCaptureSticker(type: 'place', variant: placeVariant, value: placeName)],
+    );
+  }
 
   int get layerCount =>
       (beauty > 0 || beautyEyes > 0 || beautySlim > 0 ? 1 : 0) +
@@ -68,6 +83,7 @@ class CameraEffects {
     double? placeScale,
     double? placeRotation,
     CameraPlaceIdentity? placeIdentity,
+    CameraNearbyPlace? nearbyPlace,
   }) {
     final nextStyle = placeStyle ?? this.placeStyle;
     final angle = placeRotation ?? this.placeRotation;
@@ -97,6 +113,8 @@ class CameraEffects {
       placeScale: fittedScale,
       placeRotation: rotation,
       placeIdentity: placeIdentity ?? this.placeIdentity,
+      nearbyPlace: nextStyle == 'none' ? null : nearbyPlace ??
+          (placeName != null ? null : this.nearbyPlace),
       placeName: placeName == null
           ? this.placeName
           : String.fromCharCodes(placeName.trim().runes.take(64)),

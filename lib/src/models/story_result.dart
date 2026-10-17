@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../config/story_editor_config.dart';
+import 'story_capture_metadata.dart';
 
 /// Media type for story result
 enum StoryMediaType { image, video }
@@ -135,6 +136,7 @@ class StoryResult {
   /// Host-owned music metadata selected in edit mode. Playback URLs and
   /// credentials are intentionally never serialized by the package.
   final StoryEditorMusicSelection? music;
+  final StoryCaptureMetadata? captureMetadata;
 
   const StoryResult({
     required this.filePath,
@@ -146,6 +148,7 @@ class StoryResult {
     this.height,
     this.durationMs,
     this.music,
+    this.captureMetadata,
   });
 
   /// Get the File object
@@ -223,6 +226,8 @@ class StoryResult {
       if (height != null) 'height': height,
       if (durationMs != null) 'durationMs': durationMs,
       if (durationMs != null) 'durationFormatted': durationFormatted,
+      if (captureMetadata != null)
+        'captureMetadata': captureMetadata!.toJson(),
       if (music != null)
         'music': {
           'id': music!.id,
@@ -242,6 +247,7 @@ class StoryResult {
     int? height,
     int? durationMs,
     StoryEditorMusicSelection? music,
+    StoryCaptureMetadata? captureMetadata,
   }) async {
     final file = File(filePath);
     final stat = await file.stat();
@@ -260,6 +266,7 @@ class StoryResult {
       height: height,
       durationMs: durationMs,
       music: music,
+      captureMetadata: captureMetadata,
     );
   }
 
