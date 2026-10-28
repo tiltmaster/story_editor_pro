@@ -79,7 +79,14 @@ dependencies {
 
     testImplementation 'junit:junit:4.13.2'
 
+    // Newer Flutter SDKs no longer cache this jar (3.44.9 ships only the
+    // embedding AAR), and an unconditional compileOnly on a missing file fails
+    // JetifyTransform and breaks every Android build of the consuming app.
     if (flutterRoot != null) {
-        compileOnly files("$flutterRoot/bin/cache/artifacts/engine/android-arm-release/flutter.jar")
+        def flutterEmbeddingJar =
+            file("$flutterRoot/bin/cache/artifacts/engine/android-arm-release/flutter.jar")
+        if (flutterEmbeddingJar.exists()) {
+            compileOnly files(flutterEmbeddingJar)
+        }
     }
 }

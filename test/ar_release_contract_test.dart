@@ -41,6 +41,19 @@ void main() {
       );
     });
 
+    test('the Flutter embedding jar is only added when it exists', () {
+      // Flutter 3.44.9 no longer caches android-arm-release/flutter.jar. An
+      // unconditional compileOnly on it fails JetifyTransform and breaks every
+      // Android build of the consuming app, release and debug alike.
+      final gradle = read('android/build.gradle');
+      expect(gradle, contains('if (flutterEmbeddingJar.exists())'));
+      expect(
+        gradle,
+        isNot(contains('compileOnly files("\$flutterRoot/bin/cache')),
+        reason: 'the jar must never be referenced unguarded',
+      );
+    });
+
     test('the delegate fallback survives Error, not just RuntimeException', () {
       // A stripped or missing GPU delegate raises NoSuchMethodError /
       // UnsatisfiedLinkError. Catching RuntimeException skipped the CPU path.
