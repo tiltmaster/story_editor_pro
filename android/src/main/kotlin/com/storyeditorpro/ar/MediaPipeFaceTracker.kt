@@ -36,9 +36,12 @@ internal class MediaPipeFaceTracker private constructor(
                 rewind()
             }
         var chosen = "gpu"
+        // A missing GPU delegate library surfaces as UnsatisfiedLinkError, and a
+        // minified consumer build surfaces as NoSuchMethodError. Both are Errors,
+        // so catching RuntimeException alone skipped the CPU fallback entirely.
         landmarker = try {
             createLandmarker(context, Delegate.GPU)
-        } catch (_: RuntimeException) {
+        } catch (_: Throwable) {
             chosen = "cpu"
             modelBuffer.rewind()
             createLandmarker(context, Delegate.CPU)

@@ -239,6 +239,9 @@ class NativeArController {
         error.details,
       );
     }
+    // A failed probe must not be memoized. The camera retries preparation when
+    // it resumes, and caching the failure kept AR off for the whole session.
+    if (!_capabilities.available) _capabilitiesRequest = null;
     return _capabilities;
   }
 

@@ -532,6 +532,10 @@ internal class FaceArController(
     }
 
     private fun emitError(code: String, cause: Throwable) {
+        // The channel message stays sanitized, but the cause belongs in logcat:
+        // without it a minified or delegate-level failure is indistinguishable
+        // from "this device has no AR".
+        android.util.Log.e(TAG, "Native AR failed ($code)", cause)
         // Do not send native exception text: it may contain an APK asset or filesystem path.
         val safeMessage = when (code) {
             "PREPARE_FAILED" -> "AR preparation failed"
@@ -556,7 +560,10 @@ internal class FaceArController(
 
     private fun assetExists(path: String): Boolean = try {
         context.assets.open(path).use { true }
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        // This silently removes the face lenses from the advertised capability
+        // set, so the reason has to reach logcat or the drop is undiagnosable.
+        android.util.Log.e(TAG, "AR asset unavailable: $path", error)
         false
     }
 
@@ -585,6 +592,7 @@ internal class FaceArController(
     }
 
     companion object {
+        private const val TAG = "StoryFaceAr"
         internal const val OVERLAY_QUEUE_DEPTH = 0
         internal const val EFFECT_TARGETS =
             CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE or CameraEffect.IMAGE_CAPTURE

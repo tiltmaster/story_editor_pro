@@ -56,6 +56,9 @@ android {
         // Keep the plugin contract aligned so consumers cannot discover the
         // incompatibility only during manifest merging.
         minSdk 24
+        // MediaPipe ships no consumer rules, so a consuming app that minifies
+        // its release build would strip the JNI surface the face tracker needs.
+        consumerProguardFiles 'consumer-rules.pro'
     }
 
     sourceSets {

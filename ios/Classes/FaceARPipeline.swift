@@ -377,7 +377,9 @@ final class FaceARCoordinator {
 
     func setEventSink(_ sink: FlutterEventSink?) {
         lock.lock(); eventSink = sink; let current = state; lock.unlock()
-        emit(["type": "state", "state": current.rawValue, "backgroundReady": backgroundReady])
+        // Replay the full state. Dart subscribes only once a lens is selected,
+        // so a tracker that became ready beforehand is announced here or never.
+        emitState(current)
     }
 
     func prepare() {
