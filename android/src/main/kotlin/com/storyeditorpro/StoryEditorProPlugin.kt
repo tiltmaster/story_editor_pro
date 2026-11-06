@@ -551,25 +551,25 @@ class StoryEditorProPlugin :
         val photoFile = File(context.cacheDir, "story_${System.currentTimeMillis()}.jpg")
 
         val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-        val completion = SingleCompletionGate()
+        val completion = PhotoCaptureCompletionGate()
         lateinit var timeoutTask: Runnable
 
         fun postError(code: String, message: String) {
             mainHandler.post {
-                if (completion.tryComplete()) {
+                if (completion.tryFail()) {
                     mainHandler.removeCallbacks(timeoutTask)
-                    photoFile.delete()
+                    completion.cleanupIfFailed { photoFile.delete() }
                     result.error(code, message, null)
                 } else {
                     // A timed-out capture may finish writing after the first cleanup attempt.
-                    photoFile.delete()
+                    completion.cleanupIfFailed { photoFile.delete() }
                 }
             }
         }
 
         timeoutTask = Runnable {
-            if (completion.tryComplete()) {
-                photoFile.delete()
+            if (completion.tryFail()) {
+                completion.cleanupIfFailed { photoFile.delete() }
                 result.error(
                     "CAPTURE_TIMEOUT",
                     "Photo capture timed out; please try again",
@@ -589,14 +589,26 @@ class StoryEditorProPlugin :
                     }
 
                     override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                        val correctedPath = correctImageOrientation(photoFile.absolutePath)
+                        if (!completion.tryBeginProcessing()) {
+                            completion.cleanupIfFailed { photoFile.delete() }
+                            return
+                        }
+                        val correctedPath = try {
+                            correctImageOrientation(photoFile.absolutePath)
+                        } finally {
+                            completion.finishProcessing()
+                            completion.cleanupIfFailed { photoFile.delete() }
+                        }
+                        if (correctedPath == null) {
+                            postError("CAPTURE_ERROR", "Captured image is unavailable or invalid")
+                            return
+                        }
                         mainHandler.post {
-                            if (completion.tryComplete()) {
+                            if (completion.trySucceed()) {
                                 mainHandler.removeCallbacks(timeoutTask)
                                 result.success(correctedPath)
                             } else {
-                                // Never leave a late JPEG behind after Dart already received timeout.
-                                photoFile.delete()
+                                completion.cleanupIfFailed { photoFile.delete() }
                             }
                         }
                     }
@@ -607,17 +619,20 @@ class StoryEditorProPlugin :
         }
     }
 
-    private fun correctImageOrientation(imagePath: String): String {
+    private fun correctImageOrientation(imagePath: String): String? {
+        var bitmap: Bitmap? = null
+        var rotatedBitmap: Bitmap? = null
         try {
+            val photo = File(imagePath)
+            if (!photo.isFile || photo.length() == 0L) return null
             val exif = ExifInterface(imagePath)
             val orientation = exif.getAttributeInt(
                 ExifInterface.TAG_ORIENTATION,
                 ExifInterface.ORIENTATION_NORMAL
             )
-
-            val bitmap = BitmapFactory.decodeFile(imagePath)
+            val decoded = BitmapFactory.decodeFile(imagePath) ?: return null
+            bitmap = decoded
             val matrix = Matrix()
-
             when (orientation) {
                 ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
                 ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
@@ -625,22 +640,20 @@ class StoryEditorProPlugin :
                 ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
                 ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
             }
-
-            val rotatedBitmap = Bitmap.createBitmap(
-                bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+            val corrected = Bitmap.createBitmap(
+                decoded, 0, 0, decoded.width, decoded.height, matrix, true
             )
-
+            rotatedBitmap = corrected
             FileOutputStream(imagePath).use { out ->
-                rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                if (!corrected.compress(Bitmap.CompressFormat.JPEG, 95, out)) return null
             }
-
-            bitmap.recycle()
-            rotatedBitmap.recycle()
-
-        } catch (e: Exception) {
-            e.printStackTrace()
+            return imagePath.takeIf { photo.isFile && photo.length() > 0L }
+        } catch (_: Exception) {
+            return null
+        } finally {
+            if (rotatedBitmap !== bitmap) rotatedBitmap?.recycle()
+            bitmap?.recycle()
         }
-        return imagePath
     }
 
     private fun switchCamera(result: Result) {
