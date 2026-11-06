@@ -11,10 +11,15 @@ class CameraPlaceGesture extends StatefulWidget {
     required this.effects,
     required this.onChanged,
     required this.onCycle,
+    this.onDragStart,
+    this.onDragUpdate,
+    this.onDragEnd,
   });
   final CameraEffects effects;
   final ValueChanged<CameraEffects> onChanged;
   final VoidCallback onCycle;
+  final VoidCallback? onDragStart, onDragEnd;
+  final ValueChanged<Offset>? onDragUpdate;
   @override
   State<CameraPlaceGesture> createState() => _CameraPlaceGestureState();
 }
@@ -53,9 +58,11 @@ class _CameraPlaceGestureState extends State<CameraPlaceGesture> {
                     _start = local(d.focalPoint);
                     _initial = e;
                     setState(() => _dragging = true);
+                    widget.onDragStart?.call();
                   },
                   onScaleUpdate: (d) {
                     final delta = local(d.focalPoint) - _start;
+                    widget.onDragUpdate?.call(d.focalPoint);
                     widget.onChanged(
                       e.copyWith(
                         placeScale: _initial.placeScale * d.scale,
@@ -65,7 +72,10 @@ class _CameraPlaceGestureState extends State<CameraPlaceGesture> {
                       ),
                     );
                   },
-                  onScaleEnd: (_) => setState(() => _dragging = false),
+                  onScaleEnd: (_) {
+                    setState(() => _dragging = false);
+                    widget.onDragEnd?.call();
+                  },
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(8),

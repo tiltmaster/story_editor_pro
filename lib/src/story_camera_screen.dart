@@ -1801,16 +1801,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 await Navigator.push<Map<String, dynamic>?>(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => _withEditorConfig(StoryEditorScreen(
-                      imagePath: file.path,
-                      mediaType: MediaType.video,
-                      isFromGallery: true,
-                      initialMusic: _cameraMusic,
-                      primaryColor: widget.primaryColor,
-                      closeFriendsList: widget.closeFriendsList,
-                      userProfileImageUrl: widget.userProfileImageUrl,
-                      onShare: widget.onStoryShare,
-                    )),
+                    builder: (_) => _withEditorConfig(
+                      StoryEditorScreen(
+                        imagePath: file.path,
+                        mediaType: MediaType.video,
+                        isFromGallery: true,
+                        initialMusic: _cameraMusic,
+                        primaryColor: widget.primaryColor,
+                        closeFriendsList: widget.closeFriendsList,
+                        userProfileImageUrl: widget.userProfileImageUrl,
+                        onShare: widget.onStoryShare,
+                      ),
+                    ),
                   ),
                 );
                 _resetFilterSelection();
@@ -1912,7 +1914,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     initialFilterPreset: capturedPixelFilterId,
                     initialFilterStrength: capturedFilterStrength,
                     initialBeautyStrength: _effects.beauty,
-                  initialCaptureMetadata: _effects.captureMetadata,
+                    initialCaptureMetadata: _effects.captureMetadata,
                     initialTextOverlay: pendingOverlay,
                     closeFriendsList: widget.closeFriendsList,
                     userProfileImageUrl: widget.userProfileImageUrl,
@@ -3284,17 +3286,49 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
+  bool _previewWasPinch = false;
+
   void _onScaleStart(ScaleStartDetails details) {
+    _previewWasPinch = details.pointerCount > 1;
     _baseZoomLevel = _zoomLevel;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     if (!_cameraReady) return;
+    if (details.pointerCount > 1) _previewWasPinch = true;
+    if (!_previewWasPinch) return;
 
     final newZoom = (_baseZoomLevel * details.scale).clamp(_minZoom, _maxZoom);
     if (newZoom != _zoomLevel) {
       setState(() => _zoomLevel = newZoom);
       unawaited(_setBackendZoom(_zoomLevel));
+    }
+  }
+
+  void _onPreviewScaleEnd(ScaleEndDetails details) {
+    // One recognizer owns both swipe and pinch. A competing horizontal-drag
+    // recognizer could claim the first finger before the pinch began.
+    if (_previewWasPinch) return;
+    if (_filterSelectionLocked) {
+      return;
+    }
+    final velocity = details.velocity.pixelsPerSecond.dx;
+    if (velocity.abs() < 120) return;
+    var next = _activeFilterIndex;
+    if (velocity < 0 && _activeFilterIndex < _combinedFilterCount - 1) {
+      next++;
+    } else if (velocity > 0 && _activeFilterIndex > 0) {
+      next--;
+    }
+    if (!_canSelectFilterIndex(next)) return;
+    setState(() => _activeFilterIndex = next);
+    unawaited(_applyNativeArSelection());
+    if (_hasSingleFilterPosition) {
+      _filterPageController.animateToPage(
+        next,
+        duration: CameraFilterSliderContract.swipeAnimationDuration,
+        curve: Curves.easeOut,
+      );
     }
   }
 
@@ -3958,6 +3992,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           fit: StackFit.expand,
           children: [
             GestureDetector(
+              key: const ValueKey('camera-preview-gestures'),
               onDoubleTap: _filterSelectionLocked ? null : _switchCamera,
               onTapUp: (details) => _focusAt(
                 Offset(
@@ -3968,30 +4003,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               ),
               onScaleStart: _onScaleStart,
               onScaleUpdate: _onScaleUpdate,
-              onHorizontalDragEnd: (details) {
-                if (_filterSelectionLocked) {
-                  return;
-                }
-                final velocity = details.primaryVelocity ?? 0;
-                if (velocity.abs() < 120) return;
-                var next = _activeFilterIndex;
-                if (velocity < 0 &&
-                    _activeFilterIndex < _combinedFilterCount - 1) {
-                  next++;
-                } else if (velocity > 0 && _activeFilterIndex > 0) {
-                  next--;
-                }
-                if (!_canSelectFilterIndex(next)) return;
-                setState(() => _activeFilterIndex = next);
-                unawaited(_applyNativeArSelection());
-                if (_hasSingleFilterPosition) {
-                  _filterPageController.animateToPage(
-                    next,
-                    duration: CameraFilterSliderContract.swipeAnimationDuration,
-                    curve: Curves.easeOut,
-                  );
-                }
-              },
+              onScaleEnd: _onPreviewScaleEnd,
               child: ClipRect(
                 child: SizedBox.expand(
                   child: FittedBox(

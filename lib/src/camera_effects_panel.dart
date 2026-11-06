@@ -26,11 +26,14 @@ class CameraEffectsPanel extends StatefulWidget {
     required this.onChanged,
     this.arEvents,
     this.onClose,
+    this.onChangeCommitted,
     this.onPickBackground,
     this.locationSession,
     this.uiSession,
+    this.visibleTabs = const [2, 0, 1, 3, 4],
   });
 
+  final List<int> visibleTabs;
   final CameraEffects effects;
   final String lookId;
   final double lookStrength;
@@ -42,6 +45,7 @@ class CameraEffectsPanel extends StatefulWidget {
   final bool backgroundReady;
   final Stream<NativeArEvent>? arEvents;
   final VoidCallback? onClose;
+  final VoidCallback? onChangeCommitted;
   final Future<void> Function()? onPickBackground;
   final CameraPlaceSession? locationSession;
   final CameraEffectsUiSession? uiSession;
@@ -52,7 +56,8 @@ class CameraEffectsPanel extends StatefulWidget {
   State<CameraEffectsPanel> createState() => _CameraEffectsPanelState();
 }
 
-class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
+class _CameraEffectsPanelState extends State<CameraEffectsPanel>
+    with WidgetsBindingObserver {
   static const _accent = Colors.white;
   late CameraEffects _effects = widget.effects;
   late String _look = widget.lookId;
@@ -61,7 +66,9 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       widget.locationSession ?? CameraPlaceSession();
   late final CameraEffectsUiSession _ui =
       widget.uiSession ?? CameraEffectsUiSession();
-  late int _tab = _ui.category.clamp(0, 4);
+  late int _tab = widget.visibleTabs.contains(_ui.category)
+      ? _ui.category
+      : widget.visibleTabs.first;
   late int _beautyControl = _ui.beautyControl.clamp(0, 2);
   late final Map<int, ScrollController> _scrollers;
   final List<GlobalKey> _tabKeys = List.generate(5, (_) => GlobalKey());
@@ -70,6 +77,8 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
   bool _locating = false;
   bool _findingNearby = false;
   String? _locationError;
+  CameraPlaceRecovery? _locationRecovery;
+  bool _awaitingLocationSettings = false;
   late String _requestedPlaceStyle =
       _ui.requestedPlaceStyle ??
       (_effects.placeStyle == 'none' ? 'postcard' : _effects.placeStyle);
@@ -85,6 +94,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _listenForBackground();
     _scrollers = {
       for (final tab in [0, 2, 3, 4])
@@ -119,6 +129,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _backgroundEvents?.cancel();
     for (final controller in _scrollers.values) {
       controller.dispose();
@@ -238,6 +249,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
       };
     });
     widget.onChanged(_effects, _look, _strength);
+    if (strength == null) widget.onChangeCommitted?.call();
   }
 
   void _selectTab(int tab) {
@@ -254,20 +266,23 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           (_effects.placeStyle == 'none' ? 'postcard' : _effects.placeStyle);
       _ui.requestedPlaceStyle = _requestedPlaceStyle;
       if (_requestedPlaceStyle != 'none' && _effects.placeName.isEmpty) {
-        _locate();
+        _locate(userInitiated: true);
       }
     }
   }
 
-  Future<void> _locate() async {
+  Future<void> _locate({bool userInitiated = false}) async {
     if (_locating || !widget.supportsPlaces) return;
     final revision = ++_locationRevision;
     final locale = Localizations.localeOf(context).toString();
     setState(() {
       _locating = true;
       _locationError = null;
+      _locationRecovery = null;
     });
     try {
+      await _locationSession.prepareAccess(userInitiated: userInitiated);
+      if (!mounted || revision != _locationRevision) return;
       final name = await _locationSession.resolve(localeIdentifier: locale);
       if (!mounted || revision != _locationRevision) return;
       if (_requestedPlaceStyle != 'none') {
@@ -279,14 +294,31 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           ),
         );
       }
-    } catch (_) {
+    } catch (error) {
       if (mounted && revision == _locationRevision) {
-        setState(
-          () => _locationError = t(
-            'Allow location access and turn on GPS, then retry.',
-            'اسمح بالوصول للموقع وفعّل GPS، ثم أعد المحاولة.',
-          ),
-        );
+        setState(() {
+          _locationRecovery = error is CameraPlaceAccessException
+              ? error.recovery
+              : null;
+          _locationError = switch (_locationRecovery) {
+            CameraPlaceRecovery.permission => t(
+              'Allow location to find nearby places.',
+              'اسمح بالموقع للعثور على الأماكن القريبة.',
+            ),
+            CameraPlaceRecovery.appSettings => t(
+              'Allow location in app settings.',
+              'اسمح بالموقع في إعدادات التطبيق.',
+            ),
+            CameraPlaceRecovery.services => t(
+              'Turn on location services.',
+              'فعّل خدمات الموقع.',
+            ),
+            _ => t(
+              'Could not find your location. Try again.',
+              'تعذّر تحديد موقعك. أعد المحاولة.',
+            ),
+          };
+        });
       }
     } finally {
       if (mounted && revision == _locationRevision) {
@@ -313,8 +345,33 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         ),
       );
     } else {
-      _locate();
+      _locate(userInitiated: true);
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _awaitingLocationSettings) {
+      _awaitingLocationSettings = false;
+      if (mounted) _locate();
+    }
+  }
+
+  Future<void> _retryLocation() async {
+    final recovery = _locationRecovery;
+    if (recovery == CameraPlaceRecovery.services ||
+        recovery == CameraPlaceRecovery.appSettings) {
+      _awaitingLocationSettings = true;
+      try {
+        if (!await _locationSession.openSettings(recovery!)) {
+          _awaitingLocationSettings = false;
+        }
+      } catch (_) {
+        _awaitingLocationSettings = false;
+      }
+      return;
+    }
+    await _locate(userInitiated: true);
   }
 
   Future<void> _chooseNearby(BuildContext anchor) async {
@@ -322,6 +379,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
     final locale = Localizations.localeOf(context).toString();
     setState(() => _findingNearby = true);
     try {
+      await _locationSession.prepareAccess(userInitiated: true);
       final places = await _locationSession.nearby(localeIdentifier: locale);
       if (!mounted || !anchor.mounted) return;
       if (places.isEmpty) {
@@ -398,14 +456,21 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
           placeStyle: _requestedPlaceStyle,
         ),
       );
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
-        setState(
-          () => _notice = t(
-            'Nearby places unavailable. Tap Nearby to retry.',
-            'الأماكن القريبة غير متاحة. اضغط «قريب» للمحاولة مجدداً.',
-          ),
-        );
+        setState(() {
+          if (error is CameraPlaceAccessException) {
+            _locationRecovery = error.recovery;
+            _locationError = switch (error.recovery) {
+              CameraPlaceRecovery.permission => t('Allow location to find nearby places.', 'اسمح بالموقع للعثور على الأماكن القريبة.'),
+              CameraPlaceRecovery.appSettings => t('Allow location in app settings.', 'اسمح بالموقع في إعدادات التطبيق.'),
+              CameraPlaceRecovery.services => t('Turn on location services.', 'فعّل خدمات الموقع.'),
+            };
+          } else {
+            _notice = t('Nearby places unavailable. Tap Nearby to retry.',
+                'الأماكن القريبة غير متاحة. اضغط «قريب» للمحاولة مجدداً.');
+          }
+        });
       }
     } finally {
       if (mounted) setState(() => _findingNearby = false);
@@ -504,7 +569,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
                     (1, t('Beauty', 'جمال')),
                     (3, t('Places', 'أماكن')),
                     (4, t('Scenes', 'خلفيات')),
-                  ])
+                  ].where((choice) => widget.visibleTabs.contains(choice.$1)))
                     Expanded(
                       child: Semantics(
                         key: _tabKeys[index],
@@ -1051,14 +1116,25 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
         children: [
           Expanded(child: _statusText(_locationError!, error: true)),
           TextButton(
-            onPressed: _locate,
+            onPressed: _retryLocation,
             style: TextButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 8),
             ),
-            child: Text(
-              t('Retry', 'إعادة المحاولة'),
-              style: const TextStyle(fontSize: 11),
-            ),
+            child: Text(switch (_locationRecovery) {
+              CameraPlaceRecovery.services => t(
+                'Open location settings',
+                'إعدادات الموقع',
+              ),
+              CameraPlaceRecovery.appSettings => t(
+                'Open app settings',
+                'إعدادات التطبيق',
+              ),
+              CameraPlaceRecovery.permission => t(
+                'Allow location',
+                'السماح بالموقع',
+              ),
+              _ => t('Retry', 'إعادة المحاولة'),
+            }, style: const TextStyle(fontSize: 11)),
           ),
         ],
       );
@@ -1132,6 +1208,7 @@ class _CameraEffectsPanelState extends State<CameraEffectsPanel> {
             child: Slider(
               value: value.clamp(0, 1),
               onChanged: onChanged,
+              onChangeEnd: (_) => widget.onChangeCommitted?.call(),
               semanticFormatterCallback: _percent,
             ),
           ),

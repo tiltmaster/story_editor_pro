@@ -1,3 +1,5 @@
+import 'camera_place_access.dart';
+export 'camera_place_access.dart';
 import 'dart:math' as math;
 import 'place_identity.dart';
 import 'models/story_capture_metadata.dart';
@@ -55,9 +57,19 @@ class CameraEffects {
     return StoryCaptureMetadata(
       place: StoryCapturePlace(
         source: venue == null ? 'camera_city' : 'camera_nearby',
-        label: placeName, id: venue?.id, latitude: venue?.latitude,
-        longitude: venue?.longitude, legacyPlaceId: venue?.legacyPlaceId),
-      stickers: [StoryCaptureSticker(type: 'place', variant: placeVariant, value: placeName)],
+        label: placeName,
+        id: venue?.id,
+        latitude: venue?.latitude,
+        longitude: venue?.longitude,
+        legacyPlaceId: venue?.legacyPlaceId,
+      ),
+      stickers: [
+        StoryCaptureSticker(
+          type: 'place',
+          variant: placeVariant,
+          value: placeName,
+        ),
+      ],
     );
   }
 
@@ -113,8 +125,9 @@ class CameraEffects {
       placeScale: fittedScale,
       placeRotation: rotation,
       placeIdentity: placeIdentity ?? this.placeIdentity,
-      nearbyPlace: nextStyle == 'none' ? null : nearbyPlace ??
-          (placeName != null ? null : this.nearbyPlace),
+      nearbyPlace: nextStyle == 'none'
+          ? null
+          : nearbyPlace ?? (placeName != null ? null : this.nearbyPlace),
       placeName: placeName == null
           ? this.placeName
           : String.fromCharCodes(placeName.trim().runes.take(64)),
@@ -136,8 +149,17 @@ class CameraPlaceSession {
   CameraPlaceSession({
     CameraPlaceResolver? resolver,
     CameraNearbyResolver? nearbyResolver,
+    CameraPlaceAccess? access,
   }) : _resolver = resolver,
-       _nearbyResolver = nearbyResolver;
+       _nearbyResolver = nearbyResolver,
+       _access = access ?? (resolver == null ? CameraPlaceAccess() : null);
+  final CameraPlaceAccess? _access;
+  Future<void> prepareAccess({required bool userInitiated}) async {
+    await _access?.prepare(userInitiated: userInitiated);
+  }
+
+  Future<bool> openSettings(CameraPlaceRecovery recovery) async =>
+      await _access?.openSettings(recovery) ?? false;
 
   final CameraPlaceResolver? _resolver;
   final Map<String, CameraPlaceIdentity> _identities = {};
@@ -249,17 +271,7 @@ Future<(String, CameraPlaceIdentity)> _resolveCameraPlaceDetails(
 }
 
 Future<Position> cameraPlacePosition() async {
-  if (!await Geolocator.isLocationServiceEnabled()) {
-    throw StateError('Turn on location services and retry.');
-  }
-  var permission = await Geolocator.checkPermission();
-  if (permission == LocationPermission.denied) {
-    permission = await Geolocator.requestPermission();
-  }
-  if (permission != LocationPermission.whileInUse &&
-      permission != LocationPermission.always) {
-    throw StateError('Allow location access in Settings and retry.');
-  }
+  await CameraPlaceAccess().prepare(userInitiated: true);
   return Geolocator.getCurrentPosition(
     locationSettings: const LocationSettings(
       accuracy: LocationAccuracy.medium,

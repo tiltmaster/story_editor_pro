@@ -1,3 +1,7 @@
+import 'camera_effects.dart';
+import 'camera_effects_panel.dart';
+import 'camera_place_gesture.dart';
+import 'place_sticker_artwork.dart';
 import 'camera_action_button.dart';
 import 'video_trim_timeline.dart';
 import 'dart:io';
@@ -110,6 +114,7 @@ class StoryEditorScreen extends StatefulWidget {
 class _StoryEditorScreenState extends State<StoryEditorScreen> {
   final GlobalKey _repaintKey = GlobalKey();
   final GlobalKey _overlayRepaintKey = GlobalKey();
+  final GlobalKey _trashKey = GlobalKey();
   final List<TextOverlay> _textOverlays = [];
   final List<DrawingPath> _drawings = [];
   final List<ImageOverlay> _imageOverlays = [];
@@ -129,15 +134,25 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   bool _isEnforcingTrim = false;
   late MediaType _mediaType;
   StoryEditorMusicSelection? _selectedMusic;
+  late String _filterPreset;
+  late double _filterStrength;
+  double _contrast = 1;
+  bool _effectsOpen = false;
+  CameraEffects _editorEffects = const CameraEffects();
+  final _editorEffectsUi = CameraEffectsUiSession(category: 0);
+  late final _editorPlaceSession = CameraPlaceSession(
+    nearbyResolver: context.storyEditorConfig.nearbyPlacesResolver,
+  );
+  final DateTime _placeDate = DateTime.now();
 
   // GPU filter shader — loaded once, used by BackdropFilter for pixel-accurate preview
   ui.FragmentShader? _filterShader;
   late final Future<void> _filterShaderLoadFuture;
   bool _filterShaderLoadFailed = false;
   String get _effectiveFilterPreset =>
-      StoryEditorFilters.isNativeLens(widget.initialFilterPreset)
+      StoryEditorFilters.isNativeLens(_filterPreset)
       ? StoryEditorFilters.none
-      : widget.initialFilterPreset;
+      : _filterPreset;
 
   // Close friends selection
   final Set<CloseFriend> _selectedCloseFriends = {};
@@ -152,6 +167,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   void initState() {
     super.initState();
     _selectedMusic = widget.initialMusic;
+    _filterPreset = widget.initialFilterPreset;
+    _filterStrength = widget.initialFilterStrength;
     // Determine media type
     _mediaType = widget.mediaType ?? _detectMediaType(widget.mediaPath);
 
@@ -221,7 +238,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     applyFaceBeautyUniforms(_filterShader!);
     final m = StoryEditorFilters.matrix(
       _effectiveFilterPreset,
-      widget.initialFilterStrength,
+      _filterStrength,
     );
     // m[4] is Flutter's bias in 0-255 space; shader operates in 0-1 space
     final bias = m[4] / 255.0;
@@ -242,57 +259,54 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         12,
         StoryEditorFilters.sCurveStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       )
       ..setFloat(
         13,
         StoryEditorFilters.vignetteStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       )
       ..setFloat(14, widget.initialBeautyStrength.clamp(0, 1))
       ..setFloat(
         15,
-        StoryEditorFilters.vhsStrength(
-          _effectiveFilterPreset,
-          widget.initialFilterStrength,
-        ),
+        StoryEditorFilters.vhsStrength(_effectiveFilterPreset, _filterStrength),
       )
       ..setFloat(
         16,
         StoryEditorFilters.bloomStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       )
       ..setFloat(
         17,
         StoryEditorFilters.grainStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       )
       ..setFloat(
         18,
         StoryEditorFilters.halationStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       )
       ..setFloat(
         19,
         StoryEditorFilters.splitToneStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       )
       ..setFloat(
         20,
         StoryEditorFilters.chromaStrength(
           _effectiveFilterPreset,
-          widget.initialFilterStrength,
+          _filterStrength,
         ),
       );
   }
@@ -454,11 +468,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           !_isSaving &&
           !_isDrawing &&
           !_isTextEditing &&
+          !_effectsOpen &&
           (_allowDiscard || !_hasUnsavedChanges),
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop && !_isSaving) {
           // If drawing or text editing, just close that mode
-          if (_isDrawing) {
+          if (_effectsOpen) {
+            _closeEditorEffects();
+          } else if (_isDrawing) {
             setState(() => _isDrawing = false);
           } else if (_isTextEditing) {
             setState(() => _isTextEditing = false);
@@ -523,6 +540,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                                           builder: (_, __, ___) => Stack(
                                             fit: StackFit.expand,
                                             children: [
+                                              if (_editorEffects.placeStyle !=
+                                                      'none' &&
+                                                  _editorEffects
+                                                      .placeName
+                                                      .isNotEmpty)
+                                                _buildEditorPlace(),
                                               ..._buildImageOverlays(),
                                               // Smart stickers (time/date/location/…)
                                               // — gesture-enabled single copies inside
@@ -589,6 +612,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                         if (!_isTextEditing && !_isDrawing) _buildTopControls(),
                         if (!_isTextEditing && !_isDrawing)
                           _buildBottomControls(),
+                        if (_effectsOpen && !_isDrawing && !_isTextEditing)
+                          _buildEditorEffects(),
                         if (_isDrawing) _buildDrawingTools(),
                         if (_isDrawing) _buildDrawingTopBar(),
                         if (_isDrawing && _isSliding) _buildBrushSizePreview(),
@@ -741,6 +766,35 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       }
     }
 
+    if (_mediaType == MediaType.image && _contrast != 1) {
+      final bias = 127.5 * (1 - _contrast);
+      mediaWidget = ColorFiltered(
+        key: const ValueKey('editor-image-contrast'),
+        colorFilter: ColorFilter.matrix([
+          _contrast,
+          0,
+          0,
+          0,
+          bias,
+          0,
+          _contrast,
+          0,
+          0,
+          bias,
+          0,
+          0,
+          _contrast,
+          0,
+          bias,
+          0,
+          0,
+          0,
+          1,
+          0,
+        ]),
+        child: mediaWidget,
+      );
+    }
     if (!widget.flipHorizontally) return mediaWidget;
 
     return Transform(
@@ -891,19 +945,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             final startFocal = _imageDragStartFocal;
             if (startOffset == null || startFocal == null) return;
 
-            // Check trash zone (bottom center, above the home indicator)
-            final screenHeight = MediaQuery.of(context).size.height;
-            final screenWidth = MediaQuery.of(context).size.width;
-            final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
-            final trashZone = Rect.fromCenter(
-              center: Offset(
-                screenWidth / 2,
-                screenHeight - bottomPadding - 24 - 28,
-              ),
-              width: 80,
-              height: 80,
-            );
-            final isOver = trashZone.contains(details.focalPoint);
+            final isOver = _isOverRenderedTrash(details.focalPoint);
 
             _imageOverlays[index] = _imageOverlays[index].copyWith(
               offset: startOffset + (details.focalPoint - startFocal),
@@ -1189,7 +1231,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         _imageOverlays.isNotEmpty;
     final hasFilter =
         _effectiveFilterPreset != StoryEditorFilters.none &&
-        widget.initialFilterStrength > 0.01;
+        _filterStrength > 0.01;
     final durationMs = _videoController?.value.duration.inMilliseconds ?? 0;
     final hasTrim =
         _trimStartMs > 0 ||
@@ -1199,6 +1241,8 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         _bgImageScale != 1 ||
         _bgImageOffset != Offset.zero ||
         _smartStickers.isNotEmpty ||
+        (_editorEffects.placeStyle != 'none' &&
+            _editorEffects.placeName.isNotEmpty) ||
         hasFilter ||
         widget.initialBeautyStrength > 0 ||
         widget.flipHorizontally ||
@@ -1415,19 +1459,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 _textDragStartOffset!.dy + delta.dy,
               );
 
-              // Check trash zone (bottom right, left of check button)
-              final screenHeight = MediaQuery.of(context).size.height;
-              final screenWidth = MediaQuery.of(context).size.width;
-              final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
-              final trashZone = Rect.fromCenter(
-                center: Offset(
-                  screenWidth / 2,
-                  screenHeight - bottomPadding - 24 - 28,
-                ),
-                width: 80,
-                height: 80,
-              );
-              final isOver = trashZone.contains(details.focalPoint);
+              final isOver = _isOverRenderedTrash(details.focalPoint);
 
               setState(() {
                 _textOverlays[index] = overlay.copyWith(
@@ -1577,6 +1609,22 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                     ),
                     const SizedBox(height: 12),
                     _buildControlButton(
+                      icon: Icons.tune,
+                      label: _editorText(
+                        'Filters and adjustments',
+                        'الفلاتر والتعديلات',
+                      ),
+                      onTap: () {
+                        if (_effectsOpen) {
+                          _closeEditorEffects();
+                        } else {
+                          setState(() => _effectsOpen = true);
+                        }
+                      },
+                      isActive: _effectsOpen,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildControlButton(
                       icon: Icons.auto_awesome,
                       onTap: _addSmartSticker,
                     ),
@@ -1594,6 +1642,144 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
       ),
     );
   }
+
+  void _closeEditorEffects() {
+    setState(() => _effectsOpen = false);
+    _recordEdit();
+  }
+
+  Widget _buildEditorEffects() => PositionedDirectional(
+    start: 12,
+    end: 76,
+    top: 70,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CameraEffectsPanel(
+          key: const ValueKey('editor-effects'),
+          visibleTabs: const [0, 3],
+          effects: _editorEffects,
+          lookId: _effectiveFilterPreset,
+          lookStrength: _filterStrength,
+          supportedFaceLenses: const {},
+          supportsPlaces: true,
+          supportsBeauty: _filterShader != null,
+          uiSession: _editorEffectsUi,
+          locationSession: _editorPlaceSession,
+          onClose: _closeEditorEffects,
+          onChangeCommitted: _recordEdit,
+          onChanged: (effects, look, strength) => setState(() {
+            _editorEffects = effects;
+            _filterPreset = look;
+            _filterStrength = strength;
+          }),
+        ),
+        if (_mediaType == MediaType.image)
+          Material(
+            color: const Color(0xE6202026),
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Row(
+                children: [
+                  Text(
+                    _editorText('Contrast', 'التباين'),
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                  ),
+                  Expanded(
+                    child: Slider(
+                      key: const ValueKey('editor-contrast'),
+                      min: .5,
+                      max: 1.5,
+                      value: _contrast,
+                      onChanged: (value) => setState(() => _contrast = value),
+                      onChangeEnd: (_) => _recordEdit(),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _editorText('Reset contrast', 'إعادة ضبط التباين'),
+                    icon: const Icon(
+                      Icons.restart_alt,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                    onPressed: () => _edit(() => _contrast = 1),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  Widget _buildEditorPlace() => LayoutBuilder(
+    builder: (context, box) {
+      final e = _editorEffects;
+      final unit = math.min(box.maxWidth / 1080, box.maxHeight / 1920);
+      final size = placeStickerSize(e.placeStyle) * (unit * e.placeScale);
+      return Stack(
+        children: [
+          Positioned(
+            left: e.placeX * box.maxWidth - size.width / 2,
+            top: e.placeY * box.maxHeight - size.height / 2,
+            width: size.width,
+            height: size.height,
+            child: IgnorePointer(
+              child: Transform.rotate(
+                angle: e.placeRotation,
+                child: CustomPaint(
+                  painter: PlaceStickerPainter(
+                    style: e.placeStyle,
+                    name: e.placeName,
+                    variant: e.placeVariant,
+                    language: Localizations.localeOf(context).languageCode,
+                    date: _placeDate,
+                    identity: e.placeIdentity,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (!_isSaving)
+            CameraPlaceGesture(
+              effects: e,
+              onChanged: (value) {
+                _editorEffects = value;
+                _bumpOverlays();
+              },
+              onCycle: () => _edit(
+                () => _editorEffects = e.copyWith(
+                  placeVariant: e.placeVariant + 1,
+                ),
+              ),
+              onDragStart: () => setState(() {
+                _isDraggingOverlay = true;
+                _draggingOverlayType = 'place';
+              }),
+              onDragUpdate: (point) {
+                final over = _isOverRenderedTrash(point);
+                if (over != _isOverTrash) setState(() => _isOverTrash = over);
+              },
+              onDragEnd: () {
+                setState(() {
+                  if (_isOverTrash) {
+                    _editorEffects = _editorEffects.copyWith(
+                      placeStyle: 'none',
+                      placeName: '',
+                    );
+                  }
+                  _isDraggingOverlay = false;
+                  _isOverTrash = false;
+                  _draggingOverlayType = null;
+                });
+                _recordEdit();
+              },
+            ),
+        ],
+      );
+    },
+  );
 
   Widget _buildMusicPill() {
     final selected = _selectedMusic;
@@ -1765,6 +1951,14 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     await controller.play();
   }
 
+  bool _isOverRenderedTrash(Offset globalPosition) {
+    final box = _trashKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return false;
+    return (box.localToGlobal(Offset.zero) & box.size)
+        .inflate(12)
+        .contains(globalPosition);
+  }
+
   Widget _buildBottomControls() {
     return Stack(
       children: [
@@ -1776,6 +1970,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             bottom: MediaQuery.of(context).viewPadding.bottom + 24,
             child: Center(
               child: AnimatedContainer(
+                key: _trashKey,
                 duration: const Duration(milliseconds: 150),
                 width: 56,
                 height: 56,
@@ -1792,6 +1987,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   ),
                 ),
                 child: Center(
+                  key: const ValueKey('editor-trash-target'),
                   child: SvgPicture.asset(
                     'packages/story_editor_pro/assets/icons/trash.svg',
                     width: 28,
@@ -2514,18 +2710,34 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   }
 
   StoryCaptureMetadata _captureMetadata() {
-    final locationStickers = _smartStickers.where((s) => s.type == SmartStickerType.location);
-    final locationLabel = locationStickers.isEmpty ? null : locationStickers.last.data['name'];
+    final locationStickers = _smartStickers.where(
+      (s) => s.type == SmartStickerType.location,
+    );
+    final locationLabel = locationStickers.isEmpty
+        ? null
+        : locationStickers.last.data['name'];
     return StoryCaptureMetadata(
-      place: locationLabel?.trim().isNotEmpty == true
-          ? StoryCapturePlace(source: 'editor_location', label: locationLabel!)
-          : widget.initialCaptureMetadata?.place,
+      place:
+          _editorEffects.captureMetadata?.place ??
+          (locationLabel?.trim().isNotEmpty == true
+              ? StoryCapturePlace(
+                  source: 'editor_location',
+                  label: locationLabel!,
+                )
+              : widget.initialCaptureMetadata?.place),
       stickers: [
         ...?widget.initialCaptureMetadata?.stickers,
+        ...?_editorEffects.captureMetadata?.stickers,
         for (final s in _smartStickers)
-          StoryCaptureSticker(type: s.type.name, variant: s.skin, value: s.data.values.join(' ')),
-        for (final text in _textOverlays) StoryCaptureSticker(type: 'text', value: text.text),
-        for (final _ in _imageOverlays) const StoryCaptureSticker(type: 'image'),
+          StoryCaptureSticker(
+            type: s.type.name,
+            variant: s.skin,
+            value: s.data.values.join(' '),
+          ),
+        for (final text in _textOverlays)
+          StoryCaptureSticker(type: 'text', value: text.text),
+        for (final _ in _imageOverlays)
+          const StoryCaptureSticker(type: 'image'),
         if (_drawings.isNotEmpty) const StoryCaptureSticker(type: 'drawing'),
       ],
     );
@@ -2544,6 +2756,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         ? 0
         : _trimEndMs,
     music: _selectedMusic,
+    filterPreset: _filterPreset,
+    filterStrength: _filterStrength,
+    contrast: _contrast,
+    effects: _editorEffects,
   );
 
   void _edit(VoidCallback change) {
@@ -2579,6 +2795,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
           ? (_videoController?.value.duration.inMilliseconds ?? 0)
           : snapshot.trimEnd;
       _selectedMusic = snapshot.music;
+      _filterPreset = snapshot.filterPreset;
+      _filterStrength = snapshot.filterStrength;
+      _contrast = snapshot.contrast;
+      _editorEffects = snapshot.effects;
       _currentPath = null;
     });
     _videoController?.setVolume(_isMuted ? 0 : 1);
@@ -2586,7 +2806,10 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
     HapticFeedback.selectionClick();
   }
 
-  bool get _hasUnsavedChanges => !_captureSaved || _history.hasUnsavedChanges;
+  bool get _hasUnsavedChanges =>
+      !_captureSaved ||
+      _history.hasUnsavedChanges ||
+      !_snapshot().sameAs(_history.current);
 
   Future<void> _confirmDiscard() async {
     if (_discardPromptOpen || _isSaving || !mounted) return;
@@ -2881,18 +3104,6 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
             });
           },
           onScaleUpdate: (details) {
-            // Same trash zone as text/image overlays (drag to bin to delete)
-            final screenHeight = MediaQuery.of(context).size.height;
-            final screenWidth = MediaQuery.of(context).size.width;
-            final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
-            final trashZone = Rect.fromCenter(
-              center: Offset(
-                screenWidth / 2,
-                screenHeight - bottomPadding - 24 - 28,
-              ),
-              width: 80,
-              height: 80,
-            );
             if (_stickerDragStartOffset != null &&
                 _stickerDragStartFocal != null) {
               s.offset =
@@ -2900,7 +3111,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                   (details.focalPoint - _stickerDragStartFocal!);
             }
             s.scale = (_stickerScaleStart * details.scale).clamp(0.4, 3.5);
-            final overTrashNow = trashZone.contains(details.focalPoint);
+            final overTrashNow = _isOverRenderedTrash(details.focalPoint);
             if (overTrashNow != _isOverTrash) {
               // Trash bin + shrink animation live outside the overlay
               // subtree — full rebuild, but only on the rare state flip.
@@ -3636,6 +3847,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
   /// Save to gallery
   Future<void> _saveToGallery() async {
+    _recordEdit();
     setState(() {
       _isSaving = true;
       _isSharing = false;
@@ -3685,7 +3897,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
               outputWidth: context.storyEditorConfig.storyCanvasWidth,
               outputHeight: context.storyEditorConfig.storyCanvasHeight,
               filterPreset: _effectiveFilterPreset,
-              filterStrength: widget.initialFilterStrength,
+              filterStrength: _filterStrength,
               beautyStrength: widget.initialBeautyStrength,
               mediaScale: _bgImageScale,
               mediaOffsetX: _normalizedMediaOffset.dx,
@@ -3855,7 +4067,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 outputWidth: context.storyEditorConfig.storyCanvasWidth,
                 outputHeight: context.storyEditorConfig.storyCanvasHeight,
                 filterPreset: _effectiveFilterPreset,
-                filterStrength: widget.initialFilterStrength,
+                filterStrength: _filterStrength,
                 beautyStrength: widget.initialBeautyStrength,
                 mediaScale: _bgImageScale,
                 mediaOffsetX: _normalizedMediaOffset.dx,
@@ -4093,6 +4305,10 @@ class _EditorSnapshot {
     required this.trimStart,
     required this.trimEnd,
     required this.music,
+    required this.filterPreset,
+    required this.filterStrength,
+    required this.contrast,
+    required this.effects,
   }) : texts = List.unmodifiable(texts),
        images = List.unmodifiable(images),
        drawings = [for (final path in drawings) _copyPath(path)],
@@ -4108,6 +4324,9 @@ class _EditorSnapshot {
   final int trimStart;
   final int trimEnd;
   final StoryEditorMusicSelection? music;
+  final String filterPreset;
+  final double filterStrength, contrast;
+  final CameraEffects effects;
 
   static DrawingPath _copyPath(DrawingPath path) => DrawingPath(
     points: List.of(path.points),
@@ -4130,7 +4349,11 @@ class _EditorSnapshot {
       stickers.map(_copySticker).toList();
 
   bool sameAs(_EditorSnapshot other) {
-    if (mediaScale != other.mediaScale ||
+    if (filterPreset != other.filterPreset ||
+        filterStrength != other.filterStrength ||
+        contrast != other.contrast ||
+        effects != other.effects ||
+        mediaScale != other.mediaScale ||
         mediaOffset != other.mediaOffset ||
         muted != other.muted ||
         trimStart != other.trimStart ||
