@@ -115,7 +115,8 @@ data class VideoSampleTiming(val timescale: Long, val durations: List<Long>) {
             val durations=ArrayList<Long>()
             for(i in 0 until count.toInt()) {
                 val n=u32(stts,8+i*8);val delta=u32(stts,12+i*8)
-                require(n>0 && delta>0 && n<=216000-durations.size)
+                // Empty runs add no samples; zero-duration samples still have to decode.
+                require(n<=216000-durations.size)
                 repeat(n.toInt()){durations.add(delta)}
             }
             val sizes=one(stbl,"stsz");require(u32(sizes,8)==durations.size.toLong())

@@ -73,7 +73,7 @@ final class FinalVideoValidator {
                     guard CMSampleBufferDataIsReady(sample), CMSampleBufferGetImageBuffer(sample) != nil else { throw ProbeError.invalid }
                     let pts = CMSampleBufferGetPresentationTimeStamp(sample)
                     let sampleDuration = CMSampleBufferGetDuration(sample)
-                    guard pts.isNumeric, sampleDuration.isNumeric, CMTimeCompare(sampleDuration, .zero) > 0 else {
+                    guard pts.isNumeric, sampleDuration.isNumeric, CMTimeCompare(sampleDuration, .zero) >= 0 else {
                         failure = "video_presentation_unreadable"; throw ProbeError.invalid
                     }
                     let start = CMTimeMaximum(pts, track.timeRange.start)

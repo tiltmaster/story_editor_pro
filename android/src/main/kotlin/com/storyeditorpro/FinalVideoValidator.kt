@@ -109,7 +109,9 @@ class FinalVideoValidator {
                 check(samples > 0 && frames == samples) { "video_decode_incomplete" }
                 check(decodedPts.sorted() == presentationPts.sorted()) { "video_decode_presentation_mismatch" }
                 // A still sample held for >=2s is valid; long audio with a short video track is not.
-                check(lastPts >= 0L && lastPts < durationUs) {
+                // A decoded terminal sample may sit exactly at the clip boundary.
+                // coveredMicroseconds clips each interval; that sample adds no duration.
+                check(lastPts >= 0L && lastPts <= durationUs) {
                     "video_presentation_unreadable"
                 }
                 val coveredUs = timing.coveredMicroseconds(presentationPts, durationUs)

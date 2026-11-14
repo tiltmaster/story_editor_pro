@@ -10,10 +10,11 @@ class VideoSampleTimingTest {
         values.forEach {buffer.putInt(it)};return buffer.array()
     }
     private fun box(tag: String,body: ByteArray)=ints(body.size+8)+tag.toByteArray(Charsets.US_ASCII)+body
-    private fun fixture(rate: Int,movieScale: Int=1000,emptyLead: Boolean=false): java.io.File {
+    private fun fixture(rate: Int,movieScale: Int=1000,emptyLead: Boolean=false, delta: Int=2000, zeroRuns: Boolean=false): java.io.File {
         val mdhd=box("mdhd",ints(0,0,0,1000,2000,0))
         val hdlr=box("hdlr",ints(0,0)+"vide".toByteArray()+ints(0,0,0))
-        val stbl=box("stbl",box("stts",ints(0,1,1,2000))+box("stsz",ints(0,4,1)))
+        val times=if(zeroRuns) ints(0,3,0,1000,1,delta,1,0) else ints(0,1,1,delta)
+        val stbl=box("stbl",box("stts",times)+box("stsz",ints(0,4,if(zeroRuns)2 else 1)))
         val elst=box("elst",ints(0,if(emptyLead)2 else 1)+
             (if(emptyLead)ints(1,-1,0x10000)else byteArrayOf())+ints(2000,0,rate))
         val track=box("trak",box("edts",elst)+box("mdia",mdhd+hdlr+box("minf",stbl)))
@@ -32,6 +33,18 @@ class VideoSampleTimingTest {
     @Test fun fractionalMediaTickEditTranslationsFailClosed() {
         val file=fixture(0x10000,movieScale=3,emptyLead=true)
         try {assertThrows(IllegalArgumentException::class.java){VideoSampleTiming.read(file)}}finally{file.delete()}
+    }
+    @Test fun emptyRunsAndZeroDurationSamplesCannotExtendPlayback() {
+        for(delta in listOf(2000,1999,0)) {
+            val file=fixture(0x10000,delta=delta,zeroRuns=true)
+            try {
+                val timing=VideoSampleTiming.read(file)
+                assertEquals(listOf(delta.toLong(),0L),timing.durations)
+                val pts=listOf(0L,delta*1000L)
+                if(delta==2000) assertEquals(2000000L,timing.coveredMicroseconds(pts,2000000))
+                else assertThrows(IllegalArgumentException::class.java){timing.coveredMicroseconds(pts,2000000)}
+            } finally { file.delete() }
+        }
     }
     @Test fun singleFrameHoldIsVideo() {
         assertEquals(2000000L, VideoSampleTiming(1000,listOf(2000)).coveredMicroseconds(listOf(0),2000000))
