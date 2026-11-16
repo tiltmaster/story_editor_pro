@@ -22,6 +22,17 @@ class VideoSampleTimingTest {
         file.writeBytes(box("moov",box("mvhd",ints(0,0,0,movieScale,2000,0))+track))
         return file
     }
+    @Test fun extendedMediaDataAndMovieBoxesPreserveTiming() {
+        val file = fixture(0x10000)
+        try {
+            val payload = file.readBytes().drop(8).toByteArray()
+            val extendedMedia = ints(1)+"mdat".toByteArray()+ints(0,24)+ByteArray(8)
+            file.writeBytes(extendedMedia+ints(1)+"moov".toByteArray()+ints(0,16+payload.size)+payload)
+            assertEquals(listOf(2000L),VideoSampleTiming.read(file).durations)
+            file.writeBytes(ints(1)+"mdat".toByteArray()+ints(0,100))
+            assertThrows(IllegalArgumentException::class.java){VideoSampleTiming.read(file)}
+        } finally {file.delete()}
+    }
     @Test fun unitRateEditsAreAcceptedAndNonunitEditsFailClosed() {
         val valid=fixture(0x10000)
         try {assertEquals(listOf(2000L),VideoSampleTiming.read(valid).durations)}finally{valid.delete()}

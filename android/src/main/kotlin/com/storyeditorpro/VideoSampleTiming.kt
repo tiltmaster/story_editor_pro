@@ -51,9 +51,18 @@ data class VideoSampleTiming(val timescale: Long, val durations: List<Long>) {
         private fun boxes(bytes: ByteArray): List<Box> {
             val result=mutableListOf<Box>(); var offset=0
             while(offset<bytes.size) {
-                require(offset+8<=bytes.size)
-                val size=u32(bytes,offset); require(size>=8 && size<=bytes.size-offset)
-                result.add(Box(String(bytes,offset+4,4,Charsets.US_ASCII),bytes.copyOfRange(offset+8,offset+size.toInt())))
+                val remaining = bytes.size - offset
+                require(remaining >= 8) { "video_box_truncated" }
+                val shortSize = u32(bytes,offset)
+                val header = if (shortSize == 1L) 16 else 8
+                require(remaining >= header) { "video_box_truncated" }
+                val size = when (shortSize) {
+                    0L -> remaining.toLong()
+                    1L -> ByteBuffer.wrap(bytes,offset+8,8).order(ByteOrder.BIG_ENDIAN).long
+                    else -> shortSize
+                }
+                require(size >= header && size <= remaining) { "video_box_size_invalid" }
+                result.add(Box(String(bytes,offset+4,4,Charsets.US_ASCII),bytes.copyOfRange(offset+header,offset+size.toInt())))
                 offset+=size.toInt()
             }
             return result
@@ -64,12 +73,20 @@ data class VideoSampleTiming(val timescale: Long, val durations: List<Long>) {
                 var found: ByteArray?=null
                 while(input.filePointer+8<=input.length()) {
                     val offset=input.filePointer
-                    val size=input.readInt().toLong() and 0xffffffffL
+                    val remaining=input.length()-offset
+                    val shortSize=input.readInt().toLong() and 0xffffffffL
                     val type=ByteArray(4);input.readFully(type)
-                    require(size>=8 && size<=input.length()-offset)
+                    val header=if(shortSize==1L)16 else 8
+                    require(remaining>=header) { "video_box_truncated" }
+                    val size=when(shortSize) {
+                        0L -> remaining
+                        1L -> input.readLong()
+                        else -> shortSize
+                    }
+                    require(size>=header && size<=remaining) { "video_box_size_invalid" }
                     if(String(type,Charsets.US_ASCII)=="moov") {
                         require(size<=8*1024*1024)
-                        found=ByteArray((size-8).toInt());input.readFully(found);break
+                        found=ByteArray((size-header).toInt());input.readFully(found);break
                     }
                     input.seek(offset+size)
                 }
